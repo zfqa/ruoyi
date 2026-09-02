@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.business.data.excel.mapper.ExcelImportMapper">
+
+    <resultMap type="com.ruoyi.business.data.excel.domain.ExcelImport" id="ExcelImportResult">
+        <id property="id" column="id"/>
+        <result property="taskName" column="task_name"/>
+        <result property="fileName" column="file_name"/>
+        <result property="filePath" column="file_path"/>
+        <result property="workbookId" column="workbook_id"/>
+        <result property="sheetCount" column="sheet_count"/>
+        <result property="tableCount" column="table_count"/>
+        <result property="recordCount" column="record_count"/>
+        <result property="resultJson" column="result_json"/>
+        <result property="status" column="status"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+        <result property="remark" column="remark"/>
+    </resultMap>
+
+    <sql id="selectExcelImportVo">
+        select id, task_name, file_name, file_path, workbook_id, sheet_count, table_count, record_count, result_json, status, create_by, create_time, update_by, update_time, remark from business_data_excel
+    </sql>
+
+    <sql id="selectExcelImportListVo">
+        select id, task_name, file_name, file_path, workbook_id, sheet_count, table_count, record_count, status, create_by, create_time, update_by, update_time, remark from business_data_excel
+    </sql>
+
+    <select id="selectExcelImportList" parameterType="com.ruoyi.business.data.excel.domain.ExcelImport" resultMap="ExcelImportResult">
+        <include refid="selectExcelImportListVo"/>
+        <where>
+            <if test="taskName != null and taskName != ''">and task_name like concat('%', #{taskName}, '%')</if>
+            <if test="status != null and status != ''">and status = #{status}</if>
+        </where>
+        order by create_time desc
+    </select>
+
+    <select id="selectExcelImportById" parameterType="Long" resultMap="ExcelImportResult">
+        <include refid="selectExcelImportVo"/>
+        where id = #{id}
+    </select>
+
+    <select id="selectExcelImportStatusById" parameterType="Long" resultMap="ExcelImportResult">
+        <include refid="selectExcelImportListVo"/>
+        where id = #{id}
+    </select>
+
+    <insert id="insertExcelImport" parameterType="com.ruoyi.business.data.excel.domain.ExcelImport" useGeneratedKeys="true" keyProperty="id" keyColumn="id">
+        insert into business_data_excel
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="taskName != null and taskName != ''">task_name,</if>
+            <if test="fileName != null and fileName != ''">file_name,</if>
+            <if test="filePath != null and filePath != ''">file_path,</if>
+            <if test="workbookId != null and workbookId != ''">workbook_id,</if>
+            <if test="sheetCount != null">sheet_count,</if>
+            <if test="tableCount != null">table_count,</if>
+            <if test="recordCount != null">record_count,</if>
+            <if test="resultJson != null and resultJson != ''">result_json,</if>
+            <if test="status != null and status != ''">status,</if>
+            <if test="createBy != null and createBy != ''">create_by,</if>
+            <if test="remark != null and remark != ''">remark,</if>
+            create_time
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="taskName != null and taskName != ''">#{taskName},</if>
+            <if test="fileName != null and fileName != ''">#{fileName},</if>
+            <if test="filePath != null and filePath != ''">#{filePath},</if>
+            <if test="workbookId != null and workbookId != ''">#{workbookId},</if>
+            <if test="sheetCount != null">#{sheetCount},</if>
+            <if test="tableCount != null">#{tableCount},</if>
+            <if test="recordCount != null">#{recordCount},</if>
+            <if test="resultJson != null and resultJson != ''">#{resultJson},</if>
+            <if test="status != null and status != ''">#{status},</if>
+            <if test="createBy != null and createBy != ''">#{createBy},</if>
+            <if test="remark != null and remark != ''">#{remark},</if>
+            sysdate()
+        </trim>
+        <selectKey keyProperty="id" resultType="Long" order="AFTER">
+            SELECT LAST_INSERT_ID()
+        </selectKey>
+    </insert>
+
+    <update id="updateExcelImport" parameterType="com.ruoyi.business.data.excel.domain.ExcelImport">
+        update business_data_excel
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="taskName != null and taskName != ''">task_name = #{taskName},</if>
+            <if test="fileName != null and fileName != ''">file_name = #{fileName},</if>
+            <if test="filePath != null and filePath != ''">file_path = #{filePath},</if>
+            <if test="workbookId != null and workbookId != ''">workbook_id = #{workbookId},</if>
+            <if test="sheetCount != null">sheet_count = #{sheetCount},</if>
+            <if test="tableCount != null">table_count = #{tableCount},</if>
+            <if test="recordCount != null">record_count = #{recordCount},</if>
+            <if test="resultJson != null and resultJson != ''">result_json = #{resultJson},</if>
+            <if test="status != null and status != ''">status = #{status},</if>
+            <if test="updateBy != null and updateBy != ''">update_by = #{updateBy},</if>
+            <if test="remark != null and remark != ''">remark = #{remark},</if>
+            update_time = sysdate()
+        </trim>
+        where id = #{id}
+    </update>
+
+    <delete id="deleteExcelImportById" parameterType="Long">
+        delete from business_data_excel where id = #{id}
+    </delete>
+
+    <delete id="deleteExcelImportByIds">
+        delete from business_data_excel where id in
+        <foreach collection="array" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

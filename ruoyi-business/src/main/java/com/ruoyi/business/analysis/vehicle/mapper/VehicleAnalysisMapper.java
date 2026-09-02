@@ -1,0 +1,24 @@
+package com.ruoyi.business.analysis.vehicle.mapper;
+
+import java.util.List;
+import com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis;
+
+/**
+ * 整车市场分析-基础统计、排名与趋势 数据层
+ * 
+ * @author ruoyi
+ */
+public interface VehicleAnalysisMapper
+{
+    public List<VehicleAnalysis> selectVehicleAnalysisList(VehicleAnalysis vehicleAnalysis);
+
+    public VehicleAnalysis selectVehicleAnalysisById(Long id);
+
+    public int insertVehicleAnalysis(VehicleAnalysis vehicleAnalysis);
+
+    public int updateVehicleAnalysis(VehicleAnalysis vehicleAnalysis);
+
+    public int deleteVehicleAnalysisById(Long id);
+
+    public int deleteVehicleAnalysisByIds(Long[] ids);
+}

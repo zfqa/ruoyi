@@ -1,0 +1,1 @@
+"""Coordinate based extraction package."""

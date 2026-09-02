@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.business.knowledge.mapper.KnowledgeBaseMapper">
+    <resultMap type="com.ruoyi.business.knowledge.domain.KnowledgeBase" id="KnowledgeBaseResult">
+        <id property="id" column="id"/><result property="sourceCode" column="source_code"/>
+        <result property="sourceName" column="source_name"/><result property="sourceType" column="source_type"/>
+        <result property="currentVersionId" column="current_version_id"/><result property="ownerDeptId" column="owner_dept_id"/>
+        <result property="confidentiality" column="confidentiality"/><result property="allowedPurpose" column="allowed_purpose"/>
+        <result property="allowedRoleIds" column="allowed_role_ids"/><result property="enabled" column="enabled"/>
+        <result property="status" column="status"/><result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/><result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/><result property="remark" column="remark"/>
+    </resultMap>
+    <resultMap type="com.ruoyi.business.knowledge.domain.KnowledgeVersion" id="VersionResult">
+        <id property="id" column="id"/><result property="sourceId" column="source_id"/>
+        <result property="versionNo" column="version_no"/><result property="originalName" column="original_name"/>
+        <result property="storedPath" column="stored_path"/><result property="sourceUrl" column="source_url"/>
+        <result property="contentSha256" column="content_sha256"/><result property="publishedTime" column="published_time"/>
+        <result property="fetchedTime" column="fetched_time"/><result property="parserVersion" column="parser_version"/>
+        <result property="pageCount" column="page_count"/><result property="chunkCount" column="chunk_count"/>
+        <result property="status" column="status"/><result property="errorMessage" column="error_message"/>
+        <result property="createBy" column="create_by"/><result property="createTime" column="create_time"/>
+    </resultMap>
+    <resultMap type="com.ruoyi.business.knowledge.domain.KnowledgeIngestTask" id="TaskResult">
+        <id property="id" column="id"/><result property="sourceId" column="source_id"/>
+        <result property="versionId" column="version_id"/><result property="status" column="status"/>
+        <result property="progress" column="progress"/><result property="currentStage" column="current_stage"/>
+        <result property="chunkCount" column="chunk_count"/><result property="errorMessage" column="error_message"/>
+        <result property="startedTime" column="started_time"/><result property="finishedTime" column="finished_time"/>
+        <result property="createBy" column="create_by"/><result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+    <resultMap type="com.ruoyi.business.knowledge.domain.KnowledgeChunk" id="ChunkResult">
+        <id property="id" column="id"/><result property="sourceId" column="source_id"/>
+        <result property="versionId" column="version_id"/><result property="chunkNo" column="chunk_no"/>
+        <result property="titlePath" column="title_path"/><result property="content" column="content"/>
+        <result property="sourceSnippet" column="source_snippet"/><result property="pageStart" column="page_start"/>
+        <result property="pageEnd" column="page_end"/><result property="sourceUrl" column="source_url"/>
+        <result property="reportId" column="report_id"/><result property="metricId" column="metric_id"/>
+        <result property="evidenceJson" column="evidence_json"/><result property="contentSha256" column="content_sha256"/>
+        <result property="tokenCount" column="token_count"/><result property="sourceName" column="source_name"/>
+        <result property="sourceType" column="source_type"/><result property="versionNo" column="version_no"/>
+        <result property="score" column="score"/>
+    </resultMap>
+    <sql id="selectKnowledgeBaseVo">
+        select id, source_code, source_name, source_type, current_version_id, owner_dept_id,
+        confidentiality, allowed_purpose, allowed_role_ids, enabled, status,
+        create_by, create_time, update_by, update_time, remark from business_knowledge
+    </sql>
+    <select id="selectKnowledgeBaseList" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeBase" resultMap="KnowledgeBaseResult">
+        <include refid="selectKnowledgeBaseVo"/><where>
+        <if test="sourceName != null and sourceName != ''">and source_name like concat('%', #{sourceName}, '%')</if>
+        <if test="sourceType != null and sourceType != ''">and source_type=#{sourceType}</if>
+        <if test="status != null and status != ''">and status=#{status}</if>
+        <if test="enabled != null and enabled != ''">and enabled=#{enabled}</if>
+        </where> order by create_time desc
+    </select>
+    <select id="selectKnowledgeBaseById" resultMap="KnowledgeBaseResult"><include refid="selectKnowledgeBaseVo"/> where id=#{id}</select>
+    <insert id="insertKnowledgeBase" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeBase" useGeneratedKeys="true" keyProperty="id">
+        insert into business_knowledge (source_code,source_name,source_type,current_version_id,owner_dept_id,
+        confidentiality,allowed_purpose,allowed_role_ids,enabled,status,create_by,create_time,remark)
+        values (#{sourceCode},#{sourceName},#{sourceType},#{currentVersionId},#{ownerDeptId},#{confidentiality},
+        #{allowedPurpose},#{allowedRoleIds},#{enabled},#{status},#{createBy},sysdate(),#{remark})
+    </insert>
+    <update id="updateKnowledgeBase" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeBase">
+        update business_knowledge <set>
+        <if test="sourceCode != null">source_code=#{sourceCode},</if><if test="sourceName != null and sourceName != ''">source_name=#{sourceName},</if>
+        <if test="sourceType != null and sourceType != ''">source_type=#{sourceType},</if><if test="currentVersionId != null">current_version_id=#{currentVersionId},</if>
+        <if test="ownerDeptId != null">owner_dept_id=#{ownerDeptId},</if><if test="confidentiality != null and confidentiality != ''">confidentiality=#{confidentiality},</if>
+        <if test="allowedPurpose != null">allowed_purpose=#{allowedPurpose},</if><if test="allowedRoleIds != null">allowed_role_ids=#{allowedRoleIds},</if>
+        <if test="enabled != null and enabled != ''">enabled=#{enabled},</if><if test="status != null and status != ''">status=#{status},</if>
+        <if test="updateBy != null">update_by=#{updateBy},</if><if test="remark != null">remark=#{remark},</if>update_time=sysdate()
+        </set> where id=#{id}
+    </update>
+    <delete id="deleteKnowledgeBaseById">delete from business_knowledge where id=#{id}</delete>
+    <delete id="deleteKnowledgeBaseByIds">delete from business_knowledge where id in <foreach collection="array" item="id" open="(" separator="," close=")">#{id}</foreach></delete>
+
+    <select id="selectVersionById" resultMap="VersionResult">select * from business_kb_version where id=#{id}</select>
+    <select id="selectVersionByHash" resultMap="VersionResult">select * from business_kb_version where source_id=#{sourceId} and content_sha256=#{contentSha256} limit 1</select>
+    <select id="selectVersionsBySourceId" resultMap="VersionResult">select * from business_kb_version where source_id=#{sourceId} order by id desc</select>
+    <insert id="insertVersion" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeVersion" useGeneratedKeys="true" keyProperty="id">
+        insert into business_kb_version (source_id,version_no,original_name,stored_path,source_url,content_sha256,
+        published_time,fetched_time,parser_version,page_count,chunk_count,status,error_message,create_by,create_time)
+        values (#{sourceId},#{versionNo},#{originalName},#{storedPath},#{sourceUrl},#{contentSha256},#{publishedTime},
+        #{fetchedTime},#{parserVersion},#{pageCount},#{chunkCount},#{status},#{errorMessage},#{createBy},sysdate())
+    </insert>
+    <update id="updateVersion" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeVersion">
+        update business_kb_version set status=#{status},parser_version=#{parserVersion},page_count=#{pageCount},
+        chunk_count=#{chunkCount},error_message=#{errorMessage},stored_path=#{storedPath},source_url=#{sourceUrl},
+        content_sha256=#{contentSha256},fetched_time=#{fetchedTime} where id=#{id}
+    </update>
+    <insert id="insertIngestTask" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeIngestTask" useGeneratedKeys="true" keyProperty="id">
+        insert into business_kb_ingest_task (source_id,version_id,status,progress,current_stage,chunk_count,error_message,create_by,create_time,update_time)
+        values (#{sourceId},#{versionId},#{status},#{progress},#{currentStage},#{chunkCount},#{errorMessage},#{createBy},sysdate(),sysdate())
+    </insert>
+    <update id="updateIngestTask" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeIngestTask">
+        update business_kb_ingest_task set status=#{status},progress=#{progress},current_stage=#{currentStage},
+        chunk_count=#{chunkCount},error_message=#{errorMessage},started_time=#{startedTime},finished_time=#{finishedTime},update_time=sysdate() where id=#{id}
+    </update>
+    <select id="selectIngestTaskById" resultMap="TaskResult">select * from business_kb_ingest_task where id=#{id}</select>
+    <select id="selectIngestTaskByVersionId" resultMap="TaskResult">select * from business_kb_ingest_task where version_id=#{versionId} order by id desc limit 1</select>
+    <delete id="deleteChunksByVersionId">delete from business_kb_chunk where version_id=#{versionId}</delete>
+    <insert id="insertChunk" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeChunk" useGeneratedKeys="true" keyProperty="id">
+        insert into business_kb_chunk (source_id,version_id,chunk_no,title_path,content,source_snippet,page_start,page_end,
+        source_url,report_id,metric_id,evidence_json,content_sha256,token_count,create_time)
+        values (#{sourceId},#{versionId},#{chunkNo},#{titlePath},#{content},#{sourceSnippet},#{pageStart},#{pageEnd},
+        #{sourceUrl},#{reportId},#{metricId},#{evidenceJson},#{contentSha256},#{tokenCount},sysdate())
+    </insert>
+    <select id="searchChunks" resultMap="ChunkResult">
+        select c.*,s.source_name,s.source_type,v.version_no,
+        (match(c.title_path,c.content) against(#{query} in natural language mode)
+        <if test="entityTerms != null and entityTerms.size() > 0">
+          + case when <foreach collection="entityTerms" item="term" open="(" separator=" or " close=")">
+            lower(left(c.content,500)) like concat('%',lower(#{term}),'%')
+          </foreach> then 100 else 0 end
+        </if>
+        <if test="normalizedLiteral != null and normalizedLiteral != ''">
+          + case when replace(replace(replace(lower(c.content),'-',''),' ',''),'–','') like concat('%',#{normalizedLiteral},'%') then 30 else 0 end
+        </if>) score
+        from business_kb_chunk c join business_knowledge s on s.id=c.source_id and s.enabled='1' and s.current_version_id=c.version_id
+        join business_kb_version v on v.id=c.version_id and v.status='2'
+        where (match(c.title_path,c.content) against(#{query} in natural language mode)
+        <if test="normalizedLiteral != null and normalizedLiteral != ''">
+          or replace(replace(replace(lower(c.content),'-',''),' ',''),'–','') like concat('%',#{normalizedLiteral},'%')
+        </if>)
+        <if test="entityTerms != null and entityTerms.size() > 0">
+          and <foreach collection="entityTerms" item="term" open="(" separator=" or " close=")">
+            lower(left(c.content,500)) like concat('%',lower(#{term}),'%')
+          </foreach>
+        </if>
+        <if test="sourceType != null and sourceType != ''">and s.source_type=#{sourceType}</if>
+        <if test="!admin">
+          and (s.allowed_role_ids is null or s.allowed_role_ids=''
+          <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},s.allowed_role_ids)&gt;0</foreach>)
+        </if>
+        order by score desc,c.id asc limit #{limit}
+    </select>
+</mapper>

@@ -1,0 +1,2 @@
+"""LLM structure interpretation layer."""
+

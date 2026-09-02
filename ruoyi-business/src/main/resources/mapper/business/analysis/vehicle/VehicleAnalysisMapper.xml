@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.business.analysis.vehicle.mapper.VehicleAnalysisMapper">
+
+    <resultMap type="com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis" id="VehicleAnalysisResult">
+        <id property="id" column="id"/>
+        <result property="taskName" column="task_name"/>
+        <result property="status" column="status"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+        <result property="remark" column="remark"/>
+    </resultMap>
+
+    <sql id="selectVehicleAnalysisVo">
+        select id, task_name, status, create_by, create_time, update_by, update_time, remark from business_analysis_vehicle
+    </sql>
+
+    <select id="selectVehicleAnalysisList" parameterType="com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis" resultMap="VehicleAnalysisResult">
+        <include refid="selectVehicleAnalysisVo"/>
+        <where>
+            <if test="taskName != null and taskName != ''">and task_name like concat('%', #{taskName}, '%')</if>
+            <if test="status != null and status != ''">and status = #{status}</if>
+        </where>
+        order by create_time desc
+    </select>
+
+    <select id="selectVehicleAnalysisById" parameterType="Long" resultMap="VehicleAnalysisResult">
+        <include refid="selectVehicleAnalysisVo"/>
+        where id = #{id}
+    </select>
+
+    <insert id="insertVehicleAnalysis" parameterType="com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis" useGeneratedKeys="true" keyProperty="id">
+        insert into business_analysis_vehicle
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="taskName != null and taskName != ''">task_name,</if>
+            <if test="status != null and status != ''">status,</if>
+            <if test="createBy != null and createBy != ''">create_by,</if>
+            <if test="remark != null and remark != ''">remark,</if>
+            create_time
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="taskName != null and taskName != ''">#{taskName},</if>
+            <if test="status != null and status != ''">#{status},</if>
+            <if test="createBy != null and createBy != ''">#{createBy},</if>
+            <if test="remark != null and remark != ''">#{remark},</if>
+            sysdate()
+        </trim>
+    </insert>
+
+    <update id="updateVehicleAnalysis" parameterType="com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis">
+        update business_analysis_vehicle
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="taskName != null and taskName != ''">task_name = #{taskName},</if>
+            <if test="status != null and status != ''">status = #{status},</if>
+            <if test="updateBy != null and updateBy != ''">update_by = #{updateBy},</if>
+            <if test="remark != null and remark != ''">remark = #{remark},</if>
+            update_time = sysdate()
+        </trim>
+        where id = #{id}
+    </update>
+
+    <delete id="deleteVehicleAnalysisById" parameterType="Long">
+        delete from business_analysis_vehicle where id = #{id}
+    </delete>
+
+    <delete id="deleteVehicleAnalysisByIds">
+        delete from business_analysis_vehicle where id in
+        <foreach collection="array" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

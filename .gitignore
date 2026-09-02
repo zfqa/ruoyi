@@ -39,8 +39,23 @@ nbdist/
 ######################################################################
 # Others
 *.log
+*.out
+*.err
 *.xml.versionsBackup
 *.swp
+.env
+**/.env
+.m2repo/
+.review/
+.tmp_pycheck/
+tmp/
+excel-results/
+tools/
+dump.rdb
+*.rdb
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 !*/build/*.java
 !*/build/*.html

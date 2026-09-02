@@ -1,0 +1,742 @@
+<template>
+  <div class="app-container">
+    <el-form :model="queryParams" ref="queryForm" size="small" :inline="true" v-show="showSearch" label-width="68px">
+      <el-form-item label="任务名称" prop="taskName">
+        <el-input
+          v-model="queryParams.taskName"
+          placeholder="请输入任务名称"
+          clearable
+          style="width: 240px"
+          @keyup.enter.native="handleQuery"
+        />
+      </el-form-item>
+      <el-form-item label="状态" prop="status">
+        <el-select v-model="queryParams.status" placeholder="状态" clearable style="width: 120px">
+          <el-option label="待处理" value="0" />
+          <el-option label="处理中" value="1" />
+          <el-option label="成功" value="2" />
+          <el-option label="失败" value="3" />
+        </el-select>
+      </el-form-item>
+      <el-form-item>
+        <el-button type="primary" icon="el-icon-search" size="mini" @click="handleQuery">搜索</el-button>
+        <el-button icon="el-icon-refresh" size="mini" @click="resetQuery">重置</el-button>
+      </el-form-item>
+    </el-form>
+
+    <el-row :gutter="10" class="mb8">
+      <el-col :span="1.5">
+        <el-button type="primary" plain icon="el-icon-plus" size="mini" @click="handleAdd" v-hasPermi="['business:report:add']">新增</el-button>
+      </el-col>
+      <el-col :span="1.5">
+        <el-button type="success" plain icon="el-icon-edit" size="mini" :disabled="single" @click="handleUpdate" v-hasPermi="['business:report:edit']">修改</el-button>
+      </el-col>
+      <el-col :span="1.5">
+        <el-button type="danger" plain icon="el-icon-delete" size="mini" :disabled="multiple" @click="handleDelete" v-hasPermi="['business:report:remove']">删除</el-button>
+      </el-col>
+      <el-col :span="1.5">
+        <el-button type="warning" plain icon="el-icon-download" size="mini" @click="handleExport" v-hasPermi="['business:report:export']">导出</el-button>
+      </el-col>
+      <right-toolbar :showSearch.sync="showSearch" @queryTable="getList"></right-toolbar>
+    </el-row>
+
+    <el-table v-loading="loading" :data="aiReportList" @selection-change="handleSelectionChange">
+      <el-table-column type="selection" width="55" align="center" />
+      <el-table-column label="主键" align="center" prop="id" />
+      <el-table-column label="任务名称" align="center" prop="taskName" :show-overflow-tooltip="true" />
+      <el-table-column label="报告类型" align="center" prop="reportType" width="180" />
+      <el-table-column label="生成模式" align="center" prop="generationMode" width="190" />
+      <el-table-column label="状态" align="center" prop="status">
+        <template slot-scope="scope">
+          <span>{{ formatStatus(scope.row.status) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="创建时间" align="center" prop="createTime" width="180">
+        <template slot-scope="scope">
+          <span>{{ parseTime(scope.row.createTime) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" align="center" class-name="small-padding fixed-width">
+        <template slot-scope="scope">
+          <el-button v-if="String(scope.row.status) === '2'" size="mini" type="text" icon="el-icon-view" @click="handleView(scope.row)">查看报告</el-button>
+          <el-button size="mini" type="text" icon="el-icon-edit" @click="handleUpdate(scope.row)" v-hasPermi="['business:report:edit']">修改</el-button>
+          <el-button size="mini" type="text" icon="el-icon-delete" @click="handleDelete(scope.row)" v-hasPermi="['business:report:remove']">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <pagination
+      v-show="total > 0"
+      :total="total"
+      :page.sync="queryParams.pageNum"
+      :limit.sync="queryParams.pageSize"
+      @pagination="getList"
+    />
+
+    <!-- 添加或修改AI分析报告对话框 -->
+    <el-dialog :title="title" :visible.sync="open" width="500px" append-to-body>
+      <el-form ref="form" :model="form" :rules="rules" label-width="80px">
+        <el-form-item label="任务名称" prop="taskName">
+          <el-input v-model="form.taskName" placeholder="请输入任务名称" />
+        </el-form-item>
+        <el-form-item label="状态" prop="status">
+          <el-select v-model="form.status" placeholder="请选择状态">
+            <el-option label="待处理" value="0" />
+            <el-option label="处理中" value="1" />
+            <el-option label="成功" value="2" />
+            <el-option label="失败" value="3" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注" prop="remark">
+          <el-input v-model="form.remark" type="textarea" placeholder="请输入备注" />
+        </el-form-item>
+      </el-form>
+      <div slot="footer" class="dialog-footer">
+        <el-button type="primary" @click="submitForm">确 定</el-button>
+        <el-button @click="cancel">取 消</el-button>
+      </div>
+    </el-dialog>
+
+    <el-dialog title="竞争社洞察报告" :visible.sync="reportOpen" width="90%" top="4vh" append-to-body>
+      <div v-if="reportData" class="report-viewer">
+        <h2>{{ reportData.title }}</h2>
+        <el-alert
+          v-if="reportData.quality && reportData.quality.data_gaps && reportData.quality.data_gaps.length"
+          type="warning"
+          :closable="false"
+          :title="`数据缺口：${reportData.quality.data_gaps.join('；')}`"
+          show-icon
+        />
+        <h3>管理层摘要</h3>
+        <ul><li v-for="(item, index) in reportData.executive_summary || []" :key="`summary-${index}`">{{ cleanNarrative(item) }}</li></ul>
+        <h3>Y25前三季度总览</h3>
+        <el-table v-if="marketMetricRows.length" :data="marketMetricRows" size="mini" border class="metric-table">
+          <el-table-column label="范围" min-width="120"><template>市场合计</template></el-table-column>
+          <el-table-column label="Y24 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2024') }}</template></el-table-column>
+          <el-table-column label="Y25 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2025') }}</template></el-table-column>
+          <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_vs_2024) }}</template></el-table-column>
+        </el-table>
+        <el-table v-if="summaryMatrixRows.length" :data="summaryMatrixRows" size="mini" border class="summary-matrix">
+          <el-table-column label="产品线" prop="label" fixed width="110" />
+          <el-table-column label="市场" align="center">
+            <el-table-column label="YoY" width="78" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.market || {}).yoy_2025_vs_2024, 0) }}</template></el-table-column>
+            <el-table-column label="细分占比" width="88" align="right"><template slot-scope="scope">{{ formatPercent(((scope.row.market || {}).total_market_share || {})['2025'], 0) }}</template></el-table-column>
+          </el-table-column>
+          <el-table-column v-for="makerName in summaryMakers" :key="makerName" :label="makerName" align="center">
+            <el-table-column label="YoY" width="78" align="right"><template slot-scope="scope">{{ formatPercent(summaryMakerMetric(scope.row, makerName).yoy_2025_vs_2024, 0) }}</template></el-table-column>
+            <el-table-column label="内部占比" width="88" align="right"><template slot-scope="scope">{{ formatPercent((summaryMakerMetric(scope.row, makerName).internal_share || {})['2025'], 0) }}</template></el-table-column>
+            <el-table-column label="细分市场占比" width="108" align="right"><template slot-scope="scope">{{ formatPercent((summaryMakerMetric(scope.row, makerName).same_size_market_share || {})['2025'], 1) }}</template></el-table-column>
+          </el-table-column>
+        </el-table>
+        <ul><li v-for="(item, index) in (reportData.market_summary || {}).insights || []" :key="`market-${index}`">{{ cleanNarrative(item) }}</li></ul>
+        <el-tabs v-if="availableMakerSections.length" v-model="activeMaker" type="card" class="maker-tabs" @tab-click="handleMakerTabChange">
+          <el-tab-pane v-for="makerName in availableMakerSections" :key="makerName" :label="`${makerName} 洞察`" :name="makerName" />
+        </el-tabs>
+        <section v-if="tianmaHistoryAvailable" class="history-section">
+          <h3>{{ activeMaker }}前装出货、面积及市占率</h3>
+          <el-table :data="tianmaHistoryRows" size="mini" border class="metric-table">
+            <el-table-column label="指标" prop="label" min-width="160" fixed />
+            <el-table-column v-for="period in historyPeriods" :key="period" :label="period" min-width="105" align="right">
+              <template slot-scope="scope">{{ historyValue(scope.row, period) }}</template>
+            </el-table-column>
+            <el-table-column label="Y25F YoY" min-width="130" align="right">
+              <template slot-scope="scope">{{ formatPercent(scope.row.metric.standard_y25f_yoy, 1) }}</template>
+            </el-table-column>
+          </el-table>
+          <el-row :gutter="20">
+            <el-col :span="12"><div ref="shipmentShareChart" class="history-chart" /></el-col>
+            <el-col :span="12"><div ref="displayAreaShareChart" class="history-chart" /></el-col>
+          </el-row>
+          <div v-for="(group, groupName) in (tianmaHistory.insights || {})" :key="groupName">
+            <ul><li v-for="(item, index) in group || []" :key="`${groupName}-${index}`">{{ cleanNarrative(item) }}</li></ul>
+          </div>
+        </section>
+        <section v-if="tianmaProductAvailable" class="history-section">
+          <h3>{{ activeMaker }}增长点分析一：产品线</h3>
+          <div v-for="(group, groupName) in (tianmaProduct.insights || {})" :key="`product-${groupName}`">
+            <ul><li v-for="(item, index) in group || []" :key="`${groupName}-${index}`">{{ cleanNarrative(item) }}</li></ul>
+          </div>
+          <el-row :gutter="12" class="product-dashboard">
+            <el-col :span="7"><div ref="technologyHistoryChart" class="product-chart product-chart--main" /></el-col>
+            <el-col :span="9"><div ref="sizeDistributionChart" class="product-chart product-chart--main" /></el-col>
+            <el-col :span="8">
+              <div ref="ltpsSizeGrowthChart" class="product-chart product-chart--small" />
+              <div ref="asiSizeGrowthChart" class="product-chart product-chart--small" />
+            </el-col>
+          </el-row>
+        </section>
+        <section v-if="tianmaCustomerAvailable" class="history-section">
+          <h3>{{ activeMaker }}增长点分析二：客户/区域</h3>
+          <div v-for="(group, groupName) in (tianmaCustomer.insights || {})" :key="`customer-${groupName}`">
+            <ul><li v-for="(item, index) in group || []" :key="`${groupName}-${index}`">{{ cleanNarrative(item) }}</li></ul>
+          </div>
+          <el-row :gutter="18">
+            <el-col :span="12"><div ref="customerChart" class="growth-chart" /></el-col>
+            <el-col :span="12">
+              <h4>{{ activeMaker }} 区域别占比情况（客户决策地）</h4>
+              <el-table :data="customerRegionRows" size="mini" border class="metric-table compact-table">
+                <el-table-column label="区域" prop="region" width="72" />
+                <el-table-column label="Y24出货量" align="right"><template slot-scope="scope">{{ formatQty((scope.row.annual || {}).Y24) }}</template></el-table-column>
+                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.annual || {}).yoy_2024_vs_2023, 0) }}</template></el-table-column>
+                <el-table-column label="Y25 Q1-Q3" align="right"><template slot-scope="scope">{{ formatQty((scope.row.q1_q3 || {})['Y25Q1-Q3']) }}</template></el-table-column>
+                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.q1_q3 || {}).yoy_2025_vs_2024, 0) }}</template></el-table-column>
+              </el-table>
+              <el-table :data="customerRegionRows" size="mini" border class="metric-table compact-table">
+                <el-table-column label="区域" prop="region" width="72" />
+                <el-table-column label="Y24 LTPS" align="right"><template slot-scope="scope">{{ directionValue(scope.row, 'Y24', 'LTPS') }}</template></el-table-column>
+                <el-table-column label="Y24 a-Si" align="right"><template slot-scope="scope">{{ directionValue(scope.row, 'Y24', 'a-Si') }}</template></el-table-column>
+                <el-table-column label="Y25 Q1-Q3 LTPS" align="right"><template slot-scope="scope">{{ directionValue(scope.row, 'Y25Q1-Q3', 'LTPS') }}</template></el-table-column>
+                <el-table-column label="Y25 Q1-Q3 a-Si" align="right"><template slot-scope="scope">{{ directionValue(scope.row, 'Y25Q1-Q3', 'a-Si') }}</template></el-table-column>
+              </el-table>
+            </el-col>
+          </el-row>
+        </section>
+        <section v-if="tianmaApplicationAvailable" class="history-section">
+          <h3>{{ activeMaker }}增长点分析三：应用</h3>
+          <div v-for="(group, groupName) in (tianmaApplication.insights || {})" :key="`application-${groupName}`">
+            <ul><li v-for="(item, index) in group || []" :key="`${groupName}-${index}`">{{ cleanNarrative(item) }}</li></ul>
+          </div>
+          <el-row :gutter="18">
+            <el-col :span="12">
+              <div ref="applicationChart" class="growth-chart" />
+              <el-table :data="applicationSeries" size="mini" border class="metric-table compact-table">
+                <el-table-column label="YoY" prop="application" width="82" />
+                <el-table-column v-for="period in historyPeriods" :key="`app-yoy-${period}`" :label="period" align="right">
+                  <template slot-scope="scope">{{ formatPercent((scope.row.yoy_periods || {})[period], 0) }}</template>
+                </el-table-column>
+              </el-table>
+            </el-col>
+            <el-col :span="12">
+              <h4>{{ activeMaker }} 应用别重点尺寸 Y25 Q1-Q3出货占比情况</h4>
+              <el-table :data="applicationKeySizeRows" size="mini" border class="metric-table compact-table">
+                <el-table-column label="应用" prop="application" width="72" />
+                <el-table-column label="尺寸" prop="size" width="68" align="right" />
+                <el-table-column label="技术" prop="technology" width="92" />
+                <el-table-column label="出货量" align="right"><template slot-scope="scope">{{ formatQty(scope.row.shipment) }}</template></el-table-column>
+                <el-table-column label="占比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.share, 0) }}</template></el-table-column>
+                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_q1_q3_vs_2024_q1_q3, 0) }}</template></el-table-column>
+              </el-table>
+              <div class="table-note">*筛选标准：同一应用×尺寸的Y25 Q1-Q3出货量大于1,000K，或该尺寸为对应应用出货第一；不同Technology合并并标注。</div>
+            </el-col>
+          </el-row>
+        </section>
+        <el-card v-for="maker in reportData.makers || []" :key="maker.maker" class="maker-card" shadow="never">
+          <div slot="header"><strong>{{ maker.maker }} 洞察</strong></div>
+          <p v-for="(item, index) in maker.overview || []" :key="`overview-${index}`">{{ cleanNarrative(item) }}</p>
+          <el-table v-if="makerShipmentRows(maker).length" :data="makerShipmentRows(maker)" size="mini" border class="metric-table">
+            <el-table-column label="Y24 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2024') }}</template></el-table-column>
+            <el-table-column label="Y25 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2025') }}</template></el-table-column>
+            <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_vs_2024) }}</template></el-table-column>
+            <el-table-column label="Y25市场份额" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.market_share || {})['2025']) }}</template></el-table-column>
+          </el-table>
+          <el-row :gutter="16" class="insight-row">
+            <el-col :span="6"><h4>全局态势</h4><ul><li v-for="(item, index) in (maker.global_trend || {}).insights || []" :key="`g-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+            <el-col :span="6"><h4>技术与尺寸</h4><ul><li v-for="(item, index) in (maker.product_line || {}).insights || []" :key="`t-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+            <el-col :span="6"><h4>客户与区域</h4><ul><li v-for="(item, index) in (maker.customer_region || {}).insights || []" :key="`r-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+            <el-col :span="6"><h4>应用</h4><ul><li v-for="(item, index) in (maker.application || {}).insights || []" :key="`i-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="8"><h4>产品驱动力</h4><ul><li v-for="(item, index) in (maker.drivers || {}).product || []" :key="`p-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+            <el-col :span="8"><h4>客户驱动力</h4><ul><li v-for="(item, index) in (maker.drivers || {}).customer || []" :key="`c-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+            <el-col :span="8"><h4>应用驱动力</h4><ul><li v-for="(item, index) in (maker.drivers || {}).application || []" :key="`a-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+          </el-row>
+        </el-card>
+        <el-collapse>
+          <el-collapse-item title="完整结构化报告 JSON" name="json"><pre class="report-json">{{ JSON.stringify(reportData, null, 2) }}</pre></el-collapse-item>
+        </el-collapse>
+      </div>
+    </el-dialog>
+  </div>
+</template>
+
+<script>
+import { listAiReport, getAiReport, addAiReport, updateAiReport, delAiReport, exportAiReport } from "@/api/business/report/aiReport";
+import * as echarts from 'echarts';
+require('echarts/theme/macarons');
+
+export default {
+  name: "AiReport",
+  data() {
+    return {
+      loading: true,
+      ids: [],
+      single: true,
+      multiple: true,
+      showSearch: true,
+      total: 0,
+      aiReportList: [],
+      title: "",
+      open: false,
+      reportOpen: false,
+      reportData: null,
+      activeMaker: 'Tianma',
+      shipmentShareChart: null,
+      displayAreaShareChart: null,
+      technologyHistoryChart: null,
+      sizeDistributionChart: null,
+      ltpsSizeGrowthChart: null,
+      asiSizeGrowthChart: null,
+      customerChart: null,
+      applicationChart: null,
+      queryParams: {
+        pageNum: 1,
+        pageSize: 10,
+        taskName: undefined,
+        status: undefined
+      },
+      form: {},
+      summaryMakers: ['Tianma', 'AUO', 'CSOT', 'BOE'],
+      rules: {
+        taskName: [
+          { required: true, message: "任务名称不能为空", trigger: "blur" }
+        ]
+      }
+    };
+  },
+  created() {
+    this.getList();
+    if (this.$route.query.reportId) {
+      this.openReportById(this.$route.query.reportId);
+    }
+  },
+  beforeDestroy() {
+    this.disposeHistoryCharts();
+  },
+  computed: {
+    marketMetricRows() {
+      const rows = ((this.reportData || {}).market_summary || {}).rows || [];
+      return rows.filter(Boolean);
+    },
+    summaryMatrixRows() {
+      return ((((this.reportData || {}).market_summary || {}).summary_matrix || {}).rows || []);
+    },
+    makerSectionMap() {
+      const report = this.reportData || {};
+      if (report.maker_sections && Object.keys(report.maker_sections).length) return report.maker_sections;
+      return {
+        Tianma: {
+          history: report.tianma_history || {},
+          product: report.tianma_product || {},
+          customer: report.tianma_customer || {},
+          application: report.tianma_application || {}
+        }
+      };
+    },
+    availableMakerSections() {
+      return this.summaryMakers.filter(name => Boolean(this.makerSectionMap[name]));
+    },
+    activeMakerDetail() {
+      return this.makerSectionMap[this.activeMaker] || {};
+    },
+    tianmaHistory() {
+      return this.activeMakerDetail.history || {};
+    },
+    tianmaHistoryAvailable() {
+      return Boolean(this.tianmaHistory.shipment || this.tianmaHistory.display_area);
+    },
+    tianmaProduct() {
+      return this.activeMakerDetail.product || {};
+    },
+    tianmaProductAvailable() {
+      return Boolean(this.tianmaProduct.technology_history || this.tianmaProduct.y25q1_q3_size_distribution);
+    },
+    tianmaCustomer() {
+      return this.activeMakerDetail.customer || {};
+    },
+    tianmaCustomerAvailable() {
+      return Boolean(((this.tianmaCustomer.top_clients || {}).clients || []).length);
+    },
+    customerRegionRows() {
+      return ((this.tianmaCustomer.regions || {}).rows || []);
+    },
+    tianmaApplication() {
+      return this.activeMakerDetail.application || {};
+    },
+    tianmaApplicationAvailable() {
+      return Boolean(((this.tianmaApplication.application_history || {}).series || []).length);
+    },
+    applicationSeries() {
+      return ((this.tianmaApplication.application_history || {}).series || []);
+    },
+    applicationKeySizeRows() {
+      return ((this.tianmaApplication.key_sizes || {}).rows || []);
+    },
+    historyPeriods() {
+      return ['Y22', 'Y23', 'Y24', 'Y25F', 'Y25Q1-Q3'];
+    },
+    tianmaHistoryRows() {
+      const history = this.tianmaHistory;
+      return [
+        { label: 'Shipment（千片）', metric: history.shipment || {} },
+        { label: 'Display area（m²）', metric: history.display_area || {} }
+      ];
+    }
+  },
+  methods: {
+    cleanNarrative(value) {
+      return typeof value === 'string' ? value.replace(/\s*\[.*\]\s*$/, '').trim() : value;
+    },
+    metricValue(metric, year) {
+      const value = ((metric || {}).values || {})[year];
+      return value === null || value === undefined ? '--' : Number(value).toLocaleString('zh-CN');
+    },
+    formatPercent(value, digits = 2) {
+      return value === null || value === undefined ? '--' : `${(Number(value) * 100).toFixed(digits)}%`;
+    },
+    formatQty(value) {
+      return value === null || value === undefined ? '--' : `${Number(value).toLocaleString('zh-CN')}K`;
+    },
+    directionValue(row, period, technology) {
+      const metric = ((((row || {}).technology || {})[period] || {})[technology]) || {};
+      if (metric.value === null || metric.value === undefined) return '--';
+      const arrow = metric.yoy === null || metric.yoy === undefined ? '' : (Number(metric.yoy) >= 0 ? '↑' : '↓');
+      return `${Number(metric.value).toLocaleString('zh-CN')}K${arrow}`;
+    },
+    historyValue(row, period) {
+      const value = (((row || {}).metric || {}).periods || {})[period];
+      return value === null || value === undefined ? '--' : Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+    },
+    makerShipmentRows(maker) {
+      const rows = ((maker || {}).global_trend || {}).shipment || [];
+      return rows.length && rows[0] ? [rows[0]] : [];
+    },
+    summaryMakerMetric(row, makerName) {
+      return (((row || {}).makers || {})[makerName]) || {};
+    },
+    handleMakerTabChange() {
+      this.$nextTick(() => this.renderHistoryCharts());
+    },
+    getList() {
+      this.loading = true;
+      listAiReport(this.queryParams).then(response => {
+        this.aiReportList = response.rows;
+        this.total = response.total;
+        this.loading = false;
+      });
+    },
+    formatStatus(status) {
+      const map = { '0': '待处理', '1': '处理中', '2': '成功', '3': '失败' };
+      return map[status] || status;
+    },
+    cancel() {
+      this.open = false;
+      this.reset();
+    },
+    reset() {
+      this.form = {
+        id: undefined,
+        taskName: undefined,
+        status: "0",
+        remark: undefined
+      };
+      this.resetForm("form");
+    },
+    handleQuery() {
+      this.queryParams.pageNum = 1;
+      this.getList();
+    },
+    resetQuery() {
+      this.resetForm("queryForm");
+      this.handleQuery();
+    },
+    handleSelectionChange(selection) {
+      this.ids = selection.map(item => item.id);
+      this.single = selection.length !== 1;
+      this.multiple = !selection.length;
+    },
+    handleAdd() {
+      this.reset();
+      this.open = true;
+      this.title = "添加AI分析报告";
+    },
+    handleUpdate(row) {
+      this.reset();
+      const id = row.id || this.ids;
+      getAiReport(id).then(response => {
+        this.form = response.data;
+        this.open = true;
+        this.title = "修改AI分析报告";
+      });
+    },
+    handleView(row) {
+      this.openReportById(row.id);
+    },
+    openReportById(id) {
+      getAiReport(id).then(response => {
+        const content = response.data && response.data.reportContent;
+        this.reportData = typeof content === 'string' ? JSON.parse(content) : content;
+        const sectionNames = Object.keys((this.reportData || {}).maker_sections || {});
+        this.activeMaker = sectionNames.includes('Tianma') ? 'Tianma' : (sectionNames[0] || 'Tianma');
+        this.reportOpen = true;
+        this.$nextTick(() => this.renderHistoryCharts());
+      }).catch(() => this.$modal.msgError('报告内容读取失败'));
+    },
+    renderHistoryCharts() {
+      this.disposeHistoryCharts();
+      if (!this.tianmaHistoryAvailable && !this.tianmaProductAvailable && !this.tianmaCustomerAvailable && !this.tianmaApplicationAvailable) return;
+      if (this.tianmaHistoryAvailable) {
+        this.shipmentShareChart = this.renderShareChart('shipmentShareChart', this.tianmaHistory.shipment_share, `${this.activeMaker}前装出货量市占率`);
+        this.displayAreaShareChart = this.renderShareChart('displayAreaShareChart', this.tianmaHistory.display_area_share, `${this.activeMaker}前装出货面积市占率`);
+      }
+      if (this.tianmaProductAvailable) {
+        this.technologyHistoryChart = this.renderTechnologyHistoryChart();
+        this.sizeDistributionChart = this.renderSizeDistributionChart();
+        this.ltpsSizeGrowthChart = this.renderTechnologySizeChart('ltpsSizeGrowthChart', 'LTPS');
+        this.asiSizeGrowthChart = this.renderTechnologySizeChart('asiSizeGrowthChart', 'a-Si');
+      }
+      if (this.tianmaCustomerAvailable) {
+        this.customerChart = this.renderCustomerChart();
+      }
+      if (this.tianmaApplicationAvailable) {
+        this.applicationChart = this.renderApplicationChart();
+      }
+    },
+    renderShareChart(refName, metric, title) {
+      const element = this.$refs[refName];
+      if (!element || !metric) return null;
+      const chart = echarts.init(element, 'macarons');
+      chart.setOption({
+        title: { text: title, left: 'center', textStyle: { fontSize: 15 } },
+        tooltip: { trigger: 'axis', valueFormatter: value => value === null ? '--' : `${Number(value).toFixed(2)}%` },
+        grid: { left: 55, right: 24, top: 55, bottom: 40 },
+        xAxis: { type: 'category', data: this.historyPeriods },
+        yAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
+        series: [{
+          name: this.activeMaker,
+          type: 'line',
+          smooth: false,
+          connectNulls: false,
+          symbolSize: 8,
+          data: this.historyPeriods.map(period => {
+            const value = (metric.periods || {})[period];
+            return value === null || value === undefined ? null : Number((Number(value) * 100).toFixed(4));
+          })
+        }]
+      });
+      return chart;
+    },
+    renderTechnologyHistoryChart() {
+      const element = this.$refs.technologyHistoryChart;
+      const history = this.tianmaProduct.technology_history || {};
+      if (!element || (!history.LTPS && !history['a-Si'])) return null;
+      const colors = { 'a-Si': '#d9a441', LTPS: '#f3c86a', 'a-Si YoY': '#6f7782', 'LTPS YoY': '#f2a43a' };
+      const chart = echarts.init(element, 'macarons');
+      const value = (technology, field, period) => {
+        const metric = history[technology] || {};
+        const item = (metric[field] || {})[period];
+        return item === null || item === undefined ? null : Number(item);
+      };
+      chart.setOption({
+        color: [colors['a-Si'], colors.LTPS, colors['a-Si YoY'], colors['LTPS YoY']],
+        title: { text: `${this.activeMaker} 技术别出货情况（Kpcs）`, left: 'center', textStyle: { fontSize: 14 } },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+        legend: { bottom: 0, itemWidth: 12, textStyle: { fontSize: 10 } },
+        grid: { left: 52, right: 48, top: 48, bottom: 54 },
+        xAxis: { type: 'category', data: this.historyPeriods, axisLabel: { interval: 0, fontSize: 10 } },
+        yAxis: [
+          { type: 'value', name: 'Kpcs', axisLabel: { fontSize: 9 } },
+          { type: 'value', name: 'YoY', axisLabel: { formatter: '{value}%', fontSize: 9 }, splitLine: { show: false } }
+        ],
+        series: [
+          {
+            name: 'a-Si', type: 'bar', stack: 'shipment', barMaxWidth: 32,
+            data: this.historyPeriods.map(period => value('a-Si', 'periods', period)),
+            label: { show: true, position: 'inside', fontSize: 9, formatter: p => p.value ? Number(p.value).toLocaleString('zh-CN') : '' }
+          },
+          {
+            name: 'LTPS', type: 'bar', stack: 'shipment', barMaxWidth: 32,
+            data: this.historyPeriods.map(period => value('LTPS', 'periods', period)),
+            label: { show: true, position: 'inside', fontSize: 9, formatter: p => p.value ? Number(p.value).toLocaleString('zh-CN') : '' }
+          },
+          {
+            name: 'a-Si YoY', type: 'line', yAxisIndex: 1, smooth: true, symbolSize: 6,
+            data: this.historyPeriods.map(period => {
+              const item = value('a-Si', 'yoy_periods', period);
+              return item === null ? null : Number((item * 100).toFixed(2));
+            }),
+            label: { show: true, formatter: p => p.value === null ? '' : `${Number(p.value).toFixed(1)}%`, fontSize: 9 }
+          },
+          {
+            name: 'LTPS YoY', type: 'line', yAxisIndex: 1, smooth: true, symbolSize: 6,
+            data: this.historyPeriods.map(period => {
+              const item = value('LTPS', 'yoy_periods', period);
+              return item === null ? null : Number((item * 100).toFixed(2));
+            }),
+            label: { show: true, formatter: p => p.value === null ? '' : `${Number(p.value).toFixed(1)}%`, fontSize: 9 }
+          }
+        ]
+      });
+      return chart;
+    },
+    renderSizeDistributionChart() {
+      const element = this.$refs.sizeDistributionChart;
+      const metric = this.tianmaProduct.y25q1_q3_size_distribution || {};
+      const points = metric.points || [];
+      if (!element || !points.length) return null;
+      const maxShipment = Math.max(...points.map(point => Number(point.shipment || 0)), 1);
+      const chart = echarts.init(element, 'macarons');
+      chart.setOption({
+        title: { text: `${this.activeMaker} Y25 Q1-Q3尺寸别分布情况`, left: 'center', textStyle: { fontSize: 14 } },
+        tooltip: {
+          formatter: params => `${params.data[0]}英寸<br/>Shipment：${Number(params.data[1]).toLocaleString('zh-CN')} 千片`
+        },
+        grid: { left: 58, right: 22, top: 50, bottom: 45 },
+        xAxis: { type: 'value', name: 'Size（英寸）', nameLocation: 'middle', nameGap: 32 },
+        yAxis: { type: 'value', name: 'Shipment（千片）' },
+        series: [{
+          name: 'Shipment',
+          type: 'scatter',
+          data: points.map(point => [Number(point.size), Number(point.shipment), point.size]),
+          symbolSize: value => 12 + 34 * Math.sqrt(Math.max(value[1], 0) / maxShipment),
+          itemStyle: { color: '#fff8e8', borderColor: '#f2a43a', borderWidth: 2, opacity: 0.9 },
+          label: { show: true, position: 'inside', formatter: p => p.data[2], color: '#303133', fontSize: 9 }
+        }]
+      });
+      return chart;
+    },
+    renderTechnologySizeChart(refName, technology) {
+      const element = this.$refs[refName];
+      const metric = ((this.tianmaProduct.technology_size_growth || {})[technology]) || {};
+      const series = metric.series || [];
+      if (!element || !series.length) return null;
+      const chart = echarts.init(element, 'macarons');
+      chart.setOption({
+        title: { text: `${this.activeMaker} ${technology} 尺寸别增长情况（Kpcs）`, left: 'center', textStyle: { fontSize: 13 } },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { bottom: 0, itemWidth: 10, textStyle: { fontSize: 9 } },
+        grid: { left: 52, right: 18, top: 48, bottom: 48 },
+        xAxis: { type: 'category', data: this.historyPeriods, axisLabel: { interval: 0, fontSize: 9 } },
+        yAxis: { type: 'value', name: 'Kpcs', axisLabel: { fontSize: 9 } },
+        series: series.map(item => ({
+          name: item.label,
+          type: 'bar',
+          stack: technology,
+          emphasis: { focus: 'series' },
+          label: { show: true, position: 'inside', fontSize: 8, formatter: p => p.value ? Number(p.value).toLocaleString('zh-CN') : '' },
+          data: this.historyPeriods.map(period => {
+            const value = (item.periods || {})[period];
+            return value === null || value === undefined ? 0 : Number(value);
+          })
+        }))
+      });
+      return chart;
+    },
+    renderCustomerChart() {
+      const element = this.$refs.customerChart;
+      const metric = this.tianmaCustomer.top_clients || {};
+      const clients = metric.clients || [];
+      const periods = metric.period_order || ['Y22', 'Y23', 'Y24', 'Y25Q1-Q3'];
+      if (!element || !clients.length) return null;
+      const chart = echarts.init(element, 'macarons');
+      chart.setOption({
+        title: { text: `${this.activeMaker} 前三季度出货前六大客户年度别出货情况（Kpcs）`, left: 'center', textStyle: { fontSize: 14 } },
+        tooltip: { trigger: 'axis' },
+        legend: { top: 30, type: 'scroll', textStyle: { fontSize: 10 } },
+        grid: { left: 58, right: 24, top: 76, bottom: 42 },
+        xAxis: { type: 'category', data: periods },
+        yAxis: { type: 'value', name: 'Kpcs' },
+        series: clients.map(client => ({
+          name: client.client,
+          type: 'line',
+          symbolSize: 7,
+          connectNulls: false,
+          data: periods.map(period => {
+            const value = (client.periods || {})[period];
+            return value === null || value === undefined ? null : Number(value);
+          })
+        }))
+      });
+      return chart;
+    },
+    renderApplicationChart() {
+      const element = this.$refs.applicationChart;
+      const metric = this.tianmaApplication.application_history || {};
+      const series = metric.series || [];
+      const periods = metric.period_order || this.historyPeriods;
+      if (!element || !series.length) return null;
+      const chart = echarts.init(element, 'macarons');
+      chart.setOption({
+        title: { text: `${this.activeMaker} 应用别出货情况（Kpcs）`, left: 'center', textStyle: { fontSize: 14 } },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { bottom: 0, itemWidth: 12, textStyle: { fontSize: 10 } },
+        grid: { left: 58, right: 22, top: 52, bottom: 54 },
+        xAxis: { type: 'category', data: periods, axisLabel: { interval: 0 } },
+        yAxis: { type: 'value', name: 'Kpcs' },
+        series: series.map(item => ({
+          name: item.application,
+          type: 'bar',
+          stack: 'application',
+          emphasis: { focus: 'series' },
+          label: { show: true, position: 'inside', fontSize: 9, formatter: p => p.value ? Number(p.value).toLocaleString('zh-CN') : '' },
+          data: periods.map(period => {
+            const value = (item.periods || {})[period];
+            return value === null || value === undefined ? 0 : Number(value);
+          })
+        }))
+      });
+      return chart;
+    },
+    disposeHistoryCharts() {
+      ['shipmentShareChart', 'displayAreaShareChart', 'technologyHistoryChart', 'sizeDistributionChart', 'ltpsSizeGrowthChart', 'asiSizeGrowthChart', 'customerChart', 'applicationChart'].forEach(name => {
+        if (this[name]) {
+          this[name].dispose();
+          this[name] = null;
+        }
+      });
+    },
+    submitForm() {
+      this.$refs["form"].validate(valid => {
+        if (valid) {
+          if (this.form.id !== undefined) {
+            updateAiReport(this.form).then(response => {
+              this.$modal.msgSuccess("修改成功");
+              this.open = false;
+              this.getList();
+            });
+          } else {
+            addAiReport(this.form).then(response => {
+              this.$modal.msgSuccess("新增成功");
+              this.open = false;
+              this.getList();
+            });
+          }
+        }
+      });
+    },
+    handleDelete(row) {
+      const ids = row.id || this.ids;
+      this.$modal.confirm('是否确认删除编号为"' + ids + '"的数据项？').then(function() {
+        return delAiReport(ids);
+      }).then(() => {
+        this.getList();
+        this.$modal.msgSuccess("删除成功");
+      }).catch(() => {});
+    },
+    handleExport() {
+      this.download('/business/report/export', {
+        ...this.queryParams
+      }, `AI分析报告_${new Date().getTime()}.xlsx`)
+    }
+  }
+};
+</script>
+
+<style scoped>
+.report-viewer { max-height: 78vh; overflow: auto; padding: 0 12px 20px; }
+.maker-card { margin: 16px 0; }
+.metric-table { margin: 12px 0 16px; }
+.summary-matrix { margin: 12px 0 16px; }
+.summary-matrix ::v-deep .el-table__row td { padding: 4px 0; }
+.maker-tabs { margin-top: 22px; position: sticky; top: 0; z-index: 4; background: #fff; padding-top: 8px; }
+.history-section { margin: 20px 0; }
+.history-chart { width: 100%; height: 300px; margin-top: 12px; }
+.product-dashboard { min-width: 1120px; }
+.product-chart { width: 100%; margin-top: 12px; }
+.product-chart--main { height: 520px; }
+.product-chart--small { height: 254px; }
+.growth-chart { width: 100%; height: 390px; margin-top: 8px; }
+.compact-table ::v-deep .cell { padding-left: 5px; padding-right: 5px; font-size: 12px; }
+.table-note { color: #606266; font-size: 12px; margin-top: 6px; }
+.insight-row { margin-top: 8px; }
+.report-json { max-height: 420px; overflow: auto; padding: 12px; background: #f6f8fa; white-space: pre-wrap; }
+</style>

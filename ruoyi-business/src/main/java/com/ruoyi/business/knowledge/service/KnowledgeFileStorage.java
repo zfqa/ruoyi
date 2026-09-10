@@ -55,7 +55,17 @@ public class KnowledgeFileStorage
 
     public Path saveNewsSnapshot(String content, String hash) throws IOException
     {
-        Path dir = root.resolve("news").resolve(hash.substring(0, 2)).normalize();
+        return saveTextSnapshot("news", content, hash);
+    }
+
+    public Path savePolicySnapshot(String content, String hash) throws IOException
+    {
+        return saveTextSnapshot("policy", content, hash);
+    }
+
+    private Path saveTextSnapshot(String category, String content, String hash) throws IOException
+    {
+        Path dir = root.resolve(category).resolve(hash.substring(0, 2)).normalize();
         Files.createDirectories(dir);
         Path target = dir.resolve(hash + ".txt").normalize();
         ensureControlled(target);

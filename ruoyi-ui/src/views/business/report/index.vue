@@ -107,6 +107,21 @@
           :title="`数据缺口：${reportData.quality.data_gaps.join('；')}`"
           show-icon
         />
+        <el-alert
+          v-if="reportData.quality && reportData.quality.warnings && reportData.quality.warnings.length"
+          type="info"
+          :closable="false"
+          :title="`生成提示：${reportData.quality.warnings.join('；')}`"
+          show-icon
+        />
+        <el-collapse v-if="methodologyNotes.length" class="methodology-panel">
+          <el-collapse-item title="数据口径与计算说明" name="methodology">
+            <ul><li v-for="(item, index) in methodologyNotes" :key="`method-${index}`">{{ item }}</li></ul>
+            <div v-if="methodologyLimitations.length" class="table-note">
+              限制说明：{{ methodologyLimitations.join('；') }}
+            </div>
+          </el-collapse-item>
+        </el-collapse>
         <h3>管理层摘要</h3>
         <ul><li v-for="(item, index) in reportData.executive_summary || []" :key="`summary-${index}`">{{ cleanNarrative(item) }}</li></ul>
         <h3>Y25前三季度总览</h3>
@@ -116,8 +131,8 @@
           <el-table-column label="Y25 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2025') }}</template></el-table-column>
           <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_vs_2024) }}</template></el-table-column>
         </el-table>
-        <el-table v-if="summaryMatrixRows.length" :data="summaryMatrixRows" size="mini" border class="summary-matrix">
-          <el-table-column label="产品线" prop="label" fixed width="110" />
+        <el-table v-if="summaryMatrixDisplayRows.length" :data="summaryMatrixDisplayRows" size="mini" border class="summary-matrix" :span-method="summarySpanMethod" :row-class-name="summaryRowClassName">
+          <el-table-column label="产品线" prop="label" fixed width="110"><template slot-scope="scope"><span>{{ scope.row.label }}</span></template></el-table-column>
           <el-table-column label="市场" align="center">
             <el-table-column label="YoY" width="78" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.market || {}).yoy_2025_vs_2024, 0) }}</template></el-table-column>
             <el-table-column label="细分占比" width="88" align="right"><template slot-scope="scope">{{ formatPercent(((scope.row.market || {}).total_market_share || {})['2025'], 0) }}</template></el-table-column>
@@ -141,6 +156,9 @@
             </el-table-column>
             <el-table-column label="Y25F YoY" min-width="130" align="right">
               <template slot-scope="scope">{{ formatPercent(scope.row.metric.standard_y25f_yoy, 1) }}</template>
+            </el-table-column>
+            <el-table-column label="前三季度/全年预测" min-width="145" align="right">
+              <template slot-scope="scope">{{ formatPercent(scope.row.metric.forecast_completion_y25_q1_q3, 1) }}</template>
             </el-table-column>
           </el-table>
           <el-row :gutter="20">
@@ -171,7 +189,17 @@
             <ul><li v-for="(item, index) in group || []" :key="`${groupName}-${index}`">{{ cleanNarrative(item) }}</li></ul>
           </div>
           <el-row :gutter="18">
-            <el-col :span="12"><div ref="customerChart" class="growth-chart" /></el-col>
+            <el-col :span="12">
+              <div ref="customerChart" class="growth-chart" />
+              <el-table :data="customerClientRows" size="mini" border class="metric-table compact-table">
+                <el-table-column label="客户" prop="client" min-width="105" />
+                <el-table-column label="Y25 Q1-Q3" align="right"><template slot-scope="scope">{{ formatQty((scope.row.periods || {})['Y25Q1-Q3']) }}</template></el-table-column>
+                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_q1_q3_vs_2024_q1_q3, 0) }}</template></el-table-column>
+                <el-table-column label="内部占比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.share_y25_q1_q3, 0) }}</template></el-table-column>
+                <el-table-column label="份额变化" align="right"><template slot-scope="scope">{{ formatPoints(scope.row.share_change_points) }}</template></el-table-column>
+                <el-table-column label="增长贡献" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.growth_contribution_y25_q1_q3, 0) }}</template></el-table-column>
+              </el-table>
+            </el-col>
             <el-col :span="12">
               <h4>{{ activeMaker }} 区域别占比情况（客户决策地）</h4>
               <el-table :data="customerRegionRows" size="mini" border class="metric-table compact-table">
@@ -204,6 +232,9 @@
                 <el-table-column v-for="period in historyPeriods" :key="`app-yoy-${period}`" :label="period" align="right">
                   <template slot-scope="scope">{{ formatPercent((scope.row.yoy_periods || {})[period], 0) }}</template>
                 </el-table-column>
+                <el-table-column label="Y25占比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.share_y25_q1_q3, 0) }}</template></el-table-column>
+                <el-table-column label="增长贡献" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.growth_contribution_y25_q1_q3, 0) }}</template></el-table-column>
+                <el-table-column label="面积占比" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.display_area || {}).share_y25_q1_q3, 0) }}</template></el-table-column>
               </el-table>
             </el-col>
             <el-col :span="12">
@@ -216,7 +247,7 @@
                 <el-table-column label="占比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.share, 0) }}</template></el-table-column>
                 <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_q1_q3_vs_2024_q1_q3, 0) }}</template></el-table-column>
               </el-table>
-              <div class="table-note">*筛选标准：同一应用×尺寸的Y25 Q1-Q3出货量大于1,000K，或该尺寸为对应应用出货第一；不同Technology合并并标注。</div>
+              <div class="table-note">*展示口径：按终稿约定的应用、尺寸及Technology组合，从字段匹配记录汇总；不依赖工作表单元格位置。</div>
             </el-col>
           </el-row>
         </section>
@@ -241,6 +272,20 @@
             <el-col :span="8"><h4>应用驱动力</h4><ul><li v-for="(item, index) in (maker.drivers || {}).application || []" :key="`a-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
           </el-row>
         </el-card>
+        <el-collapse v-if="(reportData.narrative_sources || []).length" class="narrative-sources">
+          <el-collapse-item title="洞察结论引用来源" name="narrative-sources">
+            <div v-for="source in reportData.narrative_sources" :key="source.citation_label" class="narrative-source-row">
+              <div><el-tag size="mini" type="success">[{{ source.citation_label }}]</el-tag> {{ source.conclusion }}</div>
+              <div class="source-file">源文件：{{ source.source_file || '未记录文件名' }}</div>
+              <div v-for="metric in source.metrics || []" :key="metric.metric_id" class="metric-source">
+                <code>{{ metric.metric_id }}</code>
+                <div v-for="(location, locationIndex) in evidenceLocations(metric.evidence)" :key="`${metric.metric_id}-${locationIndex}`">
+                  {{ location }}
+                </div>
+              </div>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
         <el-collapse>
           <el-collapse-item title="完整结构化报告 JSON" name="json"><pre class="report-json">{{ JSON.stringify(reportData, null, 2) }}</pre></el-collapse-item>
         </el-collapse>
@@ -285,7 +330,6 @@ export default {
         status: undefined
       },
       form: {},
-      summaryMakers: ['Tianma', 'AUO', 'CSOT', 'BOE'],
       rules: {
         taskName: [
           { required: true, message: "任务名称不能为空", trigger: "blur" }
@@ -303,12 +347,45 @@ export default {
     this.disposeHistoryCharts();
   },
   computed: {
+    summaryMakers() {
+      const report = this.reportData || {};
+      const configured = (((report.methodology || {}).scope || {}).makers || []);
+      const sections = Object.keys(report.maker_sections || {});
+      const discovered = [...configured, ...sections].filter(Boolean);
+      const defaults = ['Tianma', 'AUO', 'CSOT', 'BOE'];
+      return [...new Set([...defaults, ...discovered])];
+    },
+    methodologyNotes() {
+      return (((this.reportData || {}).methodology || {}).notes || []);
+    },
+    methodologyLimitations() {
+      return (((this.reportData || {}).methodology || {}).limitations || []);
+    },
     marketMetricRows() {
       const rows = ((this.reportData || {}).market_summary || {}).rows || [];
       return rows.filter(Boolean);
     },
     summaryMatrixRows() {
       return ((((this.reportData || {}).market_summary || {}).summary_matrix || {}).rows || []);
+    },
+    summaryMatrixDisplayRows() {
+      const displayRows = [];
+      let currentTechnology = null;
+      this.summaryMatrixRows.forEach(row => {
+        const rowKey = row && row.row_key;
+        const technology = (row && row.technology)
+          || (rowKey && rowKey.indexOf('ltps.') === 0 ? 'LTPS' : null)
+          || (rowKey && rowKey.indexOf('a_si.') === 0 ? 'a-Si' : null);
+        if (technology && technology !== currentTechnology) {
+          displayRows.push({
+            _section: true,
+            label: technology === 'a-Si' ? 'A-Si' : technology
+          });
+          currentTechnology = technology;
+        }
+        displayRows.push(row);
+      });
+      return displayRows;
     },
     makerSectionMap() {
       const report = this.reportData || {};
@@ -349,6 +426,9 @@ export default {
     customerRegionRows() {
       return ((this.tianmaCustomer.regions || {}).rows || []);
     },
+    customerClientRows() {
+      return ((this.tianmaCustomer.top_clients || {}).clients || []);
+    },
     tianmaApplication() {
       return this.activeMakerDetail.application || {};
     },
@@ -374,7 +454,38 @@ export default {
   },
   methods: {
     cleanNarrative(value) {
-      return typeof value === 'string' ? value.replace(/\s*\[.*\]\s*$/, '').trim() : value;
+      if (typeof value !== 'string') return value;
+      const text = value.replace(/\s*\[.*\]\s*$/, '').trim();
+      const labels = ((this.reportData || {}).narrative_sources || [])
+        .filter(item => item.conclusion === text)
+        .map(item => `[${item.citation_label}]`);
+      return labels.length ? `${text} ${labels.join('')}` : text;
+    },
+    evidenceLocations(evidence) {
+      const locations = [];
+      const visit = (value, path) => {
+        if (!value) return;
+        if (Array.isArray(value)) {
+          value.forEach((item, index) => visit(item, `${path}[${index}]`));
+          return;
+        }
+        if (typeof value !== 'object') return;
+        const period = path ? `${path}：` : '';
+        if (value.sheet || value.cell || (value.cells && value.cells.length)) {
+          const refs = value.cell ? [value.cell] : (value.cells || []);
+          locations.push(`${period}${value.sheet || 'Excel'} · ${refs.length ? refs.join('、') : '聚合记录'}${value.source_record_count ? ` · ${value.source_record_count}条` : ''}`);
+        }
+        if (value.source_refs && value.source_refs.length) {
+          locations.push(`${period}${(value.source_roles || []).join('、') || 'Pivot Cache'} · ${value.source_refs.slice(0, 12).join('、')}${value.source_record_count ? ` · ${value.source_record_count}条` : ''}`);
+        }
+        Object.keys(value).forEach(key => {
+          if (!['sheet', 'cell', 'cells', 'source_refs', 'source_roles', 'source_record_count', 'aggregation'].includes(key)) {
+            visit(value[key], path ? `${path}.${key}` : key);
+          }
+        });
+      };
+      visit(evidence, '');
+      return [...new Set(locations)];
     },
     metricValue(metric, year) {
       const value = ((metric || {}).values || {})[year];
@@ -382,6 +493,11 @@ export default {
     },
     formatPercent(value, digits = 2) {
       return value === null || value === undefined ? '--' : `${(Number(value) * 100).toFixed(digits)}%`;
+    },
+    formatPoints(value, digits = 1) {
+      if (value === null || value === undefined) return '--';
+      const points = Number(value) * 100;
+      return `${points >= 0 ? '+' : ''}${points.toFixed(digits)}pct`;
     },
     formatQty(value) {
       return value === null || value === undefined ? '--' : `${Number(value).toLocaleString('zh-CN')}K`;
@@ -398,10 +514,29 @@ export default {
     },
     makerShipmentRows(maker) {
       const rows = ((maker || {}).global_trend || {}).shipment || [];
-      return rows.length && rows[0] ? [rows[0]] : [];
+      if (!rows.length || !rows[0]) return [];
+      const shipment = rows[0];
+      const comparison = shipment.comparison_periods || {};
+      const share = (((maker || {}).global_trend || {}).shipment_share || {}).periods || {};
+      return [{
+        values: {
+          '2024': comparison['Y24Q1-Q3'],
+          '2025': comparison['Y25Q1-Q3']
+        },
+        yoy_2025_vs_2024: shipment.yoy_2025_q1_q3_vs_2024_q1_q3,
+        market_share: { '2025': share['Y25Q1-Q3'] }
+      }];
     },
     summaryMakerMetric(row, makerName) {
       return (((row || {}).makers || {})[makerName]) || {};
+    },
+    summarySpanMethod({ row, columnIndex }) {
+      if (!row || !row._section) return [1, 1];
+      const columnCount = 3 + this.summaryMakers.length * 3;
+      return columnIndex === 0 ? [1, columnCount] : [0, 0];
+    },
+    summaryRowClassName({ row }) {
+      return row && row._section ? 'summary-section-row' : '';
     },
     handleMakerTabChange() {
       this.$nextTick(() => this.renderHistoryCharts());
@@ -727,6 +862,7 @@ export default {
 .metric-table { margin: 12px 0 16px; }
 .summary-matrix { margin: 12px 0 16px; }
 .summary-matrix ::v-deep .el-table__row td { padding: 4px 0; }
+.summary-matrix ::v-deep .summary-section-row td { background: #05628e; color: #fff; font-weight: 700; text-align: center; }
 .maker-tabs { margin-top: 22px; position: sticky; top: 0; z-index: 4; background: #fff; padding-top: 8px; }
 .history-section { margin: 20px 0; }
 .history-chart { width: 100%; height: 300px; margin-top: 12px; }
@@ -738,5 +874,9 @@ export default {
 .compact-table ::v-deep .cell { padding-left: 5px; padding-right: 5px; font-size: 12px; }
 .table-note { color: #606266; font-size: 12px; margin-top: 6px; }
 .insight-row { margin-top: 8px; }
+.narrative-sources { margin: 18px 0; }
+.narrative-source-row { padding: 12px 4px; border-bottom: 1px solid #ebeef5; line-height: 1.8; }
+.source-file { margin-left: 8px; color: #606266; font-size: 13px; }
+.metric-source { margin: 6px 0 0 28px; padding: 8px 10px; background: #f7f9fc; border-left: 3px solid #67c23a; color: #606266; font-size: 13px; }
 .report-json { max-height: 420px; overflow: auto; padding: 12px; background: #f6f8fa; white-space: pre-wrap; }
 </style>

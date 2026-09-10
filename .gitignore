@@ -50,6 +50,7 @@ nbdist/
 .tmp_pycheck/
 tmp/
 excel-results/
+runtime-uploadPath/
 tools/
 dump.rdb
 *.rdb

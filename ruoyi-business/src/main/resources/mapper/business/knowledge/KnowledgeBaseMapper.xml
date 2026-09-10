@@ -39,6 +39,7 @@
         <result property="reportId" column="report_id"/><result property="metricId" column="metric_id"/>
         <result property="evidenceJson" column="evidence_json"/><result property="contentSha256" column="content_sha256"/>
         <result property="tokenCount" column="token_count"/><result property="sourceName" column="source_name"/>
+        <result property="originalName" column="original_name"/>
         <result property="sourceType" column="source_type"/><result property="versionNo" column="version_no"/>
         <result property="score" column="score"/>
     </resultMap>
@@ -56,6 +57,7 @@
         </where> order by create_time desc
     </select>
     <select id="selectKnowledgeBaseById" resultMap="KnowledgeBaseResult"><include refid="selectKnowledgeBaseVo"/> where id=#{id}</select>
+    <select id="selectKnowledgeBaseBySourceCode" resultMap="KnowledgeBaseResult"><include refid="selectKnowledgeBaseVo"/> where source_code=#{sourceCode} limit 1</select>
     <insert id="insertKnowledgeBase" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeBase" useGeneratedKeys="true" keyProperty="id">
         insert into business_knowledge (source_code,source_name,source_type,current_version_id,owner_dept_id,
         confidentiality,allowed_purpose,allowed_role_ids,enabled,status,create_by,create_time,remark)
@@ -107,11 +109,11 @@
         #{sourceUrl},#{reportId},#{metricId},#{evidenceJson},#{contentSha256},#{tokenCount},sysdate())
     </insert>
     <select id="searchChunks" resultMap="ChunkResult">
-        select c.*,s.source_name,s.source_type,v.version_no,
+        select c.*,s.source_name,s.source_type,v.version_no,v.original_name,
         (match(c.title_path,c.content) against(#{query} in natural language mode)
         <if test="entityTerms != null and entityTerms.size() > 0">
           + case when <foreach collection="entityTerms" item="term" open="(" separator=" or " close=")">
-            lower(left(c.content,500)) like concat('%',lower(#{term}),'%')
+            lower(c.content) like concat('%',lower(#{term}),'%')
           </foreach> then 100 else 0 end
         </if>
         <if test="normalizedLiteral != null and normalizedLiteral != ''">
@@ -125,7 +127,7 @@
         </if>)
         <if test="entityTerms != null and entityTerms.size() > 0">
           and <foreach collection="entityTerms" item="term" open="(" separator=" or " close=")">
-            lower(left(c.content,500)) like concat('%',lower(#{term}),'%')
+            lower(c.content) like concat('%',lower(#{term}),'%')
           </foreach>
         </if>
         <if test="sourceType != null and sourceType != ''">and s.source_type=#{sourceType}</if>
@@ -134,5 +136,116 @@
           <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},s.allowed_role_ids)&gt;0</foreach>)
         </if>
         order by score desc,c.id asc limit #{limit}
+    </select>
+
+    <select id="selectCurrentMetricChunks" resultMap="ChunkResult">
+        select c.*,s.source_name,s.source_type,v.version_no,v.original_name
+        from business_kb_chunk c
+        join business_knowledge s on s.id=c.source_id and s.enabled='1'
+          and s.current_version_id=c.version_id and s.source_type='REPORT'
+        join business_kb_version v on v.id=c.version_id and v.status='2'
+        where c.metric_id is not null and c.metric_id&lt;&gt;''
+        <if test="metricTerms != null and metricTerms.size() > 0">
+          <foreach collection="metricTerms" item="term">
+            and replace(replace(replace(lower(concat(c.metric_id,' ',coalesce(c.title_path,''),' ',c.content)),'-',''),'_',''),' ','')
+              like concat('%',lower(#{term}),'%')
+          </foreach>
+        </if>
+        <if test="!admin">
+          and (s.allowed_role_ids is null or s.allowed_role_ids=''
+          <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},s.allowed_role_ids)&gt;0</foreach>)
+        </if>
+        order by c.id desc limit #{limit}
+    </select>
+
+    <select id="selectMetricFragments" resultMap="ChunkResult">
+        select c.*,s.source_name,s.source_type,v.version_no,v.original_name
+        from business_kb_chunk c
+        join business_knowledge s on s.id=c.source_id and s.enabled='1' and s.current_version_id=c.version_id
+        join business_kb_version v on v.id=c.version_id and v.status='2'
+        where c.version_id=#{versionId} and c.metric_id=#{metricId} and c.title_path=#{titlePath}
+        order by c.chunk_no asc
+    </select>
+
+    <select id="selectAuthorizedChunkById" resultMap="ChunkResult">
+        select c.*,s.source_name,s.source_type,v.version_no,v.original_name
+        from business_kb_chunk c
+        join business_knowledge s on s.id=c.source_id and s.enabled='1' and s.current_version_id=c.version_id
+        join business_kb_version v on v.id=c.version_id and v.status='2'
+        where c.id=#{id}
+        <if test="!admin">
+          and (s.allowed_role_ids is null or s.allowed_role_ids=''
+          <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},s.allowed_role_ids)&gt;0</foreach>)
+        </if>
+    </select>
+
+    <insert id="upsertGraphNode" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeGraphNode"
+            useGeneratedKeys="true" keyProperty="id">
+        insert into business_kb_entity (entity_key,entity_name,entity_type,aliases,create_time,update_time)
+        values (#{entityKey},#{entityName},#{entityType},#{aliases},sysdate(),sysdate())
+        on duplicate key update id=last_insert_id(id),entity_name=values(entity_name),aliases=values(aliases),update_time=sysdate()
+    </insert>
+
+    <insert id="insertGraphRelation" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeGraphRelation">
+        insert ignore into business_kb_relation (from_entity_id,to_entity_id,relation_type,source_id,version_id,
+        chunk_id,period,data_type,evidence_snippet,evidence_start,evidence_end,create_time)
+        values (#{fromEntityId},#{toEntityId},#{relationType},#{sourceId},#{versionId},#{chunkId},#{period},
+        #{dataType},#{evidenceSnippet},#{evidenceStart},#{evidenceEnd},sysdate())
+    </insert>
+
+    <delete id="deleteGraphRelationsByVersionId">delete from business_kb_relation where version_id=#{versionId}</delete>
+
+    <sql id="graphRelationColumns">
+        select r.id relationId,r.relation_type relationType,r.period,r.data_type dataType,r.source_id sourceId,r.chunk_id chunkId,
+        r.evidence_snippet evidenceSnippet,r.evidence_start startOffset,r.evidence_end endOffset,
+        f.id fromId,f.entity_name fromName,f.entity_type fromType,
+        t.id toId,t.entity_name toName,t.entity_type toType,
+        s.id sourceId,s.source_name sourceName,v.version_no versionNo,v.original_name originalName,
+        c.page_start pageStart,c.page_end pageEnd,c.source_url sourceUrl
+        from business_kb_relation r
+        join business_kb_entity f on f.id=r.from_entity_id
+        join business_kb_entity t on t.id=r.to_entity_id
+        join business_kb_chunk c on c.id=r.chunk_id
+        join business_knowledge s on s.id=r.source_id and s.enabled='1' and s.current_version_id=r.version_id
+        join business_kb_version v on v.id=r.version_id and v.status='2'
+    </sql>
+
+    <select id="selectGraphRelations" resultType="java.util.LinkedHashMap">
+        <include refid="graphRelationColumns"/>
+        <where>
+          <if test="period != null and period != ''">and r.period=#{period}</if>
+          <if test="dataType != null and dataType != ''">
+            <choose>
+              <when test="dataType == 'FINANCIAL'">and (r.data_type='REPORT' or f.entity_type='FINANCIAL' or t.entity_type='FINANCIAL')</when>
+              <when test="dataType == 'NEWS'">and (r.data_type='NEWS' or f.entity_type='NEWS' or t.entity_type='NEWS')</when>
+              <otherwise>and r.data_type=#{dataType}</otherwise>
+            </choose>
+          </if>
+          <if test="centerId != null">and (r.from_entity_id=#{centerId} or r.to_entity_id=#{centerId})</if>
+          <if test="!admin">
+            and (s.allowed_role_ids is null or s.allowed_role_ids=''
+            <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},s.allowed_role_ids)&gt;0</foreach>)
+          </if>
+        </where>
+        order by r.id desc limit #{limit}
+    </select>
+
+    <select id="selectGraphRelationsByChunkIds" resultType="java.util.LinkedHashMap">
+        <include refid="graphRelationColumns"/>
+        where r.chunk_id in
+        <foreach collection="chunkIds" item="chunkId" open="(" separator="," close=")">#{chunkId}</foreach>
+        <if test="!admin">
+          and (s.allowed_role_ids is null or s.allowed_role_ids=''
+          <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},s.allowed_role_ids)&gt;0</foreach>)
+        </if>
+        order by r.id desc limit #{limit}
+    </select>
+
+    <select id="selectCurrentChunks" resultMap="ChunkResult">
+        select c.*,s.source_name,s.source_type,v.version_no,v.original_name
+        from business_kb_chunk c
+        join business_knowledge s on s.id=c.source_id and s.enabled='1' and s.current_version_id=c.version_id
+        join business_kb_version v on v.id=c.version_id and v.status='2'
+        order by c.version_id,c.chunk_no limit #{limit}
     </select>
 </mapper>

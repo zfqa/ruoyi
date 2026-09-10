@@ -1,5 +1,14 @@
 import request from '@/utils/request'
 
+// 提交自由文本LLM实体抽取任务
+export function extractTextStruct(data) {
+  return request({
+    url: '/business/data/text/extract',
+    method: 'post',
+    data
+  })
+}
+
 // 查询文本结构化列表
 export function listTextStruct(query) {
   return request({

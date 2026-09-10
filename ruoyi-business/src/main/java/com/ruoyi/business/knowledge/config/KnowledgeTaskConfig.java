@@ -25,4 +25,20 @@ public class KnowledgeTaskConfig
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         return executor;
     }
+
+    @Bean(name = "knowledgeQaTaskExecutor")
+    public ThreadPoolTaskExecutor knowledgeQaTaskExecutor(
+        @Value("${business.knowledge.qa-executor.core-pool-size:1}") int core,
+        @Value("${business.knowledge.qa-executor.max-pool-size:2}") int max,
+        @Value("${business.knowledge.qa-executor.queue-capacity:10}") int capacity)
+    {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("knowledge-qa-");
+        executor.setCorePoolSize(core);
+        executor.setMaxPoolSize(max);
+        executor.setQueueCapacity(capacity);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        return executor;
+    }
 }

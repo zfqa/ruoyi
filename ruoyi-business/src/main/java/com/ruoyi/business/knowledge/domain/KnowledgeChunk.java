@@ -18,6 +18,7 @@ public class KnowledgeChunk
     private String contentSha256;
     private Integer tokenCount;
     private String sourceName;
+    private String originalName;
     private String sourceType;
     private String versionNo;
     private Double score;
@@ -54,6 +55,8 @@ public class KnowledgeChunk
     public void setTokenCount(Integer tokenCount) { this.tokenCount = tokenCount; }
     public String getSourceName() { return sourceName; }
     public void setSourceName(String sourceName) { this.sourceName = sourceName; }
+    public String getOriginalName() { return originalName; }
+    public void setOriginalName(String originalName) { this.originalName = originalName; }
     public String getSourceType() { return sourceType; }
     public void setSourceType(String sourceType) { this.sourceType = sourceType; }
     public String getVersionNo() { return versionNo; }

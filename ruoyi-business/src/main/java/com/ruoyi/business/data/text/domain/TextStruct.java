@@ -1,6 +1,7 @@
 package com.ruoyi.business.data.text.domain;
 
 import java.io.Serial;
+import java.time.LocalDateTime;
 import org.apache.commons.lang3.builder.ToStringBuilder;
 import org.apache.commons.lang3.builder.ToStringStyle;
 import com.ruoyi.common.annotation.Excel;
@@ -28,6 +29,24 @@ public class TextStruct extends BaseEntity
     @Excel(name = "状态", readConverterExp = "0=待处理,1=处理中,2=成功,3=失败")
     private String status;
 
+    /** 用户粘贴的原始文本 */
+    private String sourceText;
+
+    /** 标准化实体JSON */
+    private String resultJson;
+
+    /** 实体数量 */
+    @Excel(name = "实体数量", cellType = Excel.ColumnType.NUMERIC)
+    private Integer entityCount;
+
+    /** 实际使用模型 */
+    @Excel(name = "LLM模型")
+    private String llmModel;
+
+    /** 完成时间 */
+    @Excel(name = "完成时间", width = 30, dateFormat = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime completedTime;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -37,12 +56,26 @@ public class TextStruct extends BaseEntity
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
 
+    public String getSourceText() { return sourceText; }
+    public void setSourceText(String sourceText) { this.sourceText = sourceText; }
+    public String getResultJson() { return resultJson; }
+    public void setResultJson(String resultJson) { this.resultJson = resultJson; }
+    public Integer getEntityCount() { return entityCount; }
+    public void setEntityCount(Integer entityCount) { this.entityCount = entityCount; }
+    public String getLlmModel() { return llmModel; }
+    public void setLlmModel(String llmModel) { this.llmModel = llmModel; }
+    public LocalDateTime getCompletedTime() { return completedTime; }
+    public void setCompletedTime(LocalDateTime completedTime) { this.completedTime = completedTime; }
+
     @Override
     public String toString() {
         return new ToStringBuilder(this, ToStringStyle.MULTI_LINE_STYLE)
             .append("id", getId())
             .append("taskName", getTaskName())
             .append("status", getStatus())
+            .append("entityCount", getEntityCount())
+            .append("llmModel", getLlmModel())
+            .append("completedTime", getCompletedTime())
             .append("createBy", getCreateBy())
             .append("createTime", getCreateTime())
             .append("updateBy", getUpdateBy())

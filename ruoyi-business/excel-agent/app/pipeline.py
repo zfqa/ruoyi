@@ -389,7 +389,8 @@ def _parse_shipment_share_cache(
     result["computed_metrics"] = calculate_competitive_metrics([metric_table])
     maker_details = {}
     detail_gaps = []
-    for maker in ("Tianma", "AUO", "CSOT", "BOE"):
+    maker_names = _report_maker_names(records, supply_chain_records)
+    for maker in maker_names:
         detail = {
             "history": calculate_tianma_history_metrics(records, baseline_records, maker),
             "product": calculate_tianma_product_metrics(records, baseline_records, maker),
@@ -409,3 +410,19 @@ def _parse_shipment_share_cache(
         (result["computed_metrics"].get("data_gaps") or []) + detail_gaps
     ))
     return result
+
+
+def _report_maker_names(records: list[dict[str, Any]], supply_chain_records: list[dict[str, Any]]) -> list[str]:
+    """Return only explicitly configured report makers; market totals still include every maker."""
+    aliases = {"tianma": "Tianma", "auo": "AUO", "boe": "BOE", "csot": "CSOT",
+               "china star": "CSOT", "china_star": "CSOT", "tcl csot": "CSOT"}
+    configured = [item.strip() for item in os.getenv("REPORT_TEMPLATE_MAKERS", "").split(",") if item.strip()]
+    requested = configured or ["Tianma", "AUO", "CSOT", "BOE"]
+    names = []
+    for raw in requested:
+        normalized = aliases.get(raw.lower(), raw)
+        if normalized not in names:
+            names.append(normalized)
+    if "Tianma" not in names:
+        names.insert(0, "Tianma")
+    return names

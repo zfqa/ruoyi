@@ -23,9 +23,12 @@ import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.utils.poi.ExcelUtil;
 import com.ruoyi.business.knowledge.domain.KnowledgeBase;
+import com.ruoyi.business.knowledge.domain.KnowledgeVersion;
 import com.ruoyi.business.knowledge.service.IKnowledgeBaseService;
 import com.ruoyi.business.knowledge.service.KnowledgeIngestService;
 import com.ruoyi.business.knowledge.service.KnowledgeQaService;
+import com.ruoyi.business.knowledge.service.KnowledgeQaTaskService;
+import com.ruoyi.business.knowledge.service.KnowledgeGraphService;
 
 /**
  * 固定文件知识库及来源展示 控制器
@@ -44,6 +47,12 @@ public class KnowledgeBaseController extends BaseController
 
     @Autowired
     private KnowledgeQaService knowledgeQaService;
+
+    @Autowired
+    private KnowledgeQaTaskService knowledgeQaTaskService;
+
+    @Autowired
+    private KnowledgeGraphService knowledgeGraphService;
 
     @PreAuthorize("@ss.hasPermi('business:knowledge:list')")
     @GetMapping("/list")
@@ -102,7 +111,7 @@ public class KnowledgeBaseController extends BaseController
         {
             KnowledgeBase source = knowledgeBaseService.selectKnowledgeBaseById(id);
             if (source != null && source.getCurrentVersionId() != null)
-                return AjaxResult.error("资料已有入库版本，请先停用，POC阶段不允许直接删除来源链");
+                return AjaxResult.error("资料已有入库版本，为保留来源链不允许删除；如不再使用，请将资料设为停用");
         }
         return toAjax(knowledgeBaseService.deleteKnowledgeBaseByIds(ids));
     }
@@ -133,7 +142,43 @@ public class KnowledgeBaseController extends BaseController
         {
             Long sourceId = Long.valueOf(String.valueOf(payload.get("sourceId")));
             return success(knowledgeIngestService.submitNews(sourceId, string(payload.get("versionNo")),
-                string(payload.get("url")), string(payload.get("title")), getUsername()));
+                string(payload.get("url")), string(payload.get("title")), string(payload.get("content")), getUsername()));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
+    @Log(title = "批量新闻JSON知识库入库", businessType = BusinessType.IMPORT)
+    @PostMapping("/ingest/news-json")
+    public AjaxResult ingestNewsJson(@RequestParam("sourceId") Long sourceId,
+        @RequestParam(value = "versionNo", required = false) String versionNo,
+        @RequestParam("file") MultipartFile file)
+    {
+        try
+        {
+            return success(knowledgeIngestService.submitNewsJson(sourceId, versionNo, file, getUsername()));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
+    @Log(title = "政策知识库入库", businessType = BusinessType.IMPORT)
+    @PostMapping("/ingest/policy")
+    public AjaxResult ingestPolicy(@RequestBody Map<String, Object> payload)
+    {
+        try
+        {
+            Long sourceId = Long.valueOf(String.valueOf(payload.get("sourceId")));
+            return success(knowledgeIngestService.submitPolicy(sourceId, string(payload.get("versionNo")),
+                string(payload.get("url")), string(payload.get("title")), string(payload.get("content")),
+                string(payload.get("issuedBy")), string(payload.get("publishedAt")),
+                string(payload.get("policyLevel")), getUsername()));
         }
         catch (Exception e)
         {
@@ -158,6 +203,22 @@ public class KnowledgeBaseController extends BaseController
         }
     }
 
+    /** 为启用自动入库前已生成的成功报告补建独立知识源。 */
+    @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
+    @Log(title = "生成报告自动知识入库", businessType = BusinessType.IMPORT)
+    @PostMapping("/ingest/generated-report/{reportId}")
+    public AjaxResult ingestGeneratedReport(@PathVariable Long reportId)
+    {
+        try
+        {
+            return success(knowledgeIngestService.submitGeneratedReport(reportId, getUsername()));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
     @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
     @GetMapping("/task/{id}")
     public AjaxResult task(@PathVariable Long id)
@@ -170,7 +231,7 @@ public class KnowledgeBaseController extends BaseController
     @GetMapping("/{sourceId}/versions")
     public AjaxResult versions(@PathVariable Long sourceId)
     {
-        return success(knowledgeIngestService.getVersions(sourceId));
+        return success(knowledgeIngestService.getVersions(sourceId).stream().map(this::versionView).toList());
     }
 
     @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
@@ -200,8 +261,10 @@ public class KnowledgeBaseController extends BaseController
         {
             List<Long> roleIds = getLoginUser().getUser().getRoles() == null ? List.of()
                 : getLoginUser().getUser().getRoles().stream().map(role -> role.getRoleId()).collect(Collectors.toList());
+            boolean includeNews = payload.get("includeNews") == null
+                || Boolean.parseBoolean(string(payload.get("includeNews")));
             return success(knowledgeQaService.ask(string(payload.get("question")), string(payload.get("sourceType")),
-                roleIds, getLoginUser().getUser().isAdmin()));
+                roleIds, getLoginUser().getUser().isAdmin(), includeNews));
         }
         catch (Exception e)
         {
@@ -209,8 +272,132 @@ public class KnowledgeBaseController extends BaseController
         }
     }
 
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @PostMapping("/qa-tasks")
+    public AjaxResult submitQaTask(@RequestBody Map<String, Object> payload)
+    {
+        try
+        {
+            boolean includeNews = payload.get("includeNews") == null
+                || Boolean.parseBoolean(string(payload.get("includeNews")));
+            return success(knowledgeQaTaskService.submit(string(payload.get("question")),
+                string(payload.get("sourceType")), includeNews, roleIds(),
+                getLoginUser().getUser().isAdmin(), getUsername()));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/qa-tasks/{taskId}")
+    public AjaxResult qaTask(@PathVariable String taskId)
+    {
+        try
+        {
+            return success(knowledgeQaTaskService.get(taskId, getUsername(),
+                getLoginUser().getUser().isAdmin()));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/llm-config")
+    public AjaxResult llmConfig()
+    {
+        return success(knowledgeQaService.llmConfiguration());
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:edit')")
+    @PutMapping("/llm-config")
+    public AjaxResult updateLlmConfig(@RequestBody Map<String, Object> payload)
+    {
+        try
+        {
+            return success(knowledgeQaService.updateLlmConfiguration(string(payload.get("apiUrl")),
+                string(payload.get("model")), string(payload.get("apiKey")),
+                Boolean.parseBoolean(string(payload.get("clearApiKey")))));
+        }
+        catch (Exception e) { return AjaxResult.error(e.getMessage()); }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:edit')")
+    @PostMapping("/llm-config/test")
+    public AjaxResult testLlmConfig()
+    {
+        try { return success(knowledgeQaService.testLlmConfiguration()); }
+        catch (Exception e) { return AjaxResult.error(e.getMessage()); }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/graph")
+    public AjaxResult graph(@RequestParam(value = "period", required = false) String period,
+        @RequestParam(value = "dataType", required = false) String dataType,
+        @RequestParam(value = "centerId", required = false) Long centerId,
+        @RequestParam(value = "limit", defaultValue = "300") int limit)
+    {
+        return success(knowledgeGraphService.graph(period, dataType, centerId, roleIds(),
+            getLoginUser().getUser().isAdmin(), limit));
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:edit')")
+    @Log(title = "重建知识图谱", businessType = BusinessType.UPDATE)
+    @PostMapping("/graph/rebuild")
+    public AjaxResult rebuildGraph()
+    {
+        return success(knowledgeGraphService.rebuildCurrentGraph());
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/evidence/{chunkId}")
+    public AjaxResult evidence(@PathVariable Long chunkId,
+        @RequestParam(value = "startOffset", required = false) Integer startOffset,
+        @RequestParam(value = "endOffset", required = false) Integer endOffset)
+    {
+        try
+        {
+            return success(knowledgeGraphService.evidence(chunkId, startOffset, endOffset, roleIds(),
+                getLoginUser().getUser().isAdmin()));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    private List<Long> roleIds()
+    {
+        return getLoginUser().getUser().getRoles() == null ? List.of()
+            : getLoginUser().getUser().getRoles().stream().map(role -> role.getRoleId()).collect(Collectors.toList());
+    }
+
     private String string(Object value)
     {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    /** 只返回溯源所需元数据，不向浏览器暴露服务器文件路径和内容哈希。 */
+    private Map<String, Object> versionView(KnowledgeVersion version)
+    {
+        Map<String, Object> value = new java.util.LinkedHashMap<>();
+        value.put("id", version.getId());
+        value.put("sourceId", version.getSourceId());
+        value.put("versionNo", version.getVersionNo());
+        value.put("originalName", version.getOriginalName());
+        value.put("sourceUrl", version.getSourceUrl());
+        value.put("publishedTime", version.getPublishedTime());
+        value.put("fetchedTime", version.getFetchedTime());
+        value.put("parserVersion", version.getParserVersion());
+        value.put("pageCount", version.getPageCount());
+        value.put("chunkCount", version.getChunkCount());
+        value.put("status", version.getStatus());
+        value.put("errorMessage", version.getErrorMessage());
+        value.put("createBy", version.getCreateBy());
+        value.put("createTime", version.getCreateTime());
+        return value;
     }
 }

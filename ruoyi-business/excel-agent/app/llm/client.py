@@ -11,7 +11,7 @@ from typing import Any
 
 
 DEFAULT_API_URL = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
-DEFAULT_MODEL = "doubao-seed-2-1-turbo-260628"
+DEFAULT_MODEL = "glm-5-2-260617"
 _LOCAL_ENV: dict[str, str] | None = None
 
 
@@ -51,6 +51,7 @@ class ArkChatClient:
             "stream": False,
             "temperature": 0,
             "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
             "thinking": {"type": "disabled"},
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -64,7 +65,42 @@ class ArkChatClient:
             raise LlmError("LLM响应缺少choices[0].message.content") from exc
         if isinstance(content, list):
             content = "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
-        return _parse_json_object(str(content))
+        content_text = str(content)
+        try:
+            return _parse_json_object(content_text)
+        except LlmError as first_error:
+            # 部分兼容模型即使启用json_object仍可能在长响应中遗漏逗号或未转义引号。
+            # 仅让模型修复序列化格式，不改变已有字段和值；失败后继续交由上层规则报告兜底。
+            repair_payload = {
+                "model": self.model,
+                "stream": False,
+                "temperature": 0,
+                "max_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+                "thinking": {"type": "disabled"},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是JSON格式修复器。只修复缺失逗号、括号和字符串引号转义，"
+                            "不得增删字段、改写文字或修改数值。只输出一个合法JSON对象。"
+                        ),
+                    },
+                    {"role": "user", "content": content_text},
+                ],
+            }
+            repaired_response = self._post(repair_payload)
+            try:
+                repaired = repaired_response["choices"][0]["message"]["content"]
+                if isinstance(repaired, list):
+                    repaired = "".join(
+                        str(item.get("text", "")) for item in repaired if isinstance(item, dict)
+                    )
+                return _parse_json_object(str(repaired))
+            except (KeyError, IndexError, TypeError, LlmError) as repair_error:
+                raise LlmError(
+                    f"LLM返回JSON无法修复: {first_error}; repair={repair_error}"
+                ) from repair_error
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

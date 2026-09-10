@@ -14,6 +14,8 @@ class KnowledgeTextProcessorTest
         assertTrue(KnowledgeTextProcessor.detectEntityTerms("天马增长原因").contains("Tianma"));
         assertTrue(KnowledgeTextProcessor.detectEntityTerms("CSOT与京东方对比").contains("CSOT"));
         assertTrue(KnowledgeTextProcessor.detectEntityTerms("CSOT与京东方对比").contains("BOE"));
+        assertTrue(KnowledgeTextProcessor.detectEntityTerms("小鹏近期交付与市场动作").contains("XPeng"));
+        assertTrue(KnowledgeTextProcessor.detectEntityTerms("小鹏近期交付与市场动作").contains("小鹏"));
         assertEquals("asi", KnowledgeTextProcessor.normalizedLiteral("8英寸以下 a-Si 出货"));
     }
 

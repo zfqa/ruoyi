@@ -21,6 +21,7 @@ SYSTEM_PROMPT = """你是车载显示行业报告撰写员。当前生成Y25前�
 每条包含数字的文字必须引用已有metric_id。数据缺口由Python确定，不得新增客户、区域、应用或其他未要求部分。只输出JSON对象，不要Markdown。"""
 
 METRIC_REF_PATTERN = re.compile(r"\s*\[(.+)\]\s*$")
+METRIC_REF_TOKEN_PATTERN = re.compile(r"\[([A-Za-z0-9_.-]+)\]")
 
 
 def generate_competitive_insight_report(
@@ -35,9 +36,14 @@ def generate_competitive_insight_report(
         ArkChatClient(timeout_seconds=float(os.getenv("ARK_REPORT_TIMEOUT_SECONDS", "180")))
         if use_llm else None
     )
-    if not use_llm or client is None or not client.available:
-        report["quality"]["data_gaps"].append("LLM未启用或ARK_API_KEY未配置，已使用确定性指标生成分析文案")
-        return _populate_rule_narratives(report)
+    if not use_llm:
+        report["quality"]["generation_mode"] = "python_metrics_rule_narrative"
+        return _finalize_narrative_traceability(_populate_rule_narratives(report))
+    if client is None or not client.available:
+        report["quality"].setdefault("warnings", []).append(
+            "ARK_API_KEY未配置，已使用确定性指标生成分析文案"
+        )
+        return _finalize_narrative_traceability(_populate_rule_narratives(report))
 
     request = {
         "task": "仅依据Python已计算的指标，按终稿顺序撰写Y25前三季度Summary，并依次撰写Tianma、AUO、CSOT、BOE的主要驱动力、前装历史、产品线、客户/区域和应用分析；不执行任何计算；所有YoY采用标准同比current/previous-1",
@@ -46,15 +52,20 @@ def generate_competitive_insight_report(
         "computed_metrics": _compact_metrics_for_llm(metrics),
     }
     try:
-        candidate = client.complete_json(SYSTEM_PROMPT, json.dumps(request, ensure_ascii=False), max_tokens=3500)
+        candidate = client.complete_json(SYSTEM_PROMPT, json.dumps(request, ensure_ascii=False), max_tokens=7000)
     except LlmError as exc:
-        report["quality"]["data_gaps"].append(f"LLM报告生成失败，已使用确定性指标生成分析文案: {str(exc)[:300]}")
+        message = str(exc)
+        if "SetLimitExceeded" in message or "HTTP 429" in message:
+            warning = "LLM推理额度已达到平台限制，本次已使用确定性指标生成分析文案；指标计算不受影响"
+        else:
+            warning = f"LLM报告生成失败，已使用确定性指标生成分析文案: {message[:180]}"
+        report["quality"].setdefault("warnings", []).append(warning)
         report["quality"]["llm_model"] = client.model
-        return _populate_rule_narratives(report)
+        return _finalize_narrative_traceability(_populate_rule_narratives(report))
     normalized = _normalize_candidate(candidate, report)
     normalized["quality"]["generation_mode"] = "python_metrics_llm_narrative"
     normalized["quality"]["llm_model"] = client.model
-    return normalized
+    return _finalize_narrative_traceability(normalized)
 
 
 def _metric_tables(parsed: dict[str, Any]) -> list[dict[str, Any]]:
@@ -118,6 +129,7 @@ def _compact_metrics_for_llm(metrics: dict[str, Any]) -> dict[str, Any]:
 
 
 def _empty_report(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
+    maker_names = _template_makers(metrics)
     return {
         "schema_version": "1.0",
         "report_type": REPORT_TYPE,
@@ -134,7 +146,7 @@ def _empty_report(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, 
                 "excluded_application": "Automobile monitor (Others)",
                 "summary_years": [2024, 2025],
                 "summary_quarters": ["Q1", "Q2", "Q3"],
-                "makers": list(MAKERS),
+                "makers": list(maker_names),
                 "maker_aliases": {"China Star": "CSOT"},
                 "technologies": ["LTPS", "a-Si"],
             },
@@ -146,13 +158,29 @@ def _empty_report(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, 
                 "segment_market_share": "maker segment shipment / market same-technology same-size segment shipment",
                 "technology_market_share": "maker segment shipment / market technology total shipment",
                 "same_size_market_share": "maker segment shipment / market same-size segment shipment",
+                "forecast_completion": "Y25 Q1-Q3 actual shipment / Y25F shipment",
+                "growth_contribution": "segment shipment change / maker total shipment change",
             },
-            "report_flow": [
+            "notes": [
+                "Y25F为数据源中的2025全年预测值，Y25 Q1-Q3为前三季度实际值。",
+                "LTPS口径同时包含LTPS LCD与OLED；厂商出货和面积不计Oxide，市场份额分母保留全技术市场。",
+                "前装口径为Original specification=Automobile monitor，并排除Application=Automobile monitor (Others)。",
+                "市场汇总覆盖全部Maker；China Star统一展示为CSOT。",
+                "尺寸段依次为<8、[8,12)、[12,15)、>=15，边界值归入右侧区间。",
+                "Y22来自1Q25 with 4Q24 Results基准文件，Y23-Y25来自4Q25 with 3Q25 Results当前文件。",
+                "客户区域按客户决策地映射；未命中的客户归为其他并保留清单。",
+                "应用重点尺寸先跨Technology合并，同一应用×尺寸超过1,000K或为该应用第一大尺寸时入选。",
+                "所有数值、同比、份额、完成率及增长贡献均由Python计算；LLM仅组织文字，不执行算术。",
+            ],
+            "limitations": [
+                "当前基准文件不含2021年数据，因此Y22同比不计算。",
+                "参考PDF个别图表与源数据存在内部不一致时，以Excel源表和统一公式的可复算结果为准。",
+            ],
+                "report_flow": [
                 "口径说明", "Y25前三季度Summary",
-                "Tianma洞察", "Tianma前装出货与市占率", "Tianma产品线", "Tianma客户/区域", "Tianma应用",
-                "AUO洞察", "AUO前装出货与市占率", "AUO产品线", "AUO客户/区域", "AUO应用",
-                "CSOT洞察", "CSOT前装出货与市占率", "CSOT产品线", "CSOT客户/区域", "CSOT应用",
-                "BOE洞察", "BOE前装出货与市占率", "BOE产品线", "BOE客户/区域", "BOE应用",
+                *[item for maker in maker_names for item in (
+                    f"{maker}洞察", f"{maker}前装出货与市占率", f"{maker}产品线",
+                    f"{maker}客户/区域", f"{maker}应用")],
             ],
         },
         "data_scope": {
@@ -189,13 +217,13 @@ def _empty_report(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, 
             **(metrics.get("tianma_application") or {}),
             "insights": {"application_history": [], "key_sizes": []},
         },
-        "maker_sections": _maker_sections(metrics),
+        "maker_sections": _maker_sections(metrics, maker_names),
         "makers": [
             _maker_with_metrics(
                 maker,
                 (metrics.get("makers") or {}).get(maker) or {},
                 (metrics.get("maker_details") or {}).get(maker) or {},
-            ) for maker in MAKERS
+            ) for maker in maker_names
         ],
         "evidence": _metric_evidence(metrics),
         "computed_metrics": metrics,
@@ -211,6 +239,17 @@ def _empty_report(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, 
     }
 
 
+def _template_makers(metrics: dict[str, Any]) -> tuple[str, ...]:
+    """Return stable default maker slots plus makers discovered in the current input."""
+    configured = [item.strip() for item in os.getenv("REPORT_TEMPLATE_MAKERS", "").split(",") if item.strip()]
+    discovered = list((metrics.get("maker_details") or {}).keys()) + list((metrics.get("makers") or {}).keys())
+    names = configured or list(MAKERS)
+    for name in discovered:
+        if name and name not in names:
+            names.append(name)
+    return tuple(names)
+
+
 def _empty_maker(maker: str) -> dict[str, Any]:
     return {
         "maker": maker,
@@ -223,8 +262,13 @@ def _empty_maker(maker: str) -> dict[str, Any]:
     }
 
 
-def _maker_sections(metrics: dict[str, Any]) -> dict[str, Any]:
+def _maker_sections(metrics: dict[str, Any], maker_names: tuple[str, ...] | None = None) -> dict[str, Any]:
     sections = deepcopy(metrics.get("maker_details") or {})
+    for maker in maker_names or _template_makers(metrics):
+        sections.setdefault(maker, {
+            "history": {}, "product": {}, "customer": {}, "application": {},
+            "data_gaps": [f"未找到{maker}对应的有效数据，已保留固定模板字段"],
+        })
     for detail in sections.values():
         history = detail.get("history") or {}
         history["insights"] = {
@@ -238,6 +282,10 @@ def _maker_sections(metrics: dict[str, Any]) -> dict[str, Any]:
         customer["insights"] = {"top_clients": [], "regions": []}
         application = detail.get("application") or {}
         application["insights"] = {"application_history": [], "key_sizes": []}
+        detail["history"] = history
+        detail["product"] = product
+        detail["customer"] = customer
+        detail["application"] = application
     return sections
 
 
@@ -391,7 +439,83 @@ def _metric_refs(value: Any) -> list[str]:
 
 
 def _clean_narrative_list(values: list[Any]) -> list[str]:
-    return [METRIC_REF_PATTERN.sub("", value).strip() for value in values if isinstance(value, str) and value.strip()]
+    return [value.strip() for value in values if isinstance(value, str) and value.strip()]
+
+
+def _finalize_narrative_traceability(report: dict[str, Any]) -> dict[str, Any]:
+    """Strip internal metric references from prose and retain a displayable conclusion-to-evidence map."""
+    result = deepcopy(report)
+    declared_refs = set((result.get("quality") or {}).get("narrative_metric_refs") or [])
+    source_file = (result.get("source") or {}).get("file_name")
+    evidence_by_metric = {
+        item.get("metric_id"): item.get("evidence")
+        for item in (result.get("evidence") or [])
+        if isinstance(item, dict) and item.get("metric_id")
+    }
+    narrative_sources: list[dict[str, Any]] = []
+    seen: dict[tuple[str, tuple[str, ...]], str] = {}
+    invalid_refs: set[str] = set()
+
+    def clean(value):
+        if isinstance(value, dict):
+            for key in list(value.keys()):
+                if key in {"computed_metrics", "evidence", "narrative_sources"}:
+                    continue
+                value[key] = clean(value[key])
+            return value
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if not isinstance(value, str):
+            return value
+        match = METRIC_REF_PATTERN.search(value)
+        if not match:
+            return value
+        refs = METRIC_REF_TOKEN_PATTERN.findall(match.group(0))
+        text = METRIC_REF_PATTERN.sub("", value).strip()
+        valid_refs = tuple(dict.fromkeys(ref for ref in refs if ref in evidence_by_metric))
+        invalid_refs.update(ref for ref in refs if ref not in evidence_by_metric)
+        if not text or not valid_refs:
+            return text
+        key = (text, valid_refs)
+        if key not in seen:
+            label = f"R{len(narrative_sources) + 1}"
+            seen[key] = label
+            narrative_sources.append({
+                "citation_label": label,
+                "conclusion": text,
+                "source_file": source_file,
+                "metric_ids": list(valid_refs),
+                "metrics": [
+                    {"metric_id": metric_id, "evidence": evidence_by_metric[metric_id]}
+                    for metric_id in valid_refs
+                ],
+            })
+        return text
+
+    clean(result)
+    result["narrative_sources"] = narrative_sources
+    result.setdefault("quality", {})["narrative_metric_refs"] = sorted(declared_refs | {
+        metric_id for item in narrative_sources for metric_id in item["metric_ids"]
+    })
+    if invalid_refs:
+        result["quality"].setdefault("data_gaps", []).append(
+            "分析文案包含无法解析的指标引用：" + "、".join(sorted(invalid_refs))
+        )
+    return result
+
+
+def _with_metric(text: str, metric: Any) -> str:
+    metric_id = metric.get("metric_id") if isinstance(metric, dict) else None
+    return f"{text} [{metric_id}]" if metric_id else text
+
+
+def _with_metrics(text: str, *metrics: Any) -> str:
+    metric_ids = [
+        metric.get("metric_id") for metric in metrics
+        if isinstance(metric, dict) and metric.get("metric_id")
+    ]
+    suffix = " ".join(f"[{metric_id}]" for metric_id in dict.fromkeys(metric_ids))
+    return f"{text} {suffix}" if suffix else text
 
 
 def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
@@ -404,7 +528,7 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
     market_yoy = market.get("yoy_2025_vs_2024")
     if market_y25 is not None:
         result["executive_summary"].append(
-            f"Y25前三季度市场总出货{_format_number(market_y25)}K，同比{_format_percent(market_yoy)}"
+            _with_metric(f"Y25前三季度市场总出货{_format_number(market_y25)}K，同比{_format_percent(market_yoy)}", market)
         )
 
     matrix_rows = ((metrics.get("summary_matrix") or {}).get("rows") or [])
@@ -413,25 +537,47 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
         ltps_market = ltps_total.get("market") or {}
         share = (ltps_market.get("segment_share") or {}).get("2025")
         result["executive_summary"].append(
-            f"LTPS市场占比{_format_percent(share)}，同比{_format_percent(ltps_market.get('yoy_2025_vs_2024'))}"
+            _with_metric(f"LTPS市场占比{_format_percent(share)}，同比{_format_percent(ltps_market.get('yoy_2025_vs_2024'))}", ltps_market)
         )
     size_rows = [row for row in matrix_rows if not row.get("is_total")]
     growing = [row for row in size_rows if (row.get("market") or {}).get("yoy_2025_vs_2024") is not None]
     if growing:
         fastest = max(growing, key=lambda row: (row.get("market") or {}).get("yoy_2025_vs_2024"))
         result["market_summary"]["insights"].append(
-            f"{fastest.get('technology')} {fastest.get('label')}同比{_format_percent((fastest.get('market') or {}).get('yoy_2025_vs_2024'))}，为增长最快尺寸段"
+            _with_metric(f"{fastest.get('technology')} {fastest.get('label')}同比{_format_percent((fastest.get('market') or {}).get('yoy_2025_vs_2024'))}，为增长最快尺寸段", fastest.get("market"))
         )
     asi_total = next((row for row in matrix_rows if row.get("row_key") == "a_si.total"), None)
     if asi_total:
         asi_market = asi_total.get("market") or {}
         asi_share = (asi_market.get("segment_share") or {}).get("2025")
         result["market_summary"]["insights"].append(
-            f"a-Si市场同比{_format_percent(asi_market.get('yoy_2025_vs_2024'))}，占比{_format_percent(asi_share)}"
+            _with_metric(f"a-Si市场同比{_format_percent(asi_market.get('yoy_2025_vs_2024'))}，占比{_format_percent(asi_share)}", asi_market)
+        )
+    for row in size_rows:
+        metric = row.get("market") or {}
+        yoy = metric.get("yoy_2025_vs_2024")
+        share = (metric.get("total_market_share") or {}).get("2025")
+        maker_metrics = row.get("makers") or {}
+        leaders = [
+            (name, ((value.get("same_size_market_share") or {}).get("2025")))
+            for name, value in maker_metrics.items()
+            if ((value.get("same_size_market_share") or {}).get("2025")) is not None
+        ]
+        leader_text = ""
+        if leaders:
+            leader, leader_share = max(leaders, key=lambda item: item[1])
+            leader_text = f"，四家中{leader}份额最高（{_format_percent(leader_share)}）"
+        result["market_summary"]["insights"].append(
+            _with_metric(
+                f"{row.get('technology')} {row.get('label')}占市场{_format_percent(share)}，同比{_format_percent(yoy)}{leader_text}",
+                metric,
+            )
         )
 
     maker_lookup = {item.get("maker"): item for item in result.get("makers") or []}
-    for maker in MAKERS:
+    for maker in (item.get("maker") for item in result.get("makers") or []):
+        if not maker:
+            continue
         sections = (result.get("maker_sections") or {}).get(maker) or {}
         maker_result = maker_lookup.get(maker)
         if not maker_result:
@@ -450,9 +596,18 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
                 f"Y25前三季度出货{_format_number(y25_shipment)}K，同比"
                 f"{_format_percent(shipment_yoy.get('Y25Q1-Q3'))}"
             )
+            shipment_text = _with_metric(shipment_text, shipment)
             maker_result["overview"].append(shipment_text)
             maker_result["global_trend"]["insights"].append(shipment_text)
             history.setdefault("insights", {}).setdefault("shipment", []).append(shipment_text)
+            completion = shipment.get("forecast_completion_y25_q1_q3")
+            if completion is not None:
+                completion_text = _with_metric(
+                    f"Y25前三季度已完成全年预测的{_format_percent(completion)}",
+                    shipment,
+                )
+                maker_result["global_trend"]["insights"].append(completion_text)
+                history.setdefault("insights", {}).setdefault("shipment", []).append(completion_text)
 
         share_periods = (history.get("shipment_share") or {}).get("periods") or {}
         y25_share = share_periods.get("Y25Q1-Q3")
@@ -461,6 +616,7 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
             share_text = f"Y25前三季度出货市占率{_format_percent(y25_share)}"
             if y24_share is not None:
                 share_text += f"，较Y24变化{_format_points(y25_share - y24_share)}个百分点"
+            share_text = _with_metric(share_text, history.get("shipment_share"))
             maker_result["overview"].append(share_text)
             maker_result["global_trend"]["insights"].append(share_text)
             history.setdefault("insights", {}).setdefault("shipment_share", []).append(share_text)
@@ -470,8 +626,63 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
         area_y25 = (area.get("periods") or {}).get("Y25Q1-Q3")
         if area_y25 is not None:
             history.setdefault("insights", {}).setdefault("display_area", []).append(
-                f"Y25前三季度出货面积{_format_number(area_y25)}㎡，同比{_format_percent(area_yoy)}"
+                _with_metric(f"Y25前三季度出货面积{_format_number(area_y25)}㎡，同比{_format_percent(area_yoy)}", area)
             )
+
+        product_segments = []
+        for row in size_rows:
+            maker_metric = ((row.get("makers") or {}).get(maker) or {})
+            contribution = maker_metric.get("growth_contribution_2025_vs_2024")
+            yoy = maker_metric.get("yoy_2025_vs_2024")
+            if contribution is not None and yoy is not None:
+                product_segments.append((row, maker_metric, contribution, yoy))
+        positive_segments = sorted(
+            (item for item in product_segments if item[2] > 0),
+            key=lambda item: item[2], reverse=True,
+        )
+        negative_segments = sorted(
+            (item for item in product_segments if item[2] < 0),
+            key=lambda item: item[2],
+        )
+        for rank, (row, maker_metric, contribution, yoy) in enumerate(positive_segments[:2], start=1):
+            driver_text = _with_metric(
+                f"产品驱动力{rank}：{row.get('technology')} {row.get('label')}同比{_format_percent(yoy)}，增长贡献{_format_percent(contribution)}",
+                maker_metric,
+            )
+            maker_result["product_line"]["insights"].append(driver_text)
+            maker_result["drivers"]["product"].append(driver_text)
+            product.setdefault("insights", {}).setdefault("technology_size_growth", []).append(driver_text)
+        if negative_segments:
+            row, maker_metric, contribution, yoy = negative_segments[0]
+            drag_text = _with_metric(
+                f"主要拖累：{row.get('technology')} {row.get('label')}同比{_format_percent(yoy)}，增长贡献{_format_percent(contribution)}",
+                maker_metric,
+            )
+            maker_result["product_line"]["insights"].append(drag_text)
+            maker_result["drivers"]["product"].append(drag_text)
+            product.setdefault("insights", {}).setdefault("technology_size_growth", []).append(drag_text)
+
+        if maker != "BOE" and "BOE" in ((result.get("maker_sections") or {})):
+            comparisons = []
+            for row in size_rows:
+                maker_metric = ((row.get("makers") or {}).get(maker) or {})
+                boe_metric = ((row.get("makers") or {}).get("BOE") or {})
+                maker_value = (maker_metric.get("values") or {}).get("2025")
+                boe_value = (boe_metric.get("values") or {}).get("2025")
+                if maker_value is None or boe_value in {None, 0}:
+                    continue
+                comparisons.append((float(maker_value) / float(boe_value), row, maker_metric, boe_metric))
+            if comparisons:
+                strongest = max(comparisons, key=lambda item: item[0])
+                ratio, row, maker_metric, boe_metric = strongest
+                relation = "领先" if ratio >= 1 else "差距最小"
+                comparison_text = _with_metrics(
+                    f"相较BOE，{maker}在{row.get('technology')} {row.get('label')}的相对表现最强，出货为BOE的{ratio:.1f}倍（{relation}）",
+                    maker_metric, boe_metric,
+                )
+                maker_result["product_line"]["insights"].append(comparison_text)
+                maker_result["drivers"]["product"].append(comparison_text)
+                product.setdefault("insights", {}).setdefault("technology_size_growth", []).append(comparison_text)
 
         technologies = product.get("technology_history") or {}
         technology_items = []
@@ -486,6 +697,7 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
         )
         for technology, value, yoy in technology_items[:2]:
             text = f"{technology}出货{_format_number(value)}K，同比{_format_percent(yoy)}"
+            text = _with_metric(text, technologies.get(technology))
             maker_result["product_line"]["insights"].append(text)
             maker_result["drivers"]["product"].append(text)
             product.setdefault("insights", {}).setdefault("technology_history", []).append(text)
@@ -495,9 +707,24 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
         if clients:
             top_client = max(clients, key=lambda item: (item.get("periods") or {}).get("Y25Q1-Q3"))
             text = f"第一大客户{top_client.get('client')}出货{_format_number((top_client.get('periods') or {}).get('Y25Q1-Q3'))}K"
+            text = _with_metric(text, top_client)
             maker_result["customer_region"]["insights"].append(text)
             maker_result["drivers"]["customer"].append(text)
             customer.setdefault("insights", {}).setdefault("top_clients", []).append(text)
+            contribution_clients = [
+                item for item in clients if item.get("growth_contribution_y25_q1_q3") is not None
+            ]
+            if contribution_clients:
+                driver = max(contribution_clients, key=lambda item: item["growth_contribution_y25_q1_q3"])
+                driver_text = (
+                    f"{driver.get('client')}占Y25前三季度出货{_format_percent(driver.get('share_y25_q1_q3'))}，"
+                    f"份额变化{_format_points(driver.get('share_change_points'))}个百分点，"
+                    f"增长贡献{_format_percent(driver.get('growth_contribution_y25_q1_q3'))}"
+                )
+                driver_text = _with_metric(driver_text, driver)
+                maker_result["customer_region"]["insights"].append(driver_text)
+                maker_result["drivers"]["customer"].append(driver_text)
+                customer.setdefault("insights", {}).setdefault("top_clients", []).append(driver_text)
         regions = ((customer.get("regions") or {}).get("rows") or [])
         regions = [
             item for item in regions
@@ -509,6 +736,7 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
                 f"{top_region.get('region')}区域出货{_format_number((top_region.get('q1_q3') or {}).get('Y25Q1-Q3'))}K，"
                 f"同比{_format_percent((top_region.get('q1_q3') or {}).get('yoy_2025_vs_2024'))}"
             )
+            text = _with_metric(text, top_region)
             maker_result["customer_region"]["insights"].append(text)
             maker_result["drivers"]["customer"].append(text)
             customer.setdefault("insights", {}).setdefault("regions", []).append(text)
@@ -521,9 +749,26 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
                 f"{top_application.get('application')}出货{_format_number((top_application.get('periods') or {}).get('Y25Q1-Q3'))}K，"
                 f"同比{_format_percent((top_application.get('yoy_periods') or {}).get('Y25Q1-Q3'))}"
             )
+            text = _with_metric(text, top_application)
             maker_result["application"]["insights"].append(text)
             maker_result["drivers"]["application"].append(text)
             application.setdefault("insights", {}).setdefault("application_history", []).append(text)
+            contribution_apps = [
+                item for item in applications if item.get("growth_contribution_y25_q1_q3") is not None
+            ]
+            if contribution_apps:
+                driver = max(contribution_apps, key=lambda item: item["growth_contribution_y25_q1_q3"])
+                area = driver.get("display_area") or {}
+                driver_text = (
+                    f"{driver.get('application')}占Y25前三季度出货{_format_percent(driver.get('share_y25_q1_q3'))}，"
+                    f"增长贡献{_format_percent(driver.get('growth_contribution_y25_q1_q3'))}"
+                )
+                if area.get("share_y25_q1_q3") is not None:
+                    driver_text += f"，面积占比{_format_percent(area.get('share_y25_q1_q3'))}"
+                driver_text = _with_metric(driver_text, driver)
+                maker_result["application"]["insights"].append(driver_text)
+                maker_result["drivers"]["application"].append(driver_text)
+                application.setdefault("insights", {}).setdefault("application_history", []).append(driver_text)
         key_sizes = ((application.get("key_sizes") or {}).get("rows") or [])
         if key_sizes:
             top_size = max(key_sizes, key=lambda item: item.get("shipment") or 0)
@@ -531,6 +776,7 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
                 f"重点尺寸{_format_number(top_size.get('size'))}寸（{top_size.get('technology')}）"
                 f"出货{_format_number(top_size.get('shipment'))}K"
             )
+            text = _with_metric(text, top_size)
             maker_result["application"]["insights"].append(text)
             maker_result["drivers"]["application"].append(text)
             application.setdefault("insights", {}).setdefault("key_sizes", []).append(text)

@@ -7,7 +7,7 @@ from typing import Any
 
 YEARS = (2022, 2023, 2024, 2025)
 PERIODS = ("Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3")
-EXCLUDED_TECHNOLOGIES = ("oxide",)
+EXCLUDED_MAKER_TECHNOLOGIES = ("oxide",)
 
 
 def calculate_tianma_history_metrics(
@@ -19,6 +19,7 @@ def calculate_tianma_history_metrics(
     baseline = [_normalize(record, "baseline") for record in (baseline_records or [])]
     rows = [row for row in current if row is not None and row["year"] in {2023, 2024, 2025}]
     rows.extend(row for row in baseline if row is not None and row["year"] == 2022)
+    maker_measure_rows = [row for row in rows if not row["excluded_from_maker_metrics"]]
 
     gaps = []
     if not baseline_records:
@@ -27,10 +28,14 @@ def calculate_tianma_history_metrics(
         gaps.append("基准文件Pivot Cache中未找到符合筛选条件的2022数据")
 
     maker_key = _slug(maker)
-    shipment = _measure_metric(rows, maker, "shipment", "thousand_units", f"{maker_key}.front_install.shipment")
-    display_area = _measure_metric(rows, maker, "display_area", "square_meters", f"{maker_key}.front_install.display_area")
-    shipment_share = _share_metric(rows, maker, "shipment", f"{maker_key}.front_install.shipment_share")
-    display_area_share = _share_metric(rows, maker, "display_area", f"{maker_key}.front_install.display_area_share")
+    shipment = _measure_metric(maker_measure_rows, maker, "shipment", "thousand_units", f"{maker_key}.front_install.shipment")
+    display_area = _measure_metric(maker_measure_rows, maker, "display_area", "square_meters", f"{maker_key}.front_install.display_area")
+    shipment_share = _share_metric(
+        maker_measure_rows, rows, maker, "shipment", f"{maker_key}.front_install.shipment_share"
+    )
+    display_area_share = _share_metric(
+        maker_measure_rows, rows, maker, "display_area", f"{maker_key}.front_install.display_area_share"
+    )
     return {
         "engine": "python_deterministic_v1",
         "title": f"{maker}前装出货、面积及市占率",
@@ -43,6 +48,8 @@ def calculate_tianma_history_metrics(
             "source_row_count": len(rows),
             "y22_source": "baseline_workbook",
             "y23_y25_source": "current_workbook",
+            "maker_technology_scope": "exclude Oxide",
+            "share_market_denominator_technology_scope": "all technologies",
         },
         "formulas": {
             "yoy": "current comparable period / previous comparable period - 1",
@@ -77,8 +84,6 @@ def _normalize(record, source_role):
     normalized_application = application.lower().replace("（", "(").replace("）", ")")
     if "automobile monitor" in normalized_application and "others" in normalized_application:
         return None
-    if _is_excluded_technology(technology):
-        return None
     return {
         "year": year,
         "quarter": quarter,
@@ -88,6 +93,7 @@ def _normalize(record, source_role):
         "source_role": source_role,
         "shipment_ref": _source_ref(shipment_fact),
         "display_area_ref": _source_ref(area_fact),
+        "excluded_from_maker_metrics": _is_excluded_maker_technology(technology),
     }
 
 
@@ -99,7 +105,17 @@ def _measure_metric(rows, maker, measure, unit, metric_id):
         "metric_id": metric_id,
         "unit": unit,
         "periods": {period: _bucket_value(buckets[period]) for period in PERIODS},
+        "comparison_periods": {
+            "Y24Q1-Q3": _bucket_value(prior_q1_q3),
+            "Y25Q1-Q3": _bucket_value(buckets["Y25Q1-Q3"]),
+        },
         "standard_y25f_yoy": _standard_yoy(buckets["Y25F"], buckets["Y24"]),
+        "yoy_2025_q1_q3_vs_2024_q1_q3": _standard_yoy(
+            buckets["Y25Q1-Q3"], prior_q1_q3
+        ),
+        "forecast_completion_y25_q1_q3": _completion(
+            buckets["Y25Q1-Q3"], buckets["Y25F"]
+        ),
         "yoy_periods": {
             "Y22": None,
             "Y23": _standard_yoy(buckets["Y23"], buckets["Y22"]),
@@ -108,12 +124,18 @@ def _measure_metric(rows, maker, measure, unit, metric_id):
             "Y25Q1-Q3": _standard_yoy(buckets["Y25Q1-Q3"], prior_q1_q3),
         },
         "evidence": {period: _bucket_evidence(buckets[period]) for period in PERIODS},
+        "comparison_evidence": {
+            "Y24Q1-Q3": _bucket_evidence(prior_q1_q3),
+            "Y25Q1-Q3": _bucket_evidence(buckets["Y25Q1-Q3"]),
+        },
     }
 
 
-def _share_metric(rows, maker, measure, metric_id):
-    maker_buckets = _period_buckets([row for row in rows if _maker_matches(row["maker"], maker)], measure)
-    market_buckets = _period_buckets(rows, measure)
+def _share_metric(maker_measure_rows, market_rows, maker, measure, metric_id):
+    maker_buckets = _period_buckets(
+        [row for row in maker_measure_rows if _maker_matches(row["maker"], maker)], measure
+    )
+    market_buckets = _period_buckets(market_rows, measure)
     return {
         "metric_id": metric_id,
         "unit": "ratio",
@@ -190,6 +212,12 @@ def _standard_yoy(current, previous):
     return _number(current["value"] / previous["value"] - Decimal("1"))
 
 
+def _completion(actual, forecast):
+    if not actual["count"] or not forecast["count"] or forecast["value"] == 0:
+        return None
+    return _number(actual["value"] / forecast["value"])
+
+
 def _fact(record, *names):
     for name in names:
         value = record.get(name)
@@ -234,9 +262,9 @@ def _text(value):
     return "" if value is None else str(value).strip()
 
 
-def _is_excluded_technology(value):
+def _is_excluded_maker_technology(value):
     normalized = _text(value).lower().replace("_", " ").replace("-", " ")
-    return any(name in normalized for name in EXCLUDED_TECHNOLOGIES)
+    return any(name in normalized for name in EXCLUDED_MAKER_TECHNOLOGIES)
 
 
 def _number(value):

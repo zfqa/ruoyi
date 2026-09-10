@@ -42,6 +42,9 @@ import com.ruoyi.common.utils.poi.ExcelUtil;
 import com.ruoyi.business.data.excel.domain.ExcelImport;
 import com.ruoyi.business.data.excel.service.ExcelFileStorage;
 import com.ruoyi.business.data.excel.service.IExcelImportService;
+import com.ruoyi.business.knowledge.domain.KnowledgeIngestTask;
+import com.ruoyi.business.knowledge.service.KnowledgeIngestService;
+import com.ruoyi.business.knowledge.service.LlmRuntimeConfiguration;
 import com.ruoyi.business.report.domain.AiReport;
 import com.ruoyi.business.report.service.IAiReportService;
 
@@ -64,20 +67,20 @@ public class ExcelImportController extends BaseController
     private IAiReportService aiReportService;
 
     @Autowired
+    private KnowledgeIngestService knowledgeIngestService;
+
+    @Autowired
+    private LlmRuntimeConfiguration llmConfiguration;
+
+    @Autowired
     @Qualifier("excelParseTaskExecutor")
     private ThreadPoolTaskExecutor excelParseTaskExecutor;
 
     @Value("${business.excel.parse-timeout-minutes:30}")
     private long parseTimeoutMinutes;
 
-    @Value("${business.excel.llm.api-url:https://ark.cn-beijing.volces.com/api/v3/chat/completions}")
-    private String llmApiUrl;
-
-    @Value("${business.excel.llm.model:doubao-seed-2-1-turbo-260628}")
-    private String llmModel;
-
-    @Value("${business.excel.llm.api-key:}")
-    private String llmApiKey;
+    @Value("${business.knowledge.auto-ingest-reports:true}")
+    private boolean autoIngestReports;
 
     @Value("${business.excel.llm.table-timeout-seconds:30}")
     private int llmTableTimeoutSeconds;
@@ -407,6 +410,21 @@ public class ExcelImportController extends BaseController
             report.setRemark(StringUtils.substring(message, 0, 500));
         }
         aiReportService.updateAiReport(report);
+        if (autoIngestReports && "2".equals(report.getStatus()))
+        {
+            try
+            {
+                String creator = StringUtils.isEmpty(task.getCreateBy()) ? "system" : task.getCreateBy();
+                KnowledgeIngestTask knowledgeTask = knowledgeIngestService.submitGeneratedReport(report.getId(), creator);
+                report.setRemark("报告生成成功，知识入库任务已提交（任务ID: " + knowledgeTask.getId() + "）");
+            }
+            catch (Exception ex)
+            {
+                String message = ex.getMessage() == null ? "未知错误" : ex.getMessage();
+                report.setRemark(StringUtils.substring("报告生成成功；知识入库提交失败：" + message, 0, 500));
+            }
+            aiReportService.updateAiReport(report);
+        }
         return report;
     }
 
@@ -453,12 +471,14 @@ public class ExcelImportController extends BaseController
             command.add("--no-llm");
         }
         ProcessBuilder pb = new ProcessBuilder(command);
-        pb.environment().put("ARK_API_URL", llmApiUrl);
-        pb.environment().put("ARK_MODEL", llmModel);
+        pb.environment().put("PYTHONUTF8", "1");
+        pb.environment().put("PYTHONIOENCODING", "utf-8");
+        pb.environment().put("ARK_API_URL", llmConfiguration.getApiUrl());
+        pb.environment().put("ARK_MODEL", llmConfiguration.getModel());
         applyLlmLimits(pb, llmReportTimeoutSeconds);
-        if (StringUtils.isNotEmpty(llmApiKey))
+        if (StringUtils.isNotEmpty(llmConfiguration.getApiKey()))
         {
-            pb.environment().put("ARK_API_KEY", llmApiKey);
+            pb.environment().put("ARK_API_KEY", llmConfiguration.getApiKey());
         }
         pb.redirectErrorStream(true);
         Path outputFile = Files.createTempFile("excel-report-output-", ".json");
@@ -545,14 +565,16 @@ public class ExcelImportController extends BaseController
             command.add(String.valueOf(llmMaxTableCalls));
         }
         ProcessBuilder pb = new ProcessBuilder(command);
+        pb.environment().put("PYTHONUTF8", "1");
+        pb.environment().put("PYTHONIOENCODING", "utf-8");
         if (options.useLlm)
         {
-            pb.environment().put("ARK_API_URL", llmApiUrl);
-            pb.environment().put("ARK_MODEL", llmModel);
+            pb.environment().put("ARK_API_URL", llmConfiguration.getApiUrl());
+            pb.environment().put("ARK_MODEL", llmConfiguration.getModel());
             applyLlmLimits(pb, llmTableTimeoutSeconds);
-            if (StringUtils.isNotEmpty(llmApiKey))
+            if (StringUtils.isNotEmpty(llmConfiguration.getApiKey()))
             {
-                pb.environment().put("ARK_API_KEY", llmApiKey);
+                pb.environment().put("ARK_API_KEY", llmConfiguration.getApiKey());
             }
         }
         pb.directory(new java.io.File("."));
@@ -605,9 +627,11 @@ public class ExcelImportController extends BaseController
         {
             candidates.add(envPython);
         }
-        candidates.add("python");
-        candidates.add("py");
+        // Windows 的 py.exe 可能只有启动器而没有关联解释器；优先使用项目已验证的完整路径，
+        // 避免 py 启动后以“No installed Python found”退出并中断后续候选尝试。
         candidates.add("C:\\Users\\10906\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe");
+        candidates.add("C:\\Users\\10906\\AppData\\Local\\Programs\\Python\\Python313\\python.exe");
+        candidates.add("python");
         return new ArrayList<>(candidates);
     }
 
@@ -771,8 +795,12 @@ public class ExcelImportController extends BaseController
                 tableCount += tables.size();
                 for (int j = 0; j < tables.size(); j++)
                 {
-                    JSONArray records = tables.getJSONObject(j).getJSONArray("records");
-                    recordCount += records == null ? 0 : records.size();
+                    JSONObject table = tables.getJSONObject(j);
+                    JSONObject data = table.getJSONObject("data");
+                    Integer totalRecords = data == null ? null : data.getInteger("record_count");
+                    JSONArray records = table.getJSONArray("records");
+                    recordCount += totalRecords == null
+                        ? (records == null ? 0 : records.size()) : totalRecords;
                 }
             }
         }
@@ -811,7 +839,10 @@ public class ExcelImportController extends BaseController
                         previewTable.put("source", table.getJSONObject("source"));
                         previewTable.put("fields", table.getJSONArray("fields"));
                         JSONArray records = table.getJSONArray("records");
-                        previewTable.put("record_count", records == null ? 0 : records.size());
+                        JSONObject data = table.getJSONObject("data");
+                        Integer totalRecords = data == null ? null : data.getInteger("record_count");
+                        previewTable.put("record_count", totalRecords == null
+                            ? (records == null ? 0 : records.size()) : totalRecords);
                         previewTable.put("records", firstItems(records, 3));
                         previewTables.add(previewTable);
                     }

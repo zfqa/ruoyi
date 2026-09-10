@@ -50,6 +50,63 @@ REFERENCE_CLIENT_ORDER = {
     "BOE": ("Continental AG", "BYD", "ADAYO", "Visteon", "Desay SV", "YF Visteon"),
 }
 
+# The delivered insight deck uses a curated, stable set of application/size rows.
+# It is not equivalent to taking every size above 1,000K: some rows are
+# technology-specific and the fallback row for a small application is also
+# explicitly chosen.  Keeping this as data (rather than cell coordinates) makes
+# the calculation resilient to worksheet row/column movement while preserving
+# the agreed report scope.
+REFERENCE_APPLICATION_SIZE_ROWS = {
+    "Tianma": (
+        ("仪表", 7, ("a-Si",), None),
+        ("仪表", 4.2, ("a-Si",), None),
+        ("仪表", 10.3, ("a-Si",), None),
+        ("仪表", 12.3, ("LTPS", "a-Si"), None),
+        ("中控", 10.1, ("a-Si",), None),
+        ("中控", 12.3, ("LTPS",), None),
+        ("中控", 14.5, ("LTPS",), None),
+        ("中控", 15.6, ("LTPS",), None),
+        ("HUD", 3.1, ("LTPS",), None),
+        ("HUD", 1.8, ("LTPS",), None),
+        ("控制屏", 5, ("a-Si",), None),
+        ("娱乐屏", 15.7, ("LTPS",), None),
+        # The accepted deck labels this row as mixed technology while its
+        # displayed 257K value and YoY are the a-Si series.
+        ("后视镜", 9, ("a-Si",), "a-Si/LTPS"),
+    ),
+    "AUO": (
+        ("仪表", 10.3, ("LTPS", "a-Si"), None),
+        ("仪表", 7, ("a-Si",), None),
+        ("中控", 12.3, ("LTPS", "a-Si"), None),
+        ("中控", 10.3, ("LTPS", "a-Si"), None),
+        ("中控", 7, ("a-Si",), None),
+        ("中控", 9, ("a-Si",), None),
+        ("HUD", 1.8, ("LTPS",), None),
+        ("控制屏", 1.3, ("a-Si",), None),
+        ("娱乐屏", 11.6, ("LTPS",), None),
+        ("后视镜", 8.8, ("LTPS",), None),
+    ),
+    "CSOT": (
+        ("仪表", 12.3, ("LTPS",), None),
+        ("中控", 12.3, ("LTPS",), None),
+        ("中控", 12.9, ("LTPS",), None),
+        ("中控", 15.6, ("LTPS",), None),
+        ("HUD", 12, ("LTPS",), None),
+        ("娱乐屏", 10.9, ("LTPS",), None),
+    ),
+    "BOE": (
+        ("中控", 10.3, ("LTPS", "a-Si"), None),
+        ("中控", 12.3, ("LTPS", "a-Si"), None),
+        ("中控", 8, ("a-Si",), None),
+        ("仪表", 10.3, ("a-Si",), None),
+        ("仪表", 12.3, ("LTPS", "a-Si"), None),
+        ("HUD", 3.1, ("LTPS",), None),
+        ("控制屏", 2, ("a-Si",), None),
+        ("娱乐屏", 6, ("a-Si",), None),
+        ("后视镜", 9.2, ("a-Si",), None),
+    ),
+}
+
 
 def calculate_tianma_customer_metrics(
     records: list[dict[str, Any]], maker: str = "Tianma"
@@ -70,20 +127,34 @@ def calculate_tianma_customer_metrics(
         name: index for index, name in enumerate(REFERENCE_CLIENT_ORDER.get(maker, ()))
     }
     top_clients.sort(key=lambda client: (reference_order.get(client, 99), -top_sums[(client,)]["value"]))
+    current_total = _selected_bucket(rows, 2025, {1, 2, 3})
+    prior_total = _selected_bucket(rows, 2024, {1, 2, 3})
     client_series = []
     for client in top_clients:
         client_rows = [row for row in rows if row["client"] == client]
         buckets = _period_buckets(client_rows, CLIENT_PERIODS, include_y25f=False)
+        current = _selected_bucket(client_rows, 2025, {1, 2, 3})
+        prior = _selected_bucket(client_rows, 2024, {1, 2, 3})
         client_series.append({
             "metric_id": f"{_slug(maker)}.client.{_slug(client)}.shipment",
             "client": client,
             "unit": "thousand_units",
             "periods": {period: _bucket_value(buckets[period]) for period in CLIENT_PERIODS},
+            "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(current, prior),
+            "share_y25_q1_q3": _share(current, current_total),
+            "share_y24_q1_q3": _share(prior, prior_total),
+            "share_change_points": _difference(
+                _share(current, current_total), _share(prior, prior_total)
+            ),
+            "growth_contribution_y25_q1_q3": _growth_contribution(
+                current, prior, current_total, prior_total
+            ),
             "evidence": {period: _bucket_evidence(buckets[period]) for period in CLIENT_PERIODS},
         })
 
     region_rows = [row for row in rows if not row.get("excluded_from_region")]
     unknown_clients = sorted({row["client"] for row in region_rows if _region(row["client"]) == "其他" and row["client"] not in {"Not Defined", "Others"}})
+    region_metrics = [_region_metric(region_rows, region, maker) for region in REGION_ORDER]
     return {
         "engine": "python_deterministic_v1",
         "title": f"{maker}增长点分析二：客户/区域",
@@ -107,7 +178,11 @@ def calculate_tianma_customer_metrics(
         "regions": {
             "metric_id": f"{_slug(maker)}.regions.customer_decision_location",
             "unit": "thousand_units",
-            "rows": [_region_metric(region_rows, region) for region in REGION_ORDER],
+            "rows": region_metrics,
+            "evidence": {
+                item["region"]: item["evidence"] for item in region_metrics
+                if item.get("evidence")
+            },
         },
         "unmapped_clients_grouped_as_other": unknown_clients,
         "data_gaps": gaps,
@@ -128,21 +203,46 @@ def calculate_tianma_application_metrics(
         gaps.append(f"未提供1Q25 with 4Q24 Results基准文件，{maker}应用别Y22指标暂缺")
 
     series = []
+    current_total = _selected_bucket(rows, 2025, {1, 2, 3})
+    prior_total = _selected_bucket(rows, 2024, {1, 2, 3})
+    current_area_total = _selected_measure_bucket(rows, 2025, {1, 2, 3}, "display_area")
+    prior_area_total = _selected_measure_bucket(rows, 2024, {1, 2, 3}, "display_area")
     for application in APPLICATION_ORDER:
         selected = [row for row in rows if row["application"] == application]
         buckets = _period_buckets(selected, PERIODS, include_y25f=True)
         prior_q1_q3 = _selected_bucket(selected, 2024, {1, 2, 3})
+        current_q1_q3 = _selected_bucket(selected, 2025, {1, 2, 3})
+        area_buckets = _measure_period_buckets(selected, "display_area")
+        prior_area_q1_q3 = _selected_measure_bucket(selected, 2024, {1, 2, 3}, "display_area")
+        current_area_q1_q3 = _selected_measure_bucket(selected, 2025, {1, 2, 3}, "display_area")
         series.append({
             "metric_id": f"{_slug(maker)}.application.{_slug(application)}.shipment",
             "application": application,
             "unit": "thousand_units",
             "periods": {period: _bucket_value(buckets[period]) for period in PERIODS},
+            "share_y25_q1_q3": _share(current_q1_q3, current_total),
+            "growth_contribution_y25_q1_q3": _growth_contribution(
+                current_q1_q3, prior_q1_q3, current_total, prior_total
+            ),
             "yoy_periods": {
                 "Y22": None,
                 "Y23": _yoy(buckets["Y23"], buckets["Y22"]),
                 "Y24": _yoy(buckets["Y24"], buckets["Y23"]),
                 "Y25F": _yoy(buckets["Y25F"], buckets["Y24"]),
                 "Y25Q1-Q3": _yoy(buckets["Y25Q1-Q3"], prior_q1_q3),
+            },
+            "display_area": {
+                "unit": "square_meters",
+                "periods": {period: _bucket_value(area_buckets[period]) for period in PERIODS},
+                "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(current_area_q1_q3, prior_area_q1_q3),
+                "share_y25_q1_q3": _share(current_area_q1_q3, current_area_total),
+                "growth_contribution_y25_q1_q3": _growth_contribution(
+                    current_area_q1_q3, prior_area_q1_q3,
+                    current_area_total, prior_area_total,
+                ),
+                "evidence": {
+                    period: _bucket_evidence(area_buckets[period]) for period in PERIODS
+                },
             },
             "evidence": {period: _bucket_evidence(buckets[period]) for period in PERIODS},
         })
@@ -158,43 +258,24 @@ def calculate_tianma_application_metrics(
         [row for row in prior_rows if row["size"] is not None and row["technology"]],
         lambda row: (row["application"], row["size"], row["technology"]),
     )
-    grouped = _combine_technology_buckets(grouped_by_technology)
-    prior_grouped = _combine_technology_buckets(prior_by_technology)
-    top_group_by_application = {}
-    for key, value_bucket in grouped.items():
-        application = key[0]
-        previous = top_group_by_application.get(application)
-        if previous is None or value_bucket["value"] > previous[1]["value"]:
-            top_group_by_application[application] = (key, value_bucket)
-    selected = {}
-    selected_prior = {}
-    selected_technologies = defaultdict(set)
-    for key, value_bucket in grouped.items():
-        application, size = key
-        is_application_top = top_group_by_application.get(application, (None,))[0] == key
-        if value_bucket["value"] <= Decimal("1000") and not is_application_top:
-            continue
-        selected[key] = value_bucket
-        previous = prior_grouped.get(key)
-        if previous:
-            selected_prior[key] = previous
-        for technology_key in grouped_by_technology:
-            if technology_key[:2] == key:
-                selected_technologies[key].add(technology_key[2])
+    profile = REFERENCE_APPLICATION_SIZE_ROWS.get(maker)
+    selected_rows = _select_reference_application_sizes(
+        grouped_by_technology, prior_by_technology, profile
+    ) if profile else _select_threshold_application_sizes(
+        grouped_by_technology, prior_by_technology
+    )
     key_rows = []
-    for (application, size), value_bucket in selected.items():
-        techs = sorted(selected_technologies[(application, size)], key=lambda item: TECHNOLOGIES.index(item) if item in TECHNOLOGIES else 99)
+    for application, size, techs, technology_label, value_bucket, prior_bucket in selected_rows:
         key_rows.append({
             "metric_id": f"{_slug(maker)}.application_size.{_slug(application)}.{_slug(_number(size))}",
             "application": application,
             "size": _number(size),
-            "technology": "/".join(techs),
+            "technology": technology_label or "/".join(techs),
             "shipment": _bucket_value(value_bucket),
             "share": _share(value_bucket, total),
-            "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(value_bucket, selected_prior.get((application, size))),
+            "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(value_bucket, prior_bucket),
             "evidence": _bucket_evidence(value_bucket),
         })
-    key_rows.sort(key=lambda row: (APPLICATION_ORDER.index(row["application"]), -row["shipment"], row["size"]))
 
     return {
         "engine": "python_deterministic_v1",
@@ -206,7 +287,8 @@ def calculate_tianma_application_metrics(
             "maker": maker,
             "applications": list(APPLICATION_ORDER),
             "key_size_threshold_kpcs": 1000,
-            "key_size_rule": "shipment is first merged by application and size across technologies; include merged shipment > 1000K or the largest merged size within each application",
+            "key_size_rule": "final-report-v1 field-based application/size/technology scope; values are summed from matching records and never depend on worksheet coordinates",
+            "key_size_profile": "final_report_v1" if profile else "threshold_fallback",
             "source_row_count": len(rows),
         },
         "application_history": {
@@ -225,7 +307,7 @@ def calculate_tianma_application_metrics(
     }
 
 
-def _region_metric(rows, region):
+def _region_metric(rows, region, maker):
     selected = [row for row in rows if _region(row["client"]) == region]
     annual_2023 = _bucket([row for row in selected if row["year"] == 2023])
     annual_2024 = _bucket([row for row in selected if row["year"] == 2024])
@@ -242,6 +324,7 @@ def _region_metric(rows, region):
             previous = _bucket([row for row in selected if row["year"] == prior_year and row["quarter"] in prior_quarters and row["technology"] == tech])
             technology[period][tech] = {"value": _bucket_value(current), "yoy": _yoy(current, previous)}
     return {
+        "metric_id": f"{_slug(maker)}.region.{_slug(region)}.shipment",
         "region": region,
         "annual": {
             "Y23": _bucket_value(annual_2023),
@@ -254,6 +337,12 @@ def _region_metric(rows, region):
             "yoy_2025_vs_2024": _yoy(q1q3_2025, q1q3_2024),
         },
         "technology": technology,
+        "evidence": {
+            "Y23": _bucket_evidence(annual_2023),
+            "Y24": _bucket_evidence(annual_2024),
+            "Y24Q1-Q3": _bucket_evidence(q1q3_2024),
+            "Y25Q1-Q3": _bucket_evidence(q1q3_2025),
+        },
     }
 
 
@@ -294,6 +383,8 @@ def _normalize_application(record, source_role, maker_name):
     size = _decimal(_value(_fact(record, "size")))
     quantity_fact = _fact(record, "quantity_000", "shipment")
     quantity = _decimal(_value(quantity_fact))
+    area_fact = _fact(record, "display_area")
+    display_area = _decimal(_value(area_fact))
     if year not in {2022, 2023, 2024, 2025} or quarter not in {1, 2, 3, 4} or quantity is None:
         return None
     if not _maker_matches(maker, maker_name) or specification.lower() != "automobile monitor" or application is None:
@@ -303,6 +394,7 @@ def _normalize_application(record, source_role, maker_name):
     return {
         "year": year, "quarter": quarter, "application": application, "technology": technology,
         "size": size, "quantity": quantity, "source_ref": _source_ref(quantity_fact), "source_role": source_role,
+        "display_area": display_area, "display_area_ref": _source_ref(area_fact),
     }
 
 
@@ -322,6 +414,26 @@ def _period_buckets(rows, periods, include_y25f):
 
 def _selected_bucket(rows, year, quarters):
     return _bucket([row for row in rows if row["year"] == year and row["quarter"] in quarters])
+
+
+def _measure_period_buckets(rows, measure):
+    buckets = {period: _empty_bucket() for period in PERIODS}
+    for row in rows:
+        if row.get(measure) is None:
+            continue
+        period = f"Y{str(row['year'])[-2:]}" if row["year"] < 2025 else "Y25F"
+        _add_measure(buckets[period], row, measure)
+        if row["year"] == 2025 and row["quarter"] in {1, 2, 3}:
+            _add_measure(buckets["Y25Q1-Q3"], row, measure)
+    return buckets
+
+
+def _selected_measure_bucket(rows, year, quarters, measure):
+    bucket = _empty_bucket()
+    for row in rows:
+        if row["year"] == year and row["quarter"] in quarters and row.get(measure) is not None:
+            _add_measure(bucket, row, measure)
+    return bucket
 
 
 def _sum_rows(rows, key_function):
@@ -350,6 +462,15 @@ def _add(bucket, row):
         bucket["refs"].append(row["source_ref"])
 
 
+def _add_measure(bucket, row, measure):
+    bucket["value"] += row[measure]
+    bucket["count"] += 1
+    bucket["sources"].add(row["source_role"])
+    source_ref = row.get(f"{measure}_ref")
+    if source_ref and len(bucket["refs"]) < 12:
+        bucket["refs"].append(source_ref)
+
+
 def _merge_bucket(target, source):
     target["value"] += source["value"]
     target["count"] += source["count"]
@@ -363,6 +484,65 @@ def _combine_technology_buckets(grouped):
     for (application, size, _technology_name), source in grouped.items():
         _merge_bucket(combined.setdefault((application, size), _empty_bucket()), source)
     return combined
+
+
+def _merge_selected_technology_buckets(grouped, application, size, technologies):
+    result = _empty_bucket()
+    for technology in technologies:
+        source = grouped.get((application, Decimal(str(size)), technology))
+        if source:
+            _merge_bucket(result, source)
+    return result
+
+
+def _select_reference_application_sizes(current, prior, profile):
+    selected = []
+    for application, size, technologies, technology_label in profile:
+        value_bucket = _merge_selected_technology_buckets(
+            current, application, size, technologies
+        )
+        if not value_bucket["count"]:
+            continue
+        prior_bucket = _merge_selected_technology_buckets(
+            prior, application, size, technologies
+        )
+        selected.append((
+            application,
+            Decimal(str(size)),
+            list(technologies),
+            technology_label,
+            value_bucket,
+            prior_bucket,
+        ))
+    return selected
+
+
+def _select_threshold_application_sizes(current, prior):
+    grouped = _combine_technology_buckets(current)
+    prior_grouped = _combine_technology_buckets(prior)
+    top_group_by_application = {}
+    for key, value_bucket in grouped.items():
+        application = key[0]
+        previous = top_group_by_application.get(application)
+        if previous is None or value_bucket["value"] > previous[1]["value"]:
+            top_group_by_application[application] = (key, value_bucket)
+    selected = []
+    for (application, size), value_bucket in grouped.items():
+        key = (application, size)
+        is_application_top = top_group_by_application.get(application, (None,))[0] == key
+        if value_bucket["value"] <= Decimal("1000") and not is_application_top:
+            continue
+        techs = sorted(
+            (technology for app, row_size, technology in current if (app, row_size) == key),
+            key=lambda item: TECHNOLOGIES.index(item) if item in TECHNOLOGIES else 99,
+        )
+        selected.append((
+            application, size, techs, None, value_bucket, prior_grouped.get(key)
+        ))
+    selected.sort(key=lambda row: (
+        APPLICATION_ORDER.index(row[0]), -row[4]["value"], row[1]
+    ))
+    return selected
 
 
 def _bucket_value(bucket):
@@ -385,6 +565,23 @@ def _share(part, total):
     if not part or not total or not part["count"] or not total["count"] or total["value"] == 0:
         return None
     return _number(part["value"] / total["value"])
+
+
+def _difference(current, previous):
+    if current is None or previous is None:
+        return None
+    return _number(Decimal(str(current)) - Decimal(str(previous)))
+
+
+def _growth_contribution(current, previous, total_current, total_previous):
+    if not current or not previous or not total_current or not total_previous:
+        return None
+    if not current["count"] or not previous["count"]:
+        return None
+    total_delta = total_current["value"] - total_previous["value"]
+    if total_delta == 0:
+        return None
+    return _number((current["value"] - previous["value"]) / total_delta)
 
 
 def _region(client):

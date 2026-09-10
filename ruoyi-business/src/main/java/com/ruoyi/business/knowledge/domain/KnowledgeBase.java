@@ -28,7 +28,7 @@ public class KnowledgeBase extends BaseEntity
     @Excel(name = "资料名称")
     private String sourceName;
 
-    /** 来源类型：PDF/NEWS/REPORT */
+    /** 来源类型：PDF/NEWS/POLICY/REPORT */
     @Excel(name = "来源类型")
     private String sourceType;
 

@@ -385,6 +385,10 @@ def _summary_row(
             "metric_id": f"maker.{_slug(maker_name)}.summary.{row_key}",
             "values": {str(year): _metric_value(values[year]) for year in SUMMARY_YEARS},
             "yoy_2025_vs_2024": _ratio(values[2025], values[2024]),
+            "growth_contribution_2025_vs_2024": _growth_contribution(
+                values[2025], values[2024],
+                internal_denominators[2025], internal_denominators[2024],
+            ),
             "internal_share": {
                 str(year): _share(values[year], internal_denominators[year]) for year in SUMMARY_YEARS
             },
@@ -479,6 +483,15 @@ def _ratio(current, previous):
     if not current or not previous or previous["value"] == 0:
         return None
     return _number(current["value"] / previous["value"] - Decimal("1"))
+
+
+def _growth_contribution(current, previous, total_current, total_previous):
+    if not current or not previous or not total_current or not total_previous:
+        return None
+    total_delta = total_current["value"] - total_previous["value"]
+    if total_delta == 0:
+        return None
+    return _number((current["value"] - previous["value"]) / total_delta)
 
 
 def _share(part, total):

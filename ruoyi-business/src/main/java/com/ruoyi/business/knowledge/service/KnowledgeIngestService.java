@@ -8,15 +8,17 @@ import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.ruoyi.business.knowledge.domain.KnowledgeBase;
 import com.ruoyi.business.knowledge.domain.KnowledgeChunk;
@@ -29,6 +31,7 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
@@ -47,6 +50,10 @@ public class KnowledgeIngestService
     private final ThreadPoolTaskExecutor executor;
     private final Set<String> allowedNewsDomains;
     private final HttpClient httpClient;
+    private boolean newsIngestEnabled;
+    private KnowledgeGraphService graphService;
+    private final KnowledgeMetricQueryRouter metricQueryRouter = new KnowledgeMetricQueryRouter();
+    private KnowledgeReportProjectionService reportProjectionService;
 
     public KnowledgeIngestService(KnowledgeBaseMapper mapper, KnowledgeFileStorage storage,
         IAiReportService reportService, @Qualifier("knowledgeTaskExecutor") ThreadPoolTaskExecutor executor,
@@ -60,6 +67,24 @@ public class KnowledgeIngestService
             .map(String::trim).map(s -> s.toLowerCase(Locale.ROOT)).filter(s -> !s.isEmpty()).collect(Collectors.toSet());
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER).build();
+    }
+
+    @Value("${business.knowledge.news-ingest-enabled:false}")
+    public void setNewsIngestEnabled(boolean newsIngestEnabled)
+    {
+        this.newsIngestEnabled = newsIngestEnabled;
+    }
+
+    @Autowired
+    public void setGraphService(KnowledgeGraphService graphService)
+    {
+        this.graphService = graphService;
+    }
+
+    @Autowired
+    public void setReportProjectionService(KnowledgeReportProjectionService reportProjectionService)
+    {
+        this.reportProjectionService = reportProjectionService;
     }
 
     public KnowledgeIngestTask submitPdf(Long sourceId, String versionNo, MultipartFile file, String username) throws IOException
@@ -80,23 +105,124 @@ public class KnowledgeIngestService
 
     public KnowledgeIngestTask submitNews(Long sourceId, String versionNo, String url, String title, String username) throws Exception
     {
+        return submitNews(sourceId, versionNo, url, title, "", username);
+    }
+
+    public KnowledgeIngestTask submitNews(Long sourceId, String versionNo, String url, String title,
+        String content, String username) throws Exception
+    {
+        if (!newsIngestEnabled)
+            throw new IllegalStateException("新闻抓取接口已预留，当前POC未启用");
         KnowledgeBase source = requireSource(sourceId, "NEWS");
-        URI uri = validateNewsUri(url);
+        URI uri = validateExternalUri(url);
         String actualTitle = title == null || title.isBlank() ? source.getSourceName() : title.trim();
+        if (content != null && !content.isBlank())
+        {
+            String normalized = normalizeText(content);
+            if (normalized.length() < 20) throw new IllegalArgumentException("新闻正文至少20个字符");
+            String hash = storage.sha256(normalized);
+            KnowledgeVersion version = createVersion(source, versionNo, actualTitle, "", uri.toString(), hash, username);
+            return submit(version, username, () -> processNewsText(source, version, actualTitle, normalized));
+        }
+        validateNewsUri(uri);
         String provisionalHash = storage.sha256("PENDING:" + uri + ":" + System.nanoTime());
         KnowledgeVersion version = createVersion(source, versionNo, actualTitle, "", uri.toString(), provisionalHash, username);
         return submit(version, username, () -> processNews(source, version, actualTitle, uri));
+    }
+
+    /** 导入爬虫输出的新闻JSON批次；每条新闻保留独立标题、时间、站点和原文URL。 */
+    public KnowledgeIngestTask submitNewsJson(Long sourceId, String versionNo, MultipartFile file,
+        String username) throws IOException
+    {
+        if (!newsIngestEnabled)
+            throw new IllegalStateException("新闻入库接口已预留，当前POC未启用");
+        KnowledgeBase source = requireSource(sourceId, "NEWS");
+        String originalName = file.getOriginalFilename() == null ? "news.json"
+            : Path.of(file.getOriginalFilename()).getFileName().toString();
+        if (!originalName.toLowerCase(Locale.ROOT).endsWith(".json"))
+            throw new IllegalArgumentException("批量新闻仅支持JSON文件");
+        if (file.isEmpty()) throw new IllegalArgumentException("新闻JSON文件为空");
+        String raw = new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        List<NewsArticle> articles = parseNewsArticles(raw);
+        String hash = storage.sha256(raw);
+        KnowledgeVersion version = createVersion(source, versionNo, originalName, "", "", hash, username);
+        return submit(version, username, () -> processNewsBatch(source, version, raw, articles));
+    }
+
+    /** 入库已取得的政策原文；POC不主动抓取政府网站，保留发布机关、日期、级别和原文URL。 */
+    public KnowledgeIngestTask submitPolicy(Long sourceId, String versionNo, String url, String title,
+        String content, String issuedBy, String publishedAt, String policyLevel, String username) throws Exception
+    {
+        KnowledgeBase source = requireSource(sourceId, "POLICY");
+        URI uri = validateExternalUri(url);
+        String actualTitle = title == null || title.isBlank() ? source.getSourceName() : title.trim();
+        String normalized = normalizeText(content);
+        if (normalized.length() < 20) throw new IllegalArgumentException("政策正文至少20个字符");
+        String metadata = "政策名称：" + actualTitle
+            + (clean(issuedBy).isBlank() ? "" : "\n发布机关：" + clean(issuedBy))
+            + (clean(publishedAt).isBlank() ? "" : "\n发布时间：" + clean(publishedAt))
+            + (clean(policyLevel).isBlank() ? "" : "\n政策级别：" + clean(policyLevel))
+            + "\n原文URL：" + uri + "\n政策正文：" + normalized;
+        String hash = storage.sha256(metadata);
+        KnowledgeVersion version = createVersion(source, versionNo, actualTitle, "", uri.toString(), hash, username);
+        version.setPublishedTime(parsePublishedTime(publishedAt));
+        mapper.updateVersion(version);
+        JSONObject evidence = new JSONObject();
+        evidence.put("kind", "POLICY"); evidence.put("title", actualTitle);
+        evidence.put("issued_by", clean(issuedBy)); evidence.put("published_at", clean(publishedAt));
+        evidence.put("policy_level", clean(policyLevel)); evidence.put("original_url", uri.toString());
+        return submit(version, username, () -> processPolicy(source, version, actualTitle, metadata,
+            evidence.toJSONString()));
     }
 
     public KnowledgeIngestTask submitReport(Long sourceId, String versionNo, Long reportId, String username)
     {
         KnowledgeBase source = requireSource(sourceId, "REPORT");
         AiReport report = reportService.selectAiReportById(reportId);
-        if (report == null || report.getReportContent() == null || report.getReportContent().isBlank())
-            throw new IllegalArgumentException("结构化报告不存在或内容为空");
+        return submitReport(source, versionNo, report, username, false);
+    }
+
+    /** 报告生成成功后自动建立独立知识源，避免不同导入任务的当前版本互相覆盖。 */
+    public KnowledgeIngestTask submitGeneratedReport(Long reportId, String username)
+    {
+        AiReport report = reportService.selectAiReportById(reportId);
+        requireCompletedReport(report);
+        String sourceCode = "AUTO-REPORT-" + (report.getImportTaskId() == null ? "ID-" + report.getId()
+            : "TASK-" + report.getImportTaskId());
+        KnowledgeBase source = mapper.selectKnowledgeBaseBySourceCode(sourceCode);
+        if (source == null)
+        {
+            source = new KnowledgeBase();
+            source.setSourceCode(sourceCode); source.setSourceName(report.getTaskName()); source.setSourceType("REPORT");
+            source.setConfidentiality("INTERNAL"); source.setAllowedPurpose("知识问答、报告分析及来源追溯");
+            source.setAllowedRoleIds(""); source.setEnabled("1"); source.setStatus("0"); source.setCreateBy(username);
+            mapper.insertKnowledgeBase(source);
+        }
+        return submitReport(source, "report-" + report.getId(), report, username, true);
+    }
+
+    private KnowledgeIngestTask submitReport(KnowledgeBase source, String versionNo, AiReport report,
+        String username, boolean idempotent)
+    {
+        requireCompletedReport(report);
         String hash = storage.sha256(report.getReportContent());
+        KnowledgeVersion existing = mapper.selectVersionByHash(source.getId(), hash);
+        if (existing != null && idempotent)
+        {
+            KnowledgeIngestTask task = mapper.selectIngestTaskByVersionId(existing.getId());
+            if (task != null) return task;
+        }
+        if (existing != null) throw new IllegalArgumentException("该内容已入库，版本：" + existing.getVersionNo());
         KnowledgeVersion version = createVersion(source, versionNo, report.getTaskName(), "", "", hash, username);
         return submit(version, username, () -> processReport(source, version, report));
+    }
+
+    private void requireCompletedReport(AiReport report)
+    {
+        if (report == null || report.getReportContent() == null || report.getReportContent().isBlank())
+            throw new IllegalArgumentException("结构化报告不存在或内容为空");
+        if (report.getStatus() != null && !"2".equals(report.getStatus()))
+            throw new IllegalArgumentException("仅允许入库生成成功的报告");
     }
 
     public KnowledgeIngestTask getTask(Long id) { return mapper.selectIngestTaskById(id); }
@@ -117,6 +243,30 @@ public class KnowledgeIngestService
             chunk.setSourceSnippet(KnowledgeTextProcessor.buildSnippet(chunk.getContent(), actualQuery, entityTerms, 500));
         }
         return chunks;
+    }
+
+    /** 数值型问题优先从结构化报告投影出的metric_id切片中命中确定性指标。 */
+    public List<KnowledgeChunk> searchMetrics(String query, List<Long> roleIds, boolean admin, int limit)
+    {
+        if (!metricQueryRouter.isMetricQuestion(query)) return List.of();
+        List<KnowledgeChunk> candidates = mapper.selectCurrentMetricChunks(
+            roleIds == null ? List.of() : roleIds, admin, metricQueryRouter.candidateTerms(query), 1000);
+        List<KnowledgeChunk> ranked = metricQueryRouter.rank(query, metricQueryRouter.coalesceFragments(candidates),
+            Math.max(1, Math.min(limit, 20)));
+        List<KnowledgeChunk> hydrated = new ArrayList<>();
+        for (KnowledgeChunk selected : ranked)
+        {
+            List<KnowledgeChunk> fragments = mapper.selectMetricFragments(selected.getVersionId(), selected.getMetricId(),
+                selected.getTitlePath());
+            List<KnowledgeChunk> merged = metricQueryRouter.coalesceFragments(fragments);
+            KnowledgeChunk complete = merged.isEmpty() ? selected : merged.get(0);
+            complete.setScore(selected.getScore());
+            hydrated.add(complete);
+        }
+        List<String> entityTerms = KnowledgeTextProcessor.detectEntityTerms(query);
+        for (KnowledgeChunk chunk : hydrated)
+            chunk.setSourceSnippet(KnowledgeTextProcessor.buildSnippet(chunk.getContent(), query, entityTerms, 500));
+        return hydrated;
     }
 
     private KnowledgeIngestTask submit(KnowledgeVersion version, String username, ThrowingRunnable processor)
@@ -164,6 +314,7 @@ public class KnowledgeIngestService
 
     private void processPdf(KnowledgeBase source, KnowledgeVersion version) throws IOException
     {
+        clearGraph(version.getId());
         mapper.deleteChunksByVersionId(version.getId());
         int number = 0;
         try (PDDocument document = Loader.loadPDF(Path.of(version.getStoredPath()).toFile()))
@@ -184,6 +335,7 @@ public class KnowledgeIngestService
 
     private void processText(KnowledgeBase source, KnowledgeVersion version, String title, String text, Long reportId) throws IOException
     {
+        clearGraph(version.getId());
         mapper.deleteChunksByVersionId(version.getId());
         int count = insertTextChunks(source, version, title, text, null, null, version.getSourceUrl(), reportId, null, 0);
         if (count == 0) throw new IOException("没有可入库的正文");
@@ -210,32 +362,117 @@ public class KnowledgeIngestService
         processText(source, version, title, text, null);
     }
 
+    private void processNewsText(KnowledgeBase source, KnowledgeVersion version, String title, String text) throws IOException
+    {
+        Path snapshot = storage.saveNewsSnapshot(text, version.getContentSha256());
+        version.setStoredPath(snapshot.toString()); version.setFetchedTime(LocalDateTime.now()); mapper.updateVersion(version);
+        processText(source, version, title, text, null);
+    }
+
+    private void processPolicy(KnowledgeBase source, KnowledgeVersion version, String title, String text,
+        String evidenceJson) throws IOException
+    {
+        Path snapshot = storage.savePolicySnapshot(text, version.getContentSha256());
+        version.setStoredPath(snapshot.toString()); version.setFetchedTime(LocalDateTime.now()); mapper.updateVersion(version);
+        clearGraph(version.getId()); mapper.deleteChunksByVersionId(version.getId());
+        int count = insertTextChunks(source, version, title, text, null, null, version.getSourceUrl(), null,
+            evidenceJson, "", 0);
+        if (count == 0) throw new IOException("政策没有可入库正文");
+        completeChunks(version, count);
+    }
+
+    private void processNewsBatch(KnowledgeBase source, KnowledgeVersion version, String raw,
+        List<NewsArticle> articles) throws IOException
+    {
+        Path snapshot = storage.saveNewsSnapshot(raw, version.getContentSha256());
+        version.setStoredPath(snapshot.toString()); version.setFetchedTime(LocalDateTime.now()); mapper.updateVersion(version);
+        clearGraph(version.getId()); mapper.deleteChunksByVersionId(version.getId());
+        int count = 0;
+        for (NewsArticle article : articles)
+        {
+            JSONObject evidence = new JSONObject();
+            evidence.put("kind", "NEWS"); evidence.put("news_id", article.id());
+            evidence.put("source_name", article.sourceName()); evidence.put("source_site", article.sourceSite());
+            evidence.put("published_at", article.publishedAt()); evidence.put("crawled_at", article.crawledAt());
+            evidence.put("original_url", article.url()); evidence.put("content_hash", article.contentHash());
+            String text = "标题：" + article.title() + "\n来源：" + article.sourceName()
+                + (article.publishedAt().isBlank() ? "" : "\n发布时间：" + article.publishedAt())
+                + "\n正文：" + article.content();
+            count = insertTextChunks(source, version, article.sourceName() + " / " + article.title(), text,
+                null, null, article.url(), null, evidence.toJSONString(), "", count);
+        }
+        if (count == 0) throw new IOException("新闻JSON没有可入库正文");
+        completeChunks(version, count);
+    }
+
+    private List<NewsArticle> parseNewsArticles(String raw)
+    {
+        Object root;
+        try { root = JSON.parse(raw); }
+        catch (Exception ex) { throw new IllegalArgumentException("新闻JSON格式无效", ex); }
+        com.alibaba.fastjson2.JSONArray items = root instanceof com.alibaba.fastjson2.JSONArray array ? array
+            : root instanceof JSONObject object ? object.getJSONArray("items") : null;
+        if (items == null || items.isEmpty()) throw new IllegalArgumentException("新闻JSON缺少非空items数组");
+        if (items.size() > 1000) throw new IllegalArgumentException("单次最多导入1000条新闻");
+        Map<String, NewsArticle> unique = new LinkedHashMap<>();
+        for (int i = 0; i < items.size(); i++)
+        {
+            JSONObject item = items.getJSONObject(i);
+            if (item == null) throw new IllegalArgumentException("第" + (i + 1) + "条新闻不是JSON对象");
+            String title = clean(item.getString("title")); String content = clean(item.getString("content"));
+            String url = firstNonBlank(item.getString("canonical_url"), item.getString("url"), item.getString("original_url"));
+            if (title.isBlank() || content.length() < 20 || url.isBlank())
+                throw new IllegalArgumentException("第" + (i + 1) + "条新闻缺少标题、有效正文或URL");
+            validateExternalUri(url);
+            String contentHash = firstNonBlank(item.getString("content_hash"), storage.sha256(content));
+            NewsArticle article = new NewsArticle(item.getString("id"),
+                firstNonBlank(item.getString("source_name"), item.getString("source_site"), "未知来源"),
+                clean(item.getString("source_site")), title, content, clean(item.getString("published_at")),
+                clean(item.getString("crawled_at")), url, contentHash);
+            unique.putIfAbsent(contentHash, article);
+        }
+        return new ArrayList<>(unique.values());
+    }
+
+    private String firstNonBlank(String... values)
+    {
+        for (String value : values) if (value != null && !value.isBlank()) return value.trim();
+        return "";
+    }
+
+    private String clean(String value) { return value == null ? "" : value.trim(); }
+
     private void processReport(KnowledgeBase source, KnowledgeVersion version, AiReport report) throws IOException
     {
+        clearGraph(version.getId());
         mapper.deleteChunksByVersionId(version.getId());
         int count = 0;
-        JSONObject root = JSON.parseObject(report.getReportContent());
-        JSONArray evidence = root.getJSONArray("evidence");
-        if (evidence != null)
+        KnowledgeReportProjectionService projection = reportProjectionService == null
+            ? new KnowledgeReportProjectionService() : reportProjectionService;
+        for (KnowledgeReportProjectionService.ReportKnowledge item : projection.project(report))
         {
-            for (int i = 0; i < evidence.size(); i++)
-            {
-                JSONObject item = evidence.getJSONObject(i);
-                String metricId = item.getString("metric_id");
-                Object metric = findMetric(root, metricId);
-                String content = metric == null ? "指标 " + metricId : JSON.toJSONString(metric);
-                count = insertTextChunks(source, version, report.getTaskName() + " / " + metricId, content,
-                    null, null, null, report.getId(), item.toJSONString(), count);
-            }
+            count = insertTextChunks(source, version, report.getTaskName() + " / " + item.title(), item.content(),
+                null, null, null, report.getId(), item.evidenceJson(), item.metricId(), count);
         }
-        count = insertTextChunks(source, version, report.getTaskName(), report.getReportContent(),
-            null, null, null, report.getId(), null, count);
         if (count == 0) throw new IOException("结构化报告没有可入库内容");
         completeChunks(version, count);
     }
 
     private int insertTextChunks(KnowledgeBase source, KnowledgeVersion version, String title, String text,
         Integer pageStart, Integer pageEnd, String url, Long reportId, String evidenceJson, int number)
+    {
+        String metricId = null;
+        if (evidenceJson != null)
+        {
+            JSONObject evidence = JSON.parseObject(evidenceJson);
+            metricId = evidence.getString("metric_id");
+        }
+        return insertTextChunks(source, version, title, text, pageStart, pageEnd, url, reportId,
+            evidenceJson, metricId, number);
+    }
+
+    private int insertTextChunks(KnowledgeBase source, KnowledgeVersion version, String title, String text,
+        Integer pageStart, Integer pageEnd, String url, Long reportId, String evidenceJson, String metricId, int number)
     {
         String normalized = normalizeText(text);
         if (normalized.isBlank()) return number;
@@ -257,10 +494,11 @@ public class KnowledgeIngestService
                 chunk.setPageStart(pageStart); chunk.setPageEnd(pageEnd); chunk.setSourceUrl(url); chunk.setReportId(reportId);
                 if (evidenceJson != null)
                 {
-                    JSONObject e = JSON.parseObject(evidenceJson); chunk.setMetricId(e.getString("metric_id")); chunk.setEvidenceJson(evidenceJson);
+                    chunk.setMetricId(metricId); chunk.setEvidenceJson(evidenceJson);
                 }
                 chunk.setContentSha256(storage.sha256(content)); chunk.setTokenCount(Math.max(1, content.length() / 2));
                 mapper.insertChunk(chunk);
+                if (graphService != null) graphService.indexChunk(source, version, chunk);
             }
             if (end >= normalized.length()) break;
             start = Math.max(start + 1, end - CHUNK_OVERLAP);
@@ -310,16 +548,35 @@ public class KnowledgeIngestService
         return source;
     }
 
-    private URI validateNewsUri(String url)
+    private URI validateExternalUri(String url)
     {
-        if (allowedNewsDomains.isEmpty()) throw new IllegalStateException("尚未配置新闻抓取域名白名单");
+        if (url == null || url.isBlank()) throw new IllegalArgumentException("来源URL不能为空");
         URI uri = URI.create(url);
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
         String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
-        if (!("http".equals(scheme) || "https".equals(scheme)) || host.isEmpty()) throw new IllegalArgumentException("新闻URL无效");
+        if (!("http".equals(scheme) || "https".equals(scheme)) || host.isEmpty()) throw new IllegalArgumentException("来源URL无效");
+        return uri;
+    }
+
+    private LocalDateTime parsePublishedTime(String value)
+    {
+        String clean = clean(value);
+        if (clean.isBlank()) return null;
+        try { return LocalDate.parse(clean.replace('/', '-')).atStartOfDay(); }
+        catch (Exception ignored) { return null; }
+    }
+
+    private void validateNewsUri(URI uri)
+    {
+        if (allowedNewsDomains.isEmpty()) throw new IllegalStateException("未提供新闻正文，且尚未配置新闻抓取域名白名单");
+        String host = uri.getHost().toLowerCase(Locale.ROOT);
         boolean allowed = allowedNewsDomains.stream().anyMatch(domain -> host.equals(domain) || host.endsWith("." + domain));
         if (!allowed) throw new IllegalArgumentException("新闻URL不在允许域名白名单中");
-        return uri;
+    }
+
+    private void clearGraph(Long versionId)
+    {
+        if (graphService != null) graphService.clearVersion(versionId);
     }
 
     private String htmlToText(String html)
@@ -336,21 +593,6 @@ public class KnowledgeIngestService
             .replaceAll(" *\\n *", "\n").replaceAll("\\n{3,}", "\n\n").replaceAll(" {2,}", " ").trim();
     }
 
-    private Object findMetric(Object node, String metricId)
-    {
-        if (metricId == null || node == null) return null;
-        if (node instanceof JSONObject object)
-        {
-            if (metricId.equals(object.getString("metric_id"))) return object;
-            for (Object child : object.values()) { Object found = findMetric(child, metricId); if (found != null) return found; }
-        }
-        else if (node instanceof JSONArray array)
-        {
-            for (Object child : array) { Object found = findMetric(child, metricId); if (found != null) return found; }
-        }
-        return null;
-    }
-
     private void fail(KnowledgeIngestTask task, KnowledgeVersion version, String message)
     {
         String safe = message == null ? "知识库入库失败" : message.substring(0, Math.min(1000, message.length()));
@@ -359,4 +601,7 @@ public class KnowledgeIngestService
     }
 
     @FunctionalInterface private interface ThrowingRunnable { void run() throws Exception; }
+
+    private record NewsArticle(String id, String sourceName, String sourceSite, String title, String content,
+        String publishedAt, String crawledAt, String url, String contentHash) {}
 }

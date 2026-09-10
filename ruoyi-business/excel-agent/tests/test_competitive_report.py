@@ -9,9 +9,21 @@ if ROOT not in sys.path:
 from app.report.competitive_insight import generate_competitive_insight_report
 from app.report.metrics import calculate_competitive_metrics
 from app.llm.client import LlmError
+from app.pipeline import _report_maker_names
 
 
 class CompetitiveInsightReportTest(unittest.TestCase):
+    def test_report_detail_scope_does_not_expand_to_every_market_maker(self):
+        records = [
+            {"maker": {"value": "Tianma"}},
+            {"maker": {"value": "Stanley"}},
+            {"maker": {"value": "Hosiden"}},
+        ]
+        self.assertEqual(
+            ["Tianma", "AUO", "CSOT", "BOE"],
+            _report_maker_names(records, []),
+        )
+
     def test_fallback_preserves_template_logic_and_maker_order(self):
         parsed = {
             "workbook_id": "sha256:test",
@@ -23,6 +35,8 @@ class CompetitiveInsightReportTest(unittest.TestCase):
         self.assertEqual(["Tianma", "AUO", "CSOT", "BOE"], [item["maker"] for item in report["makers"]])
         self.assertEqual("current_year / previous_year - 1", report["methodology"]["formulas"]["yoy"])
         self.assertEqual(["<8", "[8,12)", "[12,15)", ">=15"], report["methodology"]["size_buckets"])
+        self.assertGreaterEqual(len(report["methodology"]["notes"]), 8)
+        self.assertIn("growth_contribution", report["methodology"]["formulas"])
 
     def test_llm_result_is_normalized_to_all_four_makers(self):
         class FakeClient:
@@ -70,6 +84,35 @@ class CompetitiveInsightReportTest(unittest.TestCase):
             report["quality"]["narrative_metric_refs"],
         )
 
+    def test_each_narrative_keeps_a_separate_displayable_evidence_mapping(self):
+        class FakeClient:
+            available = True
+            model = "fake"
+
+            def complete_json(self, system_prompt, user_prompt, max_tokens=3000):
+                return {"executive_summary": ["市场同比增长15.98% [market.shipment.y25q1_q3]"]}
+
+        parsed = {
+            "workbook_id": "sha256:test",
+            "file_name": "tracker.xlsx",
+            "computed_metrics": {
+                "engine": "test",
+                "market": {
+                    "metric_id": "market.shipment.y25q1_q3",
+                    "values": {"2024": 100, "2025": 115.98},
+                    "evidence": {"2025": {"sheet": "Shipment", "cells": ["A10", "A11"]}},
+                },
+            },
+        }
+        report = generate_competitive_insight_report(parsed, llm_client=FakeClient())
+
+        self.assertEqual("市场同比增长15.98%", report["executive_summary"][0])
+        self.assertEqual("R1", report["narrative_sources"][0]["citation_label"])
+        self.assertEqual("tracker.xlsx", report["narrative_sources"][0]["source_file"])
+        self.assertEqual(["market.shipment.y25q1_q3"], report["narrative_sources"][0]["metric_ids"])
+        evidence = report["narrative_sources"][0]["metrics"][0]["evidence"]
+        self.assertEqual("Shipment", evidence["2025"]["sheet"])
+
     def test_llm_failure_returns_report_template_instead_of_failing_task(self):
         class FailingClient:
             available = True
@@ -81,7 +124,20 @@ class CompetitiveInsightReportTest(unittest.TestCase):
         parsed = {"workbook_id": "sha256:test", "file_name": "tracker.xlsx", "sheets": []}
         report = generate_competitive_insight_report(parsed, llm_client=FailingClient())
         self.assertEqual("python_metrics_rule_narrative", report["quality"]["generation_mode"])
-        self.assertTrue(any("timeout" in gap for gap in report["quality"]["data_gaps"]))
+        self.assertTrue(any("timeout" in warning for warning in report["quality"]["warnings"]))
+
+    def test_llm_quota_error_is_a_generation_warning_not_a_data_gap(self):
+        class QuotaClient:
+            available = True
+            model = "glm-test"
+
+            def complete_json(self, system_prompt, user_prompt, max_tokens=3000):
+                raise LlmError('Ark API HTTP 429: {"error":{"code":"SetLimitExceeded"}}')
+
+        parsed = {"workbook_id": "sha256:test", "file_name": "tracker.xlsx", "sheets": []}
+        report = generate_competitive_insight_report(parsed, llm_client=QuotaClient())
+        self.assertFalse(any("429" in gap for gap in report["quality"]["data_gaps"]))
+        self.assertIn("指标计算不受影响", report["quality"]["warnings"][0])
 
     def test_rule_fallback_populates_narrative_from_existing_metrics(self):
         class FailingClient:

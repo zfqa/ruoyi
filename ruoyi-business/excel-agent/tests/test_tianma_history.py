@@ -58,8 +58,12 @@ class TianmaHistoryMetricsTest(unittest.TestCase):
         self.assertEqual(0.2, metrics["shipment"]["standard_y25f_yoy"])
         self.assertEqual(0.2, metrics["shipment"]["yoy_periods"]["Y25F"])
         self.assertEqual(-0.3, metrics["shipment"]["yoy_periods"]["Y25Q1-Q3"])
+        self.assertEqual(0.583333, metrics["shipment"]["forecast_completion_y25_q1_q3"])
         self.assertEqual(0.4, metrics["shipment_share"]["periods"]["Y25F"])
         self.assertEqual(0.35, metrics["shipment_share"]["periods"]["Y25Q1-Q3"])
+        self.assertEqual(100, metrics["shipment"]["comparison_periods"]["Y24Q1-Q3"])
+        self.assertEqual(70, metrics["shipment"]["comparison_periods"]["Y25Q1-Q3"])
+        self.assertEqual(-0.3, metrics["shipment"]["yoy_2025_q1_q3_vs_2024_q1_q3"])
         self.assertEqual(12, metrics["display_area"]["periods"]["Y25F"])
         self.assertEqual([], metrics["data_gaps"])
 
@@ -81,7 +85,7 @@ class TianmaHistoryMetricsTest(unittest.TestCase):
         self.assertEqual(0.4, metrics["shipment_share"]["periods"]["Y25Q1-Q3"])
         self.assertEqual("CSOT", metrics["scope"]["maker"])
 
-    def test_oxide_is_excluded_from_company_history_and_market_share(self):
+    def test_market_share_keeps_all_technologies_in_denominator_only(self):
         current = [
             record(2025, "Q1", "BOE", 100, 10, technology="a-Si"),
             record(2025, "Q1", "BOE", 25, 5, technology="Oxide"),
@@ -90,7 +94,11 @@ class TianmaHistoryMetricsTest(unittest.TestCase):
         metrics = calculate_tianma_history_metrics(current, [], "BOE")
         self.assertEqual(100, metrics["shipment"]["periods"]["Y25Q1-Q3"])
         self.assertEqual(10, metrics["display_area"]["periods"]["Y25Q1-Q3"])
-        self.assertEqual(0.5, metrics["shipment_share"]["periods"]["Y25Q1-Q3"])
+        self.assertEqual(0.444444, metrics["shipment_share"]["periods"]["Y25Q1-Q3"])
+        self.assertEqual(0.4, metrics["display_area_share"]["periods"]["Y25Q1-Q3"])
+        self.assertEqual(
+            "all technologies", metrics["scope"]["share_market_denominator_technology_scope"]
+        )
 
 
 if __name__ == "__main__":

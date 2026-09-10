@@ -54,21 +54,25 @@ class TianmaGrowthMetricsTest(unittest.TestCase):
         europe = next(row for row in metrics["regions"]["rows"] if row["region"] == "欧系")
         self.assertEqual(100, europe["annual"]["Y24"])
         self.assertEqual(1, europe["annual"]["yoy_2024_vs_2023"])
+        first = metrics["top_clients"]["clients"][0]
+        self.assertIsNotNone(first["share_y25_q1_q3"])
 
     def test_application_history_and_key_size_merges_technologies_before_threshold(self):
-        baseline = [shipment(2022, "Q1", "Room mirror", 9, 100)]
+        baseline = [shipment(2022, "Q1", "Room mirror", 9, 100, maker="Demo")]
         current = [
-            shipment(2024, "Q1", "Instrument cluster", 10.3, 500, "a-Si"),
-            shipment(2024, "Q1", "Instrument cluster", 10.3, 100, "LTPS"),
-            shipment(2025, "Q1", "Instrument cluster", 10.3, 900, "a-Si"),
-            shipment(2025, "Q2", "Instrument cluster", 10.3, 300, "LTPS"),
-            shipment(2025, "Q1", "Side mirror", 9, 50, "a-Si"),
-            shipment(2025, "Q1", "Room mirror", 9, 70, "a-Si"),
+            shipment(2024, "Q1", "Instrument cluster", 10.3, 500, "a-Si", "Demo"),
+            shipment(2024, "Q1", "Instrument cluster", 10.3, 100, "LTPS", "Demo"),
+            shipment(2025, "Q1", "Instrument cluster", 10.3, 900, "a-Si", "Demo"),
+            shipment(2025, "Q2", "Instrument cluster", 10.3, 300, "LTPS", "Demo"),
+            shipment(2025, "Q1", "Side mirror", 9, 50, "a-Si", "Demo"),
+            shipment(2025, "Q1", "Room mirror", 9, 70, "a-Si", "Demo"),
         ]
 
-        metrics = calculate_tianma_application_metrics(current, baseline)
+        metrics = calculate_tianma_application_metrics(current, baseline, "Demo")
         mirror = next(item for item in metrics["application_history"]["series"] if item["application"] == "后视镜")
         self.assertEqual(120, mirror["periods"]["Y25Q1-Q3"])
+        self.assertAlmostEqual(120 / 1320, mirror["share_y25_q1_q3"], places=6)
+        self.assertAlmostEqual(5 / 6, next(item for item in metrics["application_history"]["series"] if item["application"] == "仪表")["growth_contribution_y25_q1_q3"], places=6)
         key = metrics["key_sizes"]["rows"][0]
         self.assertEqual("仪表", key["application"])
         self.assertEqual(1200, key["shipment"])
@@ -76,6 +80,27 @@ class TianmaGrowthMetricsTest(unittest.TestCase):
         self.assertEqual(1, key["yoy_2025_q1_q3_vs_2024_q1_q3"])
         mirror_key = next(item for item in metrics["key_sizes"]["rows"] if item["application"] == "后视镜")
         self.assertEqual(120, mirror_key["shipment"])
+
+    def test_final_report_profile_uses_configured_technology_scope(self):
+        current = [
+            shipment(2024, "Q1", "Instrument cluster", 10.3, 1000, "a-Si"),
+            shipment(2024, "Q1", "Instrument cluster", 10.3, 100, "LTPS"),
+            shipment(2025, "Q1", "Instrument cluster", 10.3, 1200, "a-Si"),
+            shipment(2025, "Q1", "Instrument cluster", 10.3, 500, "LTPS"),
+            shipment(2025, "Q1", "Center stack display", 12.3, 200, "a-Si"),
+            shipment(2025, "Q1", "Center stack display", 12.3, 1400, "LTPS"),
+        ]
+
+        metrics = calculate_tianma_application_metrics(current, [], "Tianma")
+        rows = metrics["key_sizes"]["rows"]
+        instrument = next(row for row in rows if row["application"] == "仪表")
+        center = next(row for row in rows if row["application"] == "中控")
+        self.assertEqual(1200, instrument["shipment"])
+        self.assertEqual("a-Si", instrument["technology"])
+        self.assertAlmostEqual(0.2, instrument["yoy_2025_q1_q3_vs_2024_q1_q3"])
+        self.assertEqual(1400, center["shipment"])
+        self.assertEqual("LTPS", center["technology"])
+        self.assertEqual("final_report_v1", metrics["scope"]["key_size_profile"])
 
     def test_customer_region_uses_decision_location_and_excludes_oxide(self):
         records = [

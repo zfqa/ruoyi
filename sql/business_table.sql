@@ -29,6 +29,11 @@ CREATE TABLE business_data_pdf (
   id                bigint(20)      NOT NULL AUTO_INCREMENT    COMMENT '主键',
   task_name         varchar(200)    DEFAULT ''                 COMMENT '任务名称',
   status            char(1)         DEFAULT '0'                COMMENT '状态（0待处理 1处理中 2成功 3失败）',
+  source_text       longtext                                   COMMENT '用户粘贴的原始文本或表格片段',
+  result_json       longtext                                   COMMENT 'LLM抽取及Java标准化结果JSON',
+  entity_count      int(11)         DEFAULT 0                  COMMENT '抽取实体数量',
+  llm_model         varchar(120)    DEFAULT ''                 COMMENT '实际使用的LLM模型',
+  completed_time    datetime                                   COMMENT '完成时间',
   create_by         varchar(64)     DEFAULT ''                 COMMENT '创建者',
   create_time       datetime                                   COMMENT '创建时间',
   update_by         varchar(64)     DEFAULT ''                 COMMENT '更新者',
@@ -113,7 +118,7 @@ CREATE TABLE business_knowledge (
   id                bigint(20)      NOT NULL AUTO_INCREMENT    COMMENT '主键',
   source_code       varchar(100)    DEFAULT NULL               COMMENT '固定资料编码',
   source_name       varchar(255)    NOT NULL                   COMMENT '资料名称',
-  source_type       varchar(20)     NOT NULL DEFAULT 'PDF'     COMMENT '来源类型：PDF/NEWS/REPORT',
+  source_type       varchar(20)     NOT NULL DEFAULT 'PDF'     COMMENT '来源类型：PDF/NEWS/POLICY/REPORT',
   current_version_id bigint(20)     DEFAULT NULL               COMMENT '当前有效版本ID',
   owner_dept_id     bigint(20)      DEFAULT NULL               COMMENT '归属部门',
   confidentiality  varchar(20)     NOT NULL DEFAULT 'INTERNAL' COMMENT '密级',
@@ -159,6 +164,24 @@ CREATE TABLE business_kb_chunk (
   KEY idx_business_kb_chunk_source (source_id, version_id), KEY idx_business_kb_chunk_metric (report_id, metric_id),
   FULLTEXT KEY ft_business_kb_chunk_content (title_path, content) WITH PARSER ngram
 ) ENGINE=InnoDB COMMENT='知识库文档切片与来源';
+
+CREATE TABLE business_kb_entity (
+  id bigint(20) NOT NULL AUTO_INCREMENT, entity_key varchar(300) NOT NULL, entity_name varchar(255) NOT NULL,
+  entity_type varchar(30) NOT NULL, aliases varchar(1000) DEFAULT '', create_time datetime DEFAULT NULL,
+  update_time datetime DEFAULT NULL, PRIMARY KEY (id), UNIQUE KEY uk_business_kb_entity_key (entity_key),
+  KEY idx_business_kb_entity_type (entity_type, entity_name)
+) ENGINE=InnoDB COMMENT='知识图谱实体';
+
+CREATE TABLE business_kb_relation (
+  id bigint(20) NOT NULL AUTO_INCREMENT, from_entity_id bigint(20) NOT NULL, to_entity_id bigint(20) NOT NULL,
+  relation_type varchar(60) NOT NULL, source_id bigint(20) NOT NULL, version_id bigint(20) NOT NULL,
+  chunk_id bigint(20) NOT NULL, period varchar(20) DEFAULT '', data_type varchar(20) NOT NULL,
+  evidence_snippet varchar(1000) DEFAULT '', evidence_start int DEFAULT 0, evidence_end int DEFAULT 0,
+  create_time datetime DEFAULT NULL, PRIMARY KEY (id),
+  UNIQUE KEY uk_business_kb_relation (from_entity_id,to_entity_id,relation_type,chunk_id),
+  KEY idx_business_kb_relation_filter (period,data_type), KEY idx_business_kb_relation_chunk (chunk_id),
+  KEY idx_business_kb_relation_version (version_id)
+) ENGINE=InnoDB COMMENT='知识图谱可溯源关系';
 
 -- AI分析与报告
 DROP TABLE IF EXISTS business_report;

@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from app.llm.client import LlmError, _parse_json_object
+from app.llm.client import ArkChatClient, LlmError, _parse_json_object
 from app.llm.interpreter import interpret_table
 from app.llm.prompts import build_table_prompt
 from app.pipeline import parse_workbook
@@ -107,6 +107,23 @@ class LlmInterpreterTest(unittest.TestCase):
 
     def test_json_code_fence_is_supported(self):
         self.assertEqual({"is_table": True}, _parse_json_object("```json\n{\"is_table\": true}\n```"))
+
+    def test_client_repairs_malformed_json_once(self):
+        class RepairingClient(ArkChatClient):
+            def __init__(self):
+                super().__init__(api_key="test", model="test-model")
+                self.responses = iter([
+                    {"choices": [{"message": {"content": '{"status":"ok" "answer":"bad"}'}}]},
+                    {"choices": [{"message": {"content": '{"status":"ok","answer":"bad"}'}}]},
+                ])
+
+            def _post(self, payload):
+                return next(self.responses)
+
+        self.assertEqual(
+            {"status": "ok", "answer": "bad"},
+            RepairingClient().complete_json("system", "user"),
+        )
 
     def test_table_prompt_has_a_hard_size_limit(self):
         for row in range(1, 50):

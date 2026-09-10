@@ -40,7 +40,7 @@
         </el-col>
         <el-col :span="6" class="upload-actions">
           <el-button type="primary" icon="el-icon-magic-stick" :loading="parsing" :disabled="!uploadForm.fileName" @click="handleParseUploaded">解析已上传文件</el-button>
-          <div class="upload-tip">未上传Y22基准文件时，第二部分的Y22显示为缺失。</div>
+          <div class="upload-tip">请先解压ZIP后再选择Excel；未上传Y22基准文件时，第二部分的Y22显示为缺失。</div>
         </el-col>
       </el-row>
     </el-card>
@@ -273,7 +273,11 @@ export default {
       }
       if (this.parseResult.sheet_count !== undefined) {
         const quality = this.parseResult.quality || {};
-        const llm = quality.llm_used ? `，LLM增强 ${quality.llm_success_count || 0} 个候选表` : (quality.llm_requested ? '，LLM不可用或已降级为规则解析' : '');
+        const llm = quality.llm_used
+          ? `，LLM增强 ${quality.llm_success_count || 0} 个候选表`
+          : (quality.structure_note
+            ? `，${quality.structure_note}`
+            : (quality.llm_requested ? '，LLM调用失败，已降级为规则解析' : ''));
         return `已解析 ${this.parseResult.sheet_count} 个 Sheet，识别 ${this.parseResult.table_count || 0} 个候选表，提取 ${this.parseResult.record_count || 0} 条记录${llm}`;
       }
       const sheets = this.parseResult.sheets || [];

@@ -5,6 +5,9 @@ import com.ruoyi.business.knowledge.domain.KnowledgeBase;
 import com.ruoyi.business.knowledge.domain.KnowledgeChunk;
 import com.ruoyi.business.knowledge.domain.KnowledgeIngestTask;
 import com.ruoyi.business.knowledge.domain.KnowledgeVersion;
+import com.ruoyi.business.knowledge.domain.KnowledgeGraphNode;
+import com.ruoyi.business.knowledge.domain.KnowledgeGraphRelation;
+import java.util.Map;
 import org.apache.ibatis.annotations.Param;
 
 /**
@@ -17,6 +20,8 @@ public interface KnowledgeBaseMapper
     public List<KnowledgeBase> selectKnowledgeBaseList(KnowledgeBase knowledgeBase);
 
     public KnowledgeBase selectKnowledgeBaseById(Long id);
+
+    public KnowledgeBase selectKnowledgeBaseBySourceCode(String sourceCode);
 
     public int insertKnowledgeBase(KnowledgeBase knowledgeBase);
 
@@ -53,4 +58,31 @@ public interface KnowledgeBaseMapper
         @Param("admin") boolean admin, @Param("limit") int limit,
         @Param("entityTerms") List<String> entityTerms,
         @Param("normalizedLiteral") String normalizedLiteral);
+
+    List<KnowledgeChunk> selectCurrentMetricChunks(@Param("roleIds") List<Long> roleIds,
+        @Param("admin") boolean admin, @Param("metricTerms") List<String> metricTerms,
+        @Param("limit") int limit);
+
+    List<KnowledgeChunk> selectMetricFragments(@Param("versionId") Long versionId,
+        @Param("metricId") String metricId, @Param("titlePath") String titlePath);
+
+    KnowledgeChunk selectAuthorizedChunkById(@Param("id") Long id,
+        @Param("roleIds") List<Long> roleIds, @Param("admin") boolean admin);
+
+    int upsertGraphNode(KnowledgeGraphNode node);
+
+    int insertGraphRelation(KnowledgeGraphRelation relation);
+
+    int deleteGraphRelationsByVersionId(Long versionId);
+
+    List<Map<String, Object>> selectGraphRelations(@Param("period") String period,
+        @Param("dataType") String dataType, @Param("centerId") Long centerId,
+        @Param("roleIds") List<Long> roleIds, @Param("admin") boolean admin,
+        @Param("limit") int limit);
+
+    List<Map<String, Object>> selectGraphRelationsByChunkIds(@Param("chunkIds") List<Long> chunkIds,
+        @Param("roleIds") List<Long> roleIds, @Param("admin") boolean admin,
+        @Param("limit") int limit);
+
+    List<KnowledgeChunk> selectCurrentChunks(@Param("limit") int limit);
 }

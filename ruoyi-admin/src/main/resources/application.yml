@@ -7,7 +7,7 @@ ruoyi:
   # 版权年份
   copyrightYear: 2026
   # 文件路径 示例（ Windows配置D:/ruoyi/uploadPath，Linux配置 /home/ruoyi/uploadPath）
-  profile: D:/ruoyi/uploadPath
+  profile: ${RUOYI_PROFILE:D:/ruoyi/uploadPath}
   # 获取ip地址开关
   addressEnabled: false
   # 验证码类型 math 数字计算 char 字符验证
@@ -57,9 +57,9 @@ spring:
   servlet:
     multipart:
       # 单个文件大小
-      max-file-size: 10MB
+      max-file-size: 50MB
       # 设置总上传的文件大小
-      max-request-size: 20MB
+      max-request-size: 100MB
   jackson:
     time-zone: GMT+8
     date-format: yyyy-MM-dd HH:mm:ss
@@ -148,13 +148,34 @@ xss:
 
 # 业务解析任务配置
 business:
+  llm:
+    # 用于加密持久化前端保存的API Key；生产环境请通过LLM_CONFIG_SECRET设置独立且稳定的随机密钥
+    persistence-secret: ${LLM_CONFIG_SECRET:${token.secret}}
+  text:
+    llm:
+      # 推理型模型可能超过90秒，文本抽取独立设置较长超时
+      timeout-seconds: ${TEXT_LLM_TIMEOUT_SECONDS:300}
   knowledge:
+    # Excel解析并生成报告后，只投影报告指标、结论和证据关系到知识库，不保存整份报告JSON副本
+    auto-ingest-reports: true
     executor:
       core-pool-size: 2
       max-pool-size: 2
       queue-capacity: 20
+    qa-executor:
+      core-pool-size: 1
+      max-pool-size: 2
+      queue-capacity: 10
     # 只允许抓取这些官网域名；多个域名用逗号分隔，空值时新闻抓取接口拒绝执行
     news-allowed-domains: ${KB_NEWS_ALLOWED_DOMAINS:}
+    # 支持正文直传；未传正文时仅抓取域名白名单内的URL
+    news-ingest-enabled: true
+    llm:
+      api-url: ${ARK_API_URL:https://ark.cn-beijing.volces.com/api/v3/chat/completions}
+      model: ${ARK_MODEL:glm-5-2-260617}
+      api-key: ${ARK_API_KEY:}
+      # 知识问答需要同时综合报告与新闻，推理模型可能超过90秒
+      timeout-seconds: ${KNOWLEDGE_LLM_TIMEOUT_SECONDS:300}
   excel:
     # 大型xlsm包含工作簿扫描和有限次数LLM识别，保留充足的全局执行时间
     parse-timeout-minutes: 30
@@ -164,7 +185,7 @@ business:
       queue-capacity: 20
     llm:
       api-url: ${ARK_API_URL:https://ark.cn-beijing.volces.com/api/v3/chat/completions}
-      model: ${ARK_MODEL:doubao-seed-2-1-turbo-260628}
+      model: ${ARK_MODEL:glm-5-2-260617}
       # API Key只从环境变量读取，禁止写入源码
       api-key: ${ARK_API_KEY:}
       # 单次LLM调用失败时快速降级，避免阻塞整个工作簿任务

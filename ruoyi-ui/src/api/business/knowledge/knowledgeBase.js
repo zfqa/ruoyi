@@ -106,6 +106,10 @@ export function getKnowledgeQaTask(taskId) {
   return request({ url: `/business/knowledge/qa-tasks/${taskId}`, method: 'get' })
 }
 
+export function listKnowledgeQaTasks(params) {
+  return request({ url: '/business/knowledge/qa-tasks', method: 'get', params })
+}
+
 export function getKnowledgeLlmConfig() {
   return request({ url: '/business/knowledge/llm-config', method: 'get' })
 }
@@ -124,6 +128,10 @@ export function getKnowledgeGraph(params) {
 
 export function getKnowledgeEvidence(chunkId, params) {
   return request({ url: `/business/knowledge/evidence/${chunkId}`, method: 'get', params })
+}
+
+export function getKnowledgeEvidenceFile(chunkId) {
+  return request({ url: `/business/knowledge/evidence/${chunkId}/file`, method: 'get', responseType: 'blob' })
 }
 
 export function rebuildKnowledgeGraph() {

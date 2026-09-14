@@ -28,9 +28,22 @@ public class KnowledgeBaseServiceImpl implements IKnowledgeBaseService
     }
 
     @Override
+    public List<KnowledgeBase> selectAuthorizedKnowledgeBaseList(KnowledgeBase knowledgeBase, List<Long> roleIds, boolean admin)
+    {
+        return knowledgeBaseMapper.selectAuthorizedKnowledgeBaseList(knowledgeBase,
+            roleIds == null ? List.of() : roleIds, admin);
+    }
+
+    @Override
     public KnowledgeBase selectKnowledgeBaseById(Long id)
     {
         return knowledgeBaseMapper.selectKnowledgeBaseById(id);
+    }
+
+    @Override
+    public KnowledgeBase selectAuthorizedKnowledgeBaseById(Long id, List<Long> roleIds, boolean admin)
+    {
+        return knowledgeBaseMapper.selectAuthorizedKnowledgeBaseById(id, roleIds == null ? List.of() : roleIds, admin);
     }
 
     @Override

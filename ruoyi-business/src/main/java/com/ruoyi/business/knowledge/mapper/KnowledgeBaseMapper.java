@@ -19,13 +19,22 @@ public interface KnowledgeBaseMapper
 {
     public List<KnowledgeBase> selectKnowledgeBaseList(KnowledgeBase knowledgeBase);
 
+    List<KnowledgeBase> selectAuthorizedKnowledgeBaseList(@Param("filter") KnowledgeBase filter,
+        @Param("roleIds") List<Long> roleIds, @Param("admin") boolean admin);
+
     public KnowledgeBase selectKnowledgeBaseById(Long id);
+
+    KnowledgeBase selectAuthorizedKnowledgeBaseById(@Param("id") Long id,
+        @Param("roleIds") List<Long> roleIds, @Param("admin") boolean admin);
 
     public KnowledgeBase selectKnowledgeBaseBySourceCode(String sourceCode);
 
     public int insertKnowledgeBase(KnowledgeBase knowledgeBase);
 
     public int updateKnowledgeBase(KnowledgeBase knowledgeBase);
+
+    int promoteCurrentVersionIfNewer(@Param("sourceId") Long sourceId, @Param("versionId") Long versionId,
+        @Param("remark") String remark);
 
     public int deleteKnowledgeBaseById(Long id);
 
@@ -85,4 +94,30 @@ public interface KnowledgeBaseMapper
         @Param("limit") int limit);
 
     List<KnowledgeChunk> selectCurrentChunks(@Param("limit") int limit);
+
+    int insertQaSession(@Param("taskId") String taskId, @Param("owner") String owner,
+        @Param("question") String question, @Param("sourceType") String sourceType,
+        @Param("includeNews") boolean includeNews, @Param("snapshotJson") String snapshotJson);
+
+    int updateQaSession(@Param("taskId") String taskId, @Param("status") String status,
+        @Param("progress") int progress, @Param("currentStage") String currentStage,
+        @Param("errorMessage") String errorMessage, @Param("snapshotJson") String snapshotJson,
+        @Param("startedAt") java.time.Instant startedAt, @Param("finishedAt") java.time.Instant finishedAt);
+
+    Map<String, Object> selectQaSession(@Param("taskId") String taskId);
+    List<Map<String, Object>> selectQaSessions(@Param("owner") String owner,
+        @Param("admin") boolean admin, @Param("limit") int limit);
+
+    int deleteQaClaims(@Param("taskId") String taskId);
+    int deleteQaCitations(@Param("taskId") String taskId);
+    int insertQaClaim(@Param("taskId") String taskId, @Param("claimNo") int claimNo,
+        @Param("claimText") String claimText, @Param("verified") boolean verified);
+    int insertQaCitation(@Param("taskId") String taskId, @Param("claimNo") int claimNo,
+        @Param("citationLabel") String citationLabel, @Param("chunkId") Long chunkId,
+        @Param("sourceName") String sourceName, @Param("pageStart") Integer pageStart,
+        @Param("pageEnd") Integer pageEnd, @Param("startOffset") Integer startOffset,
+        @Param("endOffset") Integer endOffset, @Param("evidenceSnippet") String evidenceSnippet);
+    int deleteQaCitationsBefore(@Param("cutoff") java.time.Instant cutoff);
+    int deleteQaClaimsBefore(@Param("cutoff") java.time.Instant cutoff);
+    int deleteQaSessionsBefore(@Param("cutoff") java.time.Instant cutoff);
 }

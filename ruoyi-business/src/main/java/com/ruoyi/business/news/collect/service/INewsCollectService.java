@@ -12,6 +12,8 @@ public interface INewsCollectService
 {
     public List<NewsCollect> selectNewsCollectList(NewsCollect newsCollect);
 
+    public List<String> selectHistoricalSourceNames();
+
     public NewsCollect selectNewsCollectById(Long id);
 
     public int insertNewsCollect(NewsCollect newsCollect);

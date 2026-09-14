@@ -60,3 +60,13 @@ export function exportAiReport(query) {
     responseType: 'blob'
   })
 }
+
+// 将单份结构化分析报告导出为Word或PPT
+export function exportAiReportOffice(id, format) {
+  return request({
+    url: `/business/report/${id}/export/${format}`,
+    method: 'get',
+    responseType: 'blob',
+    timeout: 120000
+  })
+}

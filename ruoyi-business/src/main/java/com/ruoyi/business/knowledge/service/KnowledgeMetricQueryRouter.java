@@ -132,13 +132,27 @@ public final class KnowledgeMetricQueryRouter
         {
             fragments.sort(Comparator.comparing(KnowledgeChunk::getChunkNo,
                 Comparator.nullsLast(Comparator.naturalOrder())));
-            KnowledgeChunk representative = fragments.get(0);
+            KnowledgeChunk representative = copyOf(fragments.get(0));
             StringBuilder merged = new StringBuilder(safe(representative.getContent()));
             for (int i = 1; i < fragments.size(); i++) appendWithOverlap(merged, safe(fragments.get(i).getContent()));
             representative.setContent(merged.toString());
+            representative.setSourceFragments(List.copyOf(fragments));
             result.add(representative);
         }
         return result;
+    }
+
+    private KnowledgeChunk copyOf(KnowledgeChunk source)
+    {
+        KnowledgeChunk copy = new KnowledgeChunk();
+        copy.setId(source.getId()); copy.setSourceId(source.getSourceId()); copy.setVersionId(source.getVersionId());
+        copy.setChunkNo(source.getChunkNo()); copy.setTitlePath(source.getTitlePath()); copy.setContent(source.getContent());
+        copy.setSourceSnippet(source.getSourceSnippet()); copy.setPageStart(source.getPageStart()); copy.setPageEnd(source.getPageEnd());
+        copy.setSourceUrl(source.getSourceUrl()); copy.setReportId(source.getReportId()); copy.setMetricId(source.getMetricId());
+        copy.setEvidenceJson(source.getEvidenceJson()); copy.setContentSha256(source.getContentSha256()); copy.setTokenCount(source.getTokenCount());
+        copy.setSourceName(source.getSourceName()); copy.setOriginalName(source.getOriginalName()); copy.setSourceType(source.getSourceType());
+        copy.setVersionNo(source.getVersionNo()); copy.setScore(source.getScore());
+        return copy;
     }
 
     private void appendWithOverlap(StringBuilder target, String next)

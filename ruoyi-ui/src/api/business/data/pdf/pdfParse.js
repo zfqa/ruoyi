@@ -26,6 +26,32 @@ export function addPdfParse(data) {
   })
 }
 
+// 上传 PDF/PPTX 并由若依后端调用 agent-service 完成解析
+export function parsePdf(formData) {
+  return request({
+    url: '/business/data/pdf/parse',
+    method: 'post',
+    data: formData,
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+// 将已保存的解析结果异步发布到若依知识库
+export function publishPdfKnowledge(id) {
+  return request({
+    url: '/business/data/pdf/' + id + '/publish-knowledge',
+    method: 'post'
+  })
+}
+
+// 重新提交失败的原解析任务，不创建第二条业务任务记录
+export function retryPdfParse(id) {
+  return request({
+    url: '/business/data/pdf/' + id + '/retry-parse',
+    method: 'post'
+  })
+}
+
 // 修改PDF解析
 export function updatePdfParse(data) {
   return request({

@@ -29,11 +29,14 @@ CREATE TABLE business_data_pdf (
   id                bigint(20)      NOT NULL AUTO_INCREMENT    COMMENT '主键',
   task_name         varchar(200)    DEFAULT ''                 COMMENT '任务名称',
   status            char(1)         DEFAULT '0'                COMMENT '状态（0待处理 1处理中 2成功 3失败）',
+  original_file_name varchar(255)   DEFAULT ''                 COMMENT '用户上传的原始文件名',
+  stored_file_path  varchar(500)    DEFAULT ''                 COMMENT '私有原始文件逻辑引用',
   source_text       longtext                                   COMMENT '用户粘贴的原始文本或表格片段',
   result_json       longtext                                   COMMENT 'LLM抽取及Java标准化结果JSON',
   entity_count      int(11)         DEFAULT 0                  COMMENT '抽取实体数量',
   llm_model         varchar(120)    DEFAULT ''                 COMMENT '实际使用的LLM模型',
   completed_time    datetime                                   COMMENT '完成时间',
+  error_message     varchar(1000)   DEFAULT ''                 COMMENT '安全解析失败摘要',
   create_by         varchar(64)     DEFAULT ''                 COMMENT '创建者',
   create_time       datetime                                   COMMENT '创建时间',
   update_by         varchar(64)     DEFAULT ''                 COMMENT '更新者',
@@ -89,14 +92,56 @@ DROP TABLE IF EXISTS business_news_collect;
 CREATE TABLE business_news_collect (
   id                bigint(20)      NOT NULL AUTO_INCREMENT    COMMENT '主键',
   task_name         varchar(200)    DEFAULT ''                 COMMENT '任务名称',
+  source_name       varchar(100)    DEFAULT ''                 COMMENT 'Python新闻源名称',
+  trigger_type      varchar(16)     DEFAULT 'MANUAL'           COMMENT '触发类型',
   status            char(1)         DEFAULT '0'                COMMENT '状态（0待处理 1处理中 2成功 3失败）',
+  publish_time_start varchar(32)    DEFAULT NULL,
+  publish_time_end  varchar(32)     DEFAULT NULL,
+  force_flag        char(1)         DEFAULT '0',
+  started_time      datetime        DEFAULT NULL,
+  completed_time    datetime        DEFAULT NULL,
+  fetched_count     int NOT NULL DEFAULT 0,
+  inserted_count    int NOT NULL DEFAULT 0,
+  updated_count     int NOT NULL DEFAULT 0,
+  duplicate_count   int NOT NULL DEFAULT 0,
+  filtered_count    int NOT NULL DEFAULT 0,
+  failed_count      int NOT NULL DEFAULT 0,
+  mysql_inserted_count int NOT NULL DEFAULT 0,
+  mysql_updated_count int NOT NULL DEFAULT 0,
+  mysql_existing_count int NOT NULL DEFAULT 0,
+  statistics_version varchar(16) DEFAULT NULL,
+  crawl_run_id      varchar(64) DEFAULT NULL,
+  error_message     varchar(500) DEFAULT '',
   create_by         varchar(64)     DEFAULT ''                 COMMENT '创建者',
   create_time       datetime                                   COMMENT '创建时间',
   update_by         varchar(64)     DEFAULT ''                 COMMENT '更新者',
   update_time       datetime                                   COMMENT '更新时间',
   remark            varchar(500)    DEFAULT ''                 COMMENT '备注',
-  PRIMARY KEY (id)
+  PRIMARY KEY (id),
+  KEY idx_business_news_collect_source_status (source_name, status)
 ) ENGINE=InnoDB AUTO_INCREMENT=1 COMMENT='白名单官网新闻抓取';
+
+DROP TABLE IF EXISTS business_news_article;
+CREATE TABLE business_news_article (
+  id bigint(20) NOT NULL AUTO_INCREMENT, source_name varchar(100) NOT NULL,
+  source_site varchar(255) NOT NULL, title varchar(500) NOT NULL, content longtext NOT NULL,
+  url varchar(2000) NOT NULL, original_url varchar(2000) NOT NULL, canonical_url varchar(2000) NOT NULL,
+  published_at varchar(64) DEFAULT NULL, crawled_at varchar(64) NOT NULL,
+  matched_keywords text, content_hash char(64) NOT NULL, crawl_task_id bigint(20) DEFAULT NULL,
+  create_by varchar(64) DEFAULT '', create_time datetime DEFAULT NULL,
+  update_by varchar(64) DEFAULT '', update_time datetime DEFAULT NULL, remark varchar(500) DEFAULT '',
+  PRIMARY KEY (id), UNIQUE KEY uk_business_news_article_canonical (canonical_url(255)),
+  UNIQUE KEY uk_business_news_article_hash (content_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='官网新闻采集业务明细';
+
+DROP TABLE IF EXISTS business_news_collect_article;
+CREATE TABLE business_news_collect_article (
+  id bigint(20) NOT NULL AUTO_INCREMENT, crawl_task_id bigint(20) NOT NULL,
+  article_id bigint(20) NOT NULL, operation varchar(32) NOT NULL,
+  mysql_operation varchar(32) DEFAULT NULL, create_time datetime DEFAULT NULL,
+  PRIMARY KEY (id), UNIQUE KEY uk_news_collect_article_task_article (crawl_task_id, article_id),
+  KEY idx_news_collect_article_task (crawl_task_id), KEY idx_news_collect_article_article (article_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='新闻采集任务与文章关系';
 
 -- 新闻清洗、分类与事件提取
 DROP TABLE IF EXISTS business_news_process;
@@ -182,6 +227,35 @@ CREATE TABLE business_kb_relation (
   KEY idx_business_kb_relation_filter (period,data_type), KEY idx_business_kb_relation_chunk (chunk_id),
   KEY idx_business_kb_relation_version (version_id)
 ) ENGINE=InnoDB COMMENT='知识图谱可溯源关系';
+
+DROP TABLE IF EXISTS business_kb_qa_session;
+CREATE TABLE business_kb_qa_session (
+  task_id varchar(32) NOT NULL, task_owner varchar(64) NOT NULL DEFAULT '', question text NOT NULL,
+  source_type varchar(20) DEFAULT '', include_news tinyint(1) NOT NULL DEFAULT 1,
+  status varchar(20) NOT NULL, progress int NOT NULL DEFAULT 0, current_stage varchar(200) DEFAULT '',
+  error_message varchar(1000) DEFAULT '', snapshot_json longtext NOT NULL,
+  started_time datetime DEFAULT NULL, finished_time datetime DEFAULT NULL,
+  create_time datetime DEFAULT NULL, update_time datetime DEFAULT NULL,
+  PRIMARY KEY (task_id), KEY idx_business_kb_qa_owner_time (task_owner,create_time),
+  KEY idx_business_kb_qa_status_time (status,create_time)
+) ENGINE=InnoDB COMMENT='知识问答任务与完整审计快照';
+
+DROP TABLE IF EXISTS business_kb_qa_claim;
+CREATE TABLE business_kb_qa_claim (
+  id bigint(20) NOT NULL AUTO_INCREMENT, task_id varchar(32) NOT NULL, claim_no int NOT NULL,
+  claim_text text NOT NULL, verified tinyint(1) NOT NULL DEFAULT 1, create_time datetime DEFAULT NULL,
+  PRIMARY KEY (id), UNIQUE KEY uk_business_kb_qa_claim (task_id,claim_no)
+) ENGINE=InnoDB COMMENT='知识问答逐句事实结论';
+
+DROP TABLE IF EXISTS business_kb_qa_citation;
+CREATE TABLE business_kb_qa_citation (
+  id bigint(20) NOT NULL AUTO_INCREMENT, task_id varchar(32) NOT NULL, claim_no int NOT NULL,
+  citation_label varchar(20) NOT NULL, chunk_id bigint(20) NOT NULL, source_name varchar(255) DEFAULT '',
+  page_start int DEFAULT NULL, page_end int DEFAULT NULL, start_offset int DEFAULT NULL, end_offset int DEFAULT NULL,
+  evidence_snippet text, create_time datetime DEFAULT NULL,
+  PRIMARY KEY (id), KEY idx_business_kb_qa_citation_task (task_id,claim_no),
+  KEY idx_business_kb_qa_citation_chunk (chunk_id)
+) ENGINE=InnoDB COMMENT='知识问答逐句引用证据';
 
 -- AI分析与报告
 DROP TABLE IF EXISTS business_report;

@@ -61,6 +61,8 @@ class KnowledgeMetricQueryRouterTest
         assertEquals(1, result.size());
         assertTrue(result.get(0).getContent().contains("10323"));
         assertTrue(result.get(0).getContent().endsWith("0.680176}"));
+        assertEquals(List.of(first, second), result.get(0).getSourceFragments());
+        assertEquals("{\"periods\":{\"Y25Q1-Q3\":10323},\"yoy", first.getContent());
     }
 
     private KnowledgeChunk metric(Long id, String metricId, String content)

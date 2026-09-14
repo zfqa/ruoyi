@@ -162,6 +162,40 @@ class KnowledgeCitationValidatorTest
         assertEquals(1, result.getClaims().size());
     }
 
+    @Test
+    void locatesMergedMetricEvidenceInTheActualLaterDatabaseFragment()
+    {
+        KnowledgeChunk first = chunk(101L, "{\"metric_id\":\"tianma.ltps\",\"Y24\":9301}", 1);
+        KnowledgeChunk second = chunk(102L, "{\"Y25Q1-Q3\":10323,\"yoy\":0.680176}", 2);
+        KnowledgeChunk aggregate = chunk(101L, first.getContent() + second.getContent(), 1);
+        aggregate.setMetricId("tianma.technology.ltps.shipment");
+        aggregate.setTitlePath("Tianma LTPS Shipment");
+        aggregate.setSourceFragments(List.of(first, second));
+
+        KnowledgeCitationValidator.ValidationResult result = validator.validate(
+            "Tianma 2025年前三季度LTPS出货量为10,323 Kpcs，同比增长68.0176%。[S1]", List.of(aggregate));
+
+        Map<String, Object> evidence = result.getEvidenceForSource(1).get(0);
+        assertEquals(102L, evidence.get("chunkId"));
+        assertEquals(2, evidence.get("pageStart"));
+        int start = (Integer) evidence.get("startOffset");
+        int end = (Integer) evidence.get("endOffset");
+        assertEquals(String.valueOf(evidence.get("evidenceSnippet")), second.getContent().substring(start, end));
+    }
+
+    @Test
+    void rejectsStructuredFragmentWhenMetricIdentityDoesNotMatch()
+    {
+        KnowledgeChunk fragment = chunk(102L, "{\"Y25Q1-Q3\":10323,\"yoy\":0.680176}", 2);
+        KnowledgeChunk aggregate = chunk(101L, fragment.getContent(), 1);
+        aggregate.setMetricId("boe.technology.asi.shipment");
+        aggregate.setTitlePath("BOE a-Si Shipment");
+        aggregate.setSourceFragments(List.of(fragment));
+
+        assertThrows(IllegalStateException.class, () -> validator.validate(
+            "Tianma 2025年前三季度LTPS出货量为10,323 Kpcs，同比增长68.0176%。[S1]", List.of(aggregate)));
+    }
+
     private KnowledgeChunk chunk(Long id, String content, int page)
     {
         KnowledgeChunk value = new KnowledgeChunk();

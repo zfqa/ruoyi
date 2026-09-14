@@ -12,7 +12,11 @@ public interface IKnowledgeBaseService
 {
     public List<KnowledgeBase> selectKnowledgeBaseList(KnowledgeBase knowledgeBase);
 
+    List<KnowledgeBase> selectAuthorizedKnowledgeBaseList(KnowledgeBase knowledgeBase, List<Long> roleIds, boolean admin);
+
     public KnowledgeBase selectKnowledgeBaseById(Long id);
+
+    KnowledgeBase selectAuthorizedKnowledgeBaseById(Long id, List<Long> roleIds, boolean admin);
 
     public int insertKnowledgeBase(KnowledgeBase knowledgeBase);
 

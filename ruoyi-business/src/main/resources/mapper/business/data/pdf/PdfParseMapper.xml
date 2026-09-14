@@ -8,6 +8,21 @@
         <id property="id" column="id"/>
         <result property="taskName" column="task_name"/>
         <result property="status" column="status"/>
+        <result property="originalFileName" column="original_file_name"/>
+        <result property="storedFilePath" column="stored_file_path"/>
+        <result property="sourceText" column="source_text"/>
+        <result property="resultJson" column="result_json"/>
+        <result property="entityCount" column="entity_count"/>
+        <result property="llmModel" column="llm_model"/>
+        <result property="completedTime" column="completed_time"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="knowledgeStatus" column="knowledge_status"/>
+        <result property="knowledgeIngestTaskId" column="knowledge_ingest_task_id"/>
+        <result property="knowledgeVersionId" column="knowledge_version_id"/>
+        <result property="knowledgeProgress" column="knowledge_progress"/>
+        <result property="knowledgeStage" column="knowledge_stage"/>
+        <result property="knowledgeErrorMessage" column="knowledge_error_message"/>
+        <result property="knowledgeFinishedTime" column="knowledge_finished_time"/>
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
         <result property="updateBy" column="update_by"/>
@@ -16,21 +31,50 @@
     </resultMap>
 
     <sql id="selectPdfParseVo">
-        select id, task_name, status, create_by, create_time, update_by, update_time, remark from business_data_pdf
+        select p.id, p.task_name, p.status, p.original_file_name, p.stored_file_path, p.source_text, p.result_json,
+               p.entity_count, p.llm_model, p.completed_time, p.error_message, p.create_by, p.create_time, p.update_by,
+               p.update_time, p.remark,
+               kv.id as knowledge_version_id,
+               kit.id as knowledge_ingest_task_id,
+               kit.progress as knowledge_progress,
+               kit.current_stage as knowledge_stage,
+               kit.error_message as knowledge_error_message,
+               kit.finished_time as knowledge_finished_time,
+               case
+                   when kv.id is null then 'UNPUBLISHED'
+                   when kit.status = '0' then 'QUEUED'
+                   when kit.status = '1' then 'PUBLISHING'
+                   when kit.status = '3' or kv.status = '3' then 'FAILED'
+                   when kit.status = '2' or (kv.status = '2' and kb.current_version_id = kv.id) then 'PUBLISHED'
+                   else 'UNPUBLISHED'
+               end as knowledge_status
+        from business_data_pdf p
+        left join business_kb_version kv on kv.id = (
+            select v.id
+            from business_kb_version v
+            inner join business_knowledge source on source.id = v.source_id
+            where source.source_code = concat('DATA-PDF-', p.id)
+            order by v.id desc
+            limit 1
+        )
+        left join business_knowledge kb on kb.id = kv.source_id
+        left join business_kb_ingest_task kit on kit.id = (
+            select t.id from business_kb_ingest_task t where t.version_id = kv.id order by t.id desc limit 1
+        )
     </sql>
 
     <select id="selectPdfParseList" parameterType="com.ruoyi.business.data.pdf.domain.PdfParse" resultMap="PdfParseResult">
         <include refid="selectPdfParseVo"/>
         <where>
-            <if test="taskName != null and taskName != ''">and task_name like concat('%', #{taskName}, '%')</if>
-            <if test="status != null and status != ''">and status = #{status}</if>
+            <if test="taskName != null and taskName != ''">and p.task_name like concat('%', #{taskName}, '%')</if>
+            <if test="status != null and status != ''">and p.status = #{status}</if>
         </where>
-        order by create_time desc
+        order by p.create_time desc
     </select>
 
     <select id="selectPdfParseById" parameterType="Long" resultMap="PdfParseResult">
         <include refid="selectPdfParseVo"/>
-        where id = #{id}
+        where p.id = #{id}
     </select>
 
     <insert id="insertPdfParse" parameterType="com.ruoyi.business.data.pdf.domain.PdfParse" useGeneratedKeys="true" keyProperty="id">
@@ -38,6 +82,14 @@
         <trim prefix="(" suffix=")" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">task_name,</if>
             <if test="status != null and status != ''">status,</if>
+            <if test="originalFileName != null">original_file_name,</if>
+            <if test="storedFilePath != null">stored_file_path,</if>
+            <if test="sourceText != null">source_text,</if>
+            <if test="resultJson != null">result_json,</if>
+            <if test="entityCount != null">entity_count,</if>
+            <if test="llmModel != null">llm_model,</if>
+            <if test="completedTime != null">completed_time,</if>
+            <if test="errorMessage != null">error_message,</if>
             <if test="createBy != null and createBy != ''">create_by,</if>
             <if test="remark != null and remark != ''">remark,</if>
             create_time
@@ -45,9 +97,20 @@
         <trim prefix="values (" suffix=")" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">#{taskName},</if>
             <if test="status != null and status != ''">#{status},</if>
+            <if test="originalFileName != null">#{originalFileName},</if>
+            <if test="storedFilePath != null">#{storedFilePath},</if>
+            <if test="sourceText != null">#{sourceText},</if>
+            <if test="resultJson != null">#{resultJson},</if>
+            <if test="entityCount != null">#{entityCount},</if>
+            <if test="llmModel != null">#{llmModel},</if>
+            <if test="completedTime != null">#{completedTime},</if>
+            <if test="errorMessage != null">#{errorMessage},</if>
             <if test="createBy != null and createBy != ''">#{createBy},</if>
             <if test="remark != null and remark != ''">#{remark},</if>
-            sysdate()
+            <choose>
+                <when test="createTime != null">#{createTime}</when>
+                <otherwise>sysdate()</otherwise>
+            </choose>
         </trim>
     </insert>
 
@@ -56,12 +119,69 @@
         <trim prefix="SET" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">task_name = #{taskName},</if>
             <if test="status != null and status != ''">status = #{status},</if>
+            <if test="originalFileName != null">original_file_name = #{originalFileName},</if>
+            <if test="storedFilePath != null">stored_file_path = #{storedFilePath},</if>
+            <if test="sourceText != null">source_text = #{sourceText},</if>
+            <if test="resultJson != null">result_json = #{resultJson},</if>
+            <if test="entityCount != null">entity_count = #{entityCount},</if>
+            <if test="llmModel != null">llm_model = #{llmModel},</if>
+            <if test="completedTime != null">completed_time = #{completedTime},</if>
+            <if test="errorMessage != null">error_message = #{errorMessage},</if>
             <if test="updateBy != null and updateBy != ''">update_by = #{updateBy},</if>
             <if test="remark != null and remark != ''">remark = #{remark},</if>
             update_time = sysdate()
         </trim>
         where id = #{id}
     </update>
+
+    <update id="updatePdfParseResult" parameterType="com.ruoyi.business.data.pdf.domain.PdfParse">
+        update business_data_pdf
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="status != null and status != ''">status = #{status},</if>
+            <if test="resultJson != null">result_json = #{resultJson},</if>
+            <if test="entityCount != null">entity_count = #{entityCount},</if>
+            <if test="llmModel != null">llm_model = #{llmModel},</if>
+            <if test="completedTime != null">completed_time = #{completedTime},</if>
+            <if test="errorMessage != null">error_message = #{errorMessage},</if>
+            <if test="updateBy != null and updateBy != ''">update_by = #{updateBy},</if>
+            update_time = sysdate()
+        </trim>
+        where id = #{id}
+    </update>
+
+    <update id="retryPdfParse">
+        update business_data_pdf
+        set status = '1', error_message = '', completed_time = null, update_by = #{updateBy}, update_time = sysdate()
+        where id = #{id} and status = '3'
+    </update>
+
+    <update id="markInterruptedProcessingTasks">
+        update business_data_pdf
+        set status = '3', error_message = #{errorMessage}, completed_time = sysdate(), update_by = #{updateBy}, update_time = sysdate()
+        where status = '1'
+    </update>
+
+    <update id="updateStoredFilePath">
+        update business_data_pdf
+        set stored_file_path = #{storedFilePath}, update_by = #{updateBy}, update_time = sysdate()
+        where id = #{id}
+    </update>
+
+    <select id="selectLegacyProfileDocuments" resultMap="PdfParseResult">
+        select p.id, p.task_name, p.status, p.original_file_name, p.stored_file_path, p.source_text, p.result_json,
+               p.entity_count, p.llm_model, p.completed_time, p.error_message, p.create_by, p.create_time, p.update_by,
+               p.update_time, p.remark
+        from business_data_pdf p
+        where p.stored_file_path like '/profile/%'
+        order by p.id
+    </select>
+
+    <select id="countKnowledgeVersionsByPdfTaskId" resultType="int">
+        select count(1)
+        from business_kb_version v
+        left join business_knowledge source on source.id = v.source_id
+        where source.source_code = concat('DATA-PDF-', #{taskId})
+    </select>
 
     <delete id="deletePdfParseById" parameterType="Long">
         delete from business_data_pdf where id = #{id}

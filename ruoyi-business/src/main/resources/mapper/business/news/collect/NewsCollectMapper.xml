@@ -8,6 +8,13 @@
         <id property="id" column="id"/>
         <result property="taskName" column="task_name"/>
         <result property="status" column="status"/>
+        <result property="sourceName" column="source_name"/><result property="triggerType" column="trigger_type"/>
+        <result property="startedTime" column="started_time"/><result property="completedTime" column="completed_time"/>
+        <result property="fetchedCount" column="fetched_count"/><result property="insertedCount" column="inserted_count"/><result property="updatedCount" column="updated_count"/>
+        <result property="duplicateCount" column="duplicate_count"/><result property="filteredCount" column="filtered_count"/><result property="failedCount" column="failed_count"/>
+        <result property="mysqlInsertedCount" column="mysql_inserted_count"/><result property="mysqlUpdatedCount" column="mysql_updated_count"/><result property="mysqlExistingCount" column="mysql_existing_count"/><result property="statisticsVersion" column="statistics_version"/>
+        <result property="crawlRunId" column="crawl_run_id"/><result property="errorMessage" column="error_message"/>
+        <result property="publishTimeStart" column="publish_time_start"/><result property="publishTimeEnd" column="publish_time_end"/><result property="forceFlag" column="force_flag"/>
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
         <result property="updateBy" column="update_by"/>
@@ -16,16 +23,23 @@
     </resultMap>
 
     <sql id="selectNewsCollectVo">
-        select id, task_name, status, create_by, create_time, update_by, update_time, remark from business_news_collect
+        select id, task_name, source_name, trigger_type, status, started_time, completed_time, fetched_count, inserted_count, updated_count, duplicate_count, filtered_count, failed_count, mysql_inserted_count, mysql_updated_count, mysql_existing_count, statistics_version, crawl_run_id, error_message, publish_time_start, publish_time_end, force_flag, create_by, create_time, update_by, update_time, remark from business_news_collect
     </sql>
 
     <select id="selectNewsCollectList" parameterType="com.ruoyi.business.news.collect.domain.NewsCollect" resultMap="NewsCollectResult">
         <include refid="selectNewsCollectVo"/>
         <where>
             <if test="taskName != null and taskName != ''">and task_name like concat('%', #{taskName}, '%')</if>
+            <if test="sourceName != null and sourceName != ''">and source_name = #{sourceName}</if>
             <if test="status != null and status != ''">and status = #{status}</if>
         </where>
         order by create_time desc
+    </select>
+
+    <select id="selectHistoricalSourceNames" resultType="String">
+        select distinct source_name from business_news_collect
+        where source_name is not null and source_name != ''
+        order by source_name
     </select>
 
     <select id="selectNewsCollectById" parameterType="Long" resultMap="NewsCollectResult">
@@ -37,14 +51,26 @@
         insert into business_news_collect
         <trim prefix="(" suffix=")" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">task_name,</if>
+            <if test="sourceName != null and sourceName != ''">source_name,</if>
+            <if test="triggerType != null and triggerType != ''">trigger_type,</if>
             <if test="status != null and status != ''">status,</if>
+            <if test="startedTime != null">started_time,</if>
+            <if test="publishTimeStart != null and publishTimeStart != ''">publish_time_start,</if>
+            <if test="publishTimeEnd != null and publishTimeEnd != ''">publish_time_end,</if>
+            <if test="forceFlag != null">force_flag,</if>
             <if test="createBy != null and createBy != ''">create_by,</if>
             <if test="remark != null and remark != ''">remark,</if>
             create_time
         </trim>
         <trim prefix="values (" suffix=")" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">#{taskName},</if>
+            <if test="sourceName != null and sourceName != ''">#{sourceName},</if>
+            <if test="triggerType != null and triggerType != ''">#{triggerType},</if>
             <if test="status != null and status != ''">#{status},</if>
+            <if test="startedTime != null">#{startedTime},</if>
+            <if test="publishTimeStart != null and publishTimeStart != ''">#{publishTimeStart},</if>
+            <if test="publishTimeEnd != null and publishTimeEnd != ''">#{publishTimeEnd},</if>
+            <if test="forceFlag != null">#{forceFlag},</if>
             <if test="createBy != null and createBy != ''">#{createBy},</if>
             <if test="remark != null and remark != ''">#{remark},</if>
             sysdate()
@@ -56,12 +82,19 @@
         <trim prefix="SET" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">task_name = #{taskName},</if>
             <if test="status != null and status != ''">status = #{status},</if>
+            <if test="publishTimeStart != null">publish_time_start = #{publishTimeStart},</if>
+            <if test="publishTimeEnd != null">publish_time_end = #{publishTimeEnd},</if>
+            <if test="forceFlag != null">force_flag = #{forceFlag},</if>
             <if test="updateBy != null and updateBy != ''">update_by = #{updateBy},</if>
             <if test="remark != null and remark != ''">remark = #{remark},</if>
             update_time = sysdate()
         </trim>
         where id = #{id}
     </update>
+    <update id="updateNewsCollectResult" parameterType="com.ruoyi.business.news.collect.domain.NewsCollect">
+      update business_news_collect set status=#{status}, completed_time=#{completedTime}, fetched_count=#{fetchedCount}, inserted_count=#{insertedCount}, updated_count=#{updatedCount}, duplicate_count=#{duplicateCount}, filtered_count=#{filteredCount}, failed_count=#{failedCount}, mysql_inserted_count=#{mysqlInsertedCount}, mysql_updated_count=#{mysqlUpdatedCount}, mysql_existing_count=#{mysqlExistingCount}, statistics_version=#{statisticsVersion}, crawl_run_id=#{crawlRunId}, error_message=#{errorMessage}, update_by=#{updateBy}, update_time=sysdate() where id=#{id}
+    </update>
+    <update id="markInterruptedRunningTasks">update business_news_collect set status='3', completed_time=sysdate(), error_message='新闻采集任务因服务重启或中断未完成，请重新采集。', update_by='system', update_time=sysdate() where status='1'</update>
 
     <delete id="deleteNewsCollectById" parameterType="Long">
         delete from business_news_collect where id = #{id}

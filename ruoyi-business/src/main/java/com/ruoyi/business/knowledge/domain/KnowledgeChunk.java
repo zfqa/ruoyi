@@ -1,5 +1,8 @@
 package com.ruoyi.business.knowledge.domain;
 
+import java.util.List;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 public class KnowledgeChunk
 {
     private Long id;
@@ -22,6 +25,12 @@ public class KnowledgeChunk
     private String sourceType;
     private String versionNo;
     private Double score;
+    /**
+     * 仅用于运行时保存被合并指标的真实数据库切片。引用定位必须落到其中一个原始切片，
+     * 不能使用合并文本中的虚拟偏移量。
+     */
+    @JsonIgnore
+    private List<KnowledgeChunk> sourceFragments;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -63,4 +72,6 @@ public class KnowledgeChunk
     public void setVersionNo(String versionNo) { this.versionNo = versionNo; }
     public Double getScore() { return score; }
     public void setScore(Double score) { this.score = score; }
+    public List<KnowledgeChunk> getSourceFragments() { return sourceFragments; }
+    public void setSourceFragments(List<KnowledgeChunk> sourceFragments) { this.sourceFragments = sourceFragments; }
 }

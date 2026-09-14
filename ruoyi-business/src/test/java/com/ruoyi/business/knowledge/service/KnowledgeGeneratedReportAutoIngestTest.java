@@ -56,6 +56,10 @@ class KnowledgeGeneratedReportAutoIngestTest
         when(mapper.selectVersionById(22L)).thenAnswer(invocation -> versionRef.get());
         when(mapper.selectIngestTaskById(32L)).thenAnswer(invocation -> taskRef.get());
         when(mapper.selectIngestTaskByVersionId(22L)).thenAnswer(invocation -> taskRef.get());
+        doAnswer(invocation -> {
+            sourceRef.get().setCurrentVersionId(invocation.getArgument(1));
+            return 1;
+        }).when(mapper).promoteCurrentVersionIfNewer(any(), any(), any());
         doAnswer(invocation -> { chunks.add(invocation.getArgument(0)); return 1; })
             .when(mapper).insertChunk(any(KnowledgeChunk.class));
         doAnswer(invocation -> { ((Runnable) invocation.getArgument(0)).run(); return null; })

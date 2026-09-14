@@ -57,6 +57,9 @@ dump.rdb
 __pycache__/
 *.py[cod]
 .pytest_cache/
+agent-service/data/
+agent-service/reports/
+agent-service/.venv/
 
 !*/build/*.java
 !*/build/*.html

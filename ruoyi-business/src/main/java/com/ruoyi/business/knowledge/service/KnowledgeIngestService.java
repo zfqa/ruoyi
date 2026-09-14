@@ -19,7 +19,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.ruoyi.business.agent.client.AgentServiceClient;
+import com.ruoyi.business.agent.client.AgentServiceClientException;
 import com.ruoyi.business.knowledge.domain.KnowledgeBase;
 import com.ruoyi.business.knowledge.domain.KnowledgeChunk;
 import com.ruoyi.business.knowledge.domain.KnowledgeIngestTask;
@@ -40,7 +43,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class KnowledgeIngestService
 {
-    private static final String PARSER_VERSION = "kb-poc-1";
+    private static final String PARSER_VERSION = "kb-poc-2-layout-aware";
     private static final int CHUNK_SIZE = 1200;
     private static final int CHUNK_OVERLAP = 120;
 
@@ -54,6 +57,8 @@ public class KnowledgeIngestService
     private KnowledgeGraphService graphService;
     private final KnowledgeMetricQueryRouter metricQueryRouter = new KnowledgeMetricQueryRouter();
     private KnowledgeReportProjectionService reportProjectionService;
+    private AgentServiceClient agentServiceClient;
+    private boolean agentDocumentEnabled;
 
     public KnowledgeIngestService(KnowledgeBaseMapper mapper, KnowledgeFileStorage storage,
         IAiReportService reportService, @Qualifier("knowledgeTaskExecutor") ThreadPoolTaskExecutor executor,
@@ -87,10 +92,18 @@ public class KnowledgeIngestService
         this.reportProjectionService = reportProjectionService;
     }
 
+    @Autowired(required = false)
+    public void setAgentServiceClient(AgentServiceClient agentServiceClient) { this.agentServiceClient = agentServiceClient; }
+
+    @Value("${business.knowledge.agent-document-enabled:true}")
+    public void setAgentDocumentEnabled(boolean enabled) { this.agentDocumentEnabled = enabled; }
+
     public KnowledgeIngestTask submitPdf(Long sourceId, String versionNo, MultipartFile file, String username) throws IOException
     {
         KnowledgeBase source = requireSource(sourceId, "PDF");
-        KnowledgeFileStorage.StoredFile stored = storage.savePdf(file);
+        String uploadedName = file == null ? "" : firstNonBlank(file.getOriginalFilename());
+        if (!uploadedName.toLowerCase(Locale.ROOT).endsWith(".pdf")) throw new IOException("PDF知识源仅支持PDF文件");
+        KnowledgeFileStorage.StoredFile stored = agentDocumentEnabled ? storage.saveDocument(file) : storage.savePdf(file);
         try
         {
             KnowledgeVersion version = createVersion(source, versionNo, stored.originalName(), stored.path().toString(), "", stored.sha256(), username);
@@ -101,6 +114,43 @@ public class KnowledgeIngestService
             storage.delete(stored.path());
             throw e;
         }
+    }
+
+    /**
+     * Publish a successful PDF/PPTX parsing snapshot without invoking Python again.
+     * The original parsing task remains the workflow record; MySQL knowledge tables
+     * are the only published knowledge store.
+     */
+    public synchronized KnowledgeIngestTask submitParsedDocument(Long originTaskId, String taskName,
+        String originalName, Path sourceFile, JSONObject parsedResult, String username) throws IOException
+    {
+        if (originTaskId == null || parsedResult == null) throw new IllegalArgumentException("文档解析结果为空，无法发布知识库");
+        if (!"success".equalsIgnoreCase(parsedResult.getString("status")) || !parsedResult.getBooleanValue("supported"))
+            throw new IllegalArgumentException("仅允许发布解析成功的文档");
+        String sourceCode = "DATA-PDF-" + originTaskId;
+        KnowledgeBase source = mapper.selectKnowledgeBaseBySourceCode(sourceCode);
+        if (source == null)
+        {
+            source = new KnowledgeBase(); source.setSourceCode(sourceCode);
+            source.setSourceName(firstNonBlank(taskName, stringName(sourceFile), sourceCode)); source.setSourceType("PDF");
+            source.setConfidentiality("INTERNAL"); source.setAllowedPurpose("知识问答、文档分析及来源追溯");
+            source.setAllowedRoleIds(""); source.setEnabled("1"); source.setStatus("0"); source.setCreateBy(username);
+            mapper.insertKnowledgeBase(source);
+        }
+        KnowledgeFileStorage.StoredFile stored = storage.importDocument(sourceFile, sanitizeOriginalName(originalName));
+        KnowledgeVersion existing = mapper.selectVersionByHash(source.getId(), stored.sha256());
+        if (existing != null)
+        {
+            storage.delete(stored.path());
+            KnowledgeIngestTask existingTask = mapper.selectIngestTaskByVersionId(existing.getId());
+            if (existingTask != null) return existingTask;
+            throw new IllegalStateException("该文档版本已存在");
+        }
+        String versionNo = "document-" + originTaskId + "-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+        KnowledgeVersion version = createVersion(source, versionNo, stored.originalName(), stored.path().toString(), "",
+            stored.sha256(), username);
+        KnowledgeBase actualSource = source;
+        return submit(version, username, () -> processAgentResult(actualSource, version, parsedResult));
     }
 
     public KnowledgeIngestTask submitNews(Long sourceId, String versionNo, String url, String title, String username) throws Exception
@@ -128,6 +178,46 @@ public class KnowledgeIngestService
         String provisionalHash = storage.sha256("PENDING:" + uri + ":" + System.nanoTime());
         KnowledgeVersion version = createVersion(source, versionNo, actualTitle, "", uri.toString(), provisionalHash, username);
         return submit(version, username, () -> processNews(source, version, actualTitle, uri));
+    }
+
+    /**
+     * Publish one crawler article into the existing unified knowledge tables.
+     * Each article owns a stable source so updates create versions instead of replacing another article.
+     */
+    public synchronized KnowledgeIngestTask submitCollectedNews(Long articleId, String sourceName, String sourceSite,
+        String title, String content, String url, String publishedAt, String crawledAt, String contentHash,
+        String username) throws Exception
+    {
+        if (articleId == null) throw new IllegalArgumentException("新闻文章ID不能为空");
+        String normalized = normalizeText(content);
+        if (normalized.length() < 20) throw new IllegalArgumentException("新闻正文至少20个字符");
+        URI uri = validateExternalUri(url);
+        String actualHash = clean(contentHash).isBlank() ? storage.sha256(normalized) : clean(contentHash);
+        String sourceCode = "NEWS-ARTICLE-" + articleId;
+        KnowledgeBase source = mapper.selectKnowledgeBaseBySourceCode(sourceCode);
+        if (source == null)
+        {
+            source = new KnowledgeBase(); source.setSourceCode(sourceCode);
+            source.setSourceName(firstNonBlank(title, sourceName, sourceCode)); source.setSourceType("NEWS");
+            source.setConfidentiality("INTERNAL"); source.setAllowedPurpose("知识问答、新闻分析及来源追溯");
+            source.setAllowedRoleIds(""); source.setEnabled("1"); source.setStatus("0"); source.setCreateBy(username);
+            mapper.insertKnowledgeBase(source);
+        }
+        KnowledgeVersion existing = mapper.selectVersionByHash(source.getId(), actualHash);
+        if (existing != null)
+        {
+            KnowledgeIngestTask task = mapper.selectIngestTaskByVersionId(existing.getId());
+            if (task != null) return task;
+        }
+        String versionNo = "news-" + articleId + "-" + actualHash.substring(0, Math.min(12, actualHash.length()));
+        KnowledgeVersion version = createVersion(source, versionNo, title, "", uri.toString(), actualHash, username);
+        version.setPublishedTime(parsePublishedTime(publishedAt)); mapper.updateVersion(version);
+        JSONObject evidence = new JSONObject(); evidence.put("kind", "NEWS"); evidence.put("news_id", articleId);
+        evidence.put("source_name", clean(sourceName)); evidence.put("source_site", clean(sourceSite));
+        evidence.put("published_at", clean(publishedAt)); evidence.put("crawled_at", clean(crawledAt));
+        evidence.put("original_url", uri.toString()); evidence.put("content_hash", actualHash);
+        KnowledgeBase actualSource = source;
+        return submit(version, username, () -> processCollectedNews(actualSource, version, title, normalized, evidence.toJSONString()));
     }
 
     /** 导入爬虫输出的新闻JSON批次；每条新闻保留独立标题、时间、站点和原文URL。 */
@@ -301,10 +391,9 @@ public class KnowledgeIngestService
             version = mapper.selectVersionById(versionId);
             task.setStatus("2"); task.setProgress(100); task.setCurrentStage("入库完成"); task.setFinishedTime(LocalDateTime.now());
             mapper.updateIngestTask(task);
-            version.setStatus("2"); version.setErrorMessage(""); mapper.updateVersion(version);
-            KnowledgeBase source = mapper.selectKnowledgeBaseById(version.getSourceId());
-            source.setCurrentVersionId(version.getId()); source.setStatus("2"); source.setRemark("当前版本：" + version.getVersionNo());
-            mapper.updateKnowledgeBase(source);
+            version.setStatus("2"); mapper.updateVersion(version);
+            // 版本ID按提交顺序递增；原子条件更新防止较早任务后完成时覆盖较新成功版本。
+            mapper.promoteCurrentVersionIfNewer(version.getSourceId(), version.getId(), "当前版本：" + version.getVersionNo());
         }
         catch (Exception e)
         {
@@ -314,23 +403,124 @@ public class KnowledgeIngestService
 
     private void processPdf(KnowledgeBase source, KnowledgeVersion version) throws IOException
     {
+        if (agentDocumentEnabled)
+        {
+            processAgentDocument(source, version);
+            return;
+        }
         clearGraph(version.getId());
         mapper.deleteChunksByVersionId(version.getId());
         int number = 0;
+        List<Integer> imageOnlyPages = new ArrayList<>();
         try (PDDocument document = Loader.loadPDF(Path.of(version.getStoredPath()).toFile()))
         {
             PDFTextStripper stripper = new PDFTextStripper();
+            // 按视觉坐标排序并保留更多换行，降低表格文本被串成无意义数字流的概率。
+            stripper.setSortByPosition(true);
+            stripper.setAddMoreFormatting(true);
             version.setPageCount(document.getNumberOfPages());
             for (int page = 1; page <= document.getNumberOfPages(); page++)
             {
                 stripper.setStartPage(page); stripper.setEndPage(page);
                 String text = KnowledgeTextProcessor.cleanPdfText(stripper.getText(document));
+                if (text.isBlank()) imageOnlyPages.add(page);
                 number = insertTextChunks(source, version, source.getSourceName(), text, page, page, null, null, null, number);
                 updateProgress(version.getId(), number, 10 + (int)(75.0 * page / Math.max(1, document.getNumberOfPages())));
             }
         }
         if (number == 0) throw new IOException("PDF未提取到文字，可能是扫描版文件，需要OCR");
+        if (!imageOnlyPages.isEmpty())
+            version.setErrorMessage("解析警告：以下页面没有可检索文本层，需要OCR/图片解析：" + imageOnlyPages);
         completeChunks(version, number);
+    }
+
+    private void processAgentDocument(KnowledgeBase source, KnowledgeVersion version) throws IOException
+    {
+        if (agentServiceClient == null) throw new IOException("Python文档解析服务未配置");
+        JSONObject result;
+        try
+        {
+            String lower = version.getOriginalName() == null ? "" : version.getOriginalName().toLowerCase(Locale.ROOT);
+            String contentType = lower.endsWith(".pptx")
+                ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                : lower.endsWith(".txt") ? "text/plain" : "application/pdf";
+            result = agentServiceClient.parseDocument(Path.of(version.getStoredPath()), version.getOriginalName(), contentType);
+        }
+        catch (AgentServiceClientException e)
+        {
+            throw new IOException("Python文档解析失败：" + e.getMessage(), e);
+        }
+        processAgentResult(source, version, result);
+    }
+
+    private void processAgentResult(KnowledgeBase source, KnowledgeVersion version, JSONObject result) throws IOException
+    {
+        if (!"success".equalsIgnoreCase(result.getString("status")) || !result.getBooleanValue("supported"))
+            throw new IOException("文档解析失败：" + firstNonBlank(result.getString("message"), result.getString("reason"), "未知错误"));
+        if (result.getBooleanValue("indexed") || result.getBooleanValue("index_to_kb")
+            || result.getBooleanValue("persist_review") || result.getIntValue("review_count") > 0)
+            throw new IOException("解析服务违反统一入库约束，已拒绝结果");
+
+        clearGraph(version.getId());
+        mapper.deleteChunksByVersionId(version.getId());
+        JSONArray chunks = result.getJSONArray("semantic_chunks");
+        if (chunks == null || chunks.isEmpty()) chunks = result.getJSONArray("chunk_data");
+        int number = 0;
+        if (chunks != null)
+        {
+            for (int index = 0; index < chunks.size(); index++)
+            {
+                JSONObject item = chunks.getJSONObject(index);
+                if (item == null) continue;
+                JSONObject metadata = item.getJSONObject("metadata");
+                if (metadata != null && metadata.containsKey("indexable")
+                    && !metadata.getBooleanValue("indexable")) continue;
+                JSONObject locator = item.getJSONObject("source");
+                Integer start = locator == null ? null : firstInteger(locator, "page_start", "slide_start", "page", "slide");
+                Integer end = locator == null ? null : firstInteger(locator, "page_end", "slide_end", "page", "slide");
+                JSONObject evidence = new JSONObject();
+                evidence.put("kind", "PARSED_DOCUMENT"); evidence.put("chunk_type", item.getString("chunk_type"));
+                evidence.put("source", locator); evidence.put("metadata", metadata);
+                number = insertTextChunks(source, version,
+                    firstNonBlank(item.getString("title"), version.getOriginalName()), item.getString("content"),
+                    start, end, null, null, evidence.toJSONString(), number);
+            }
+        }
+        if (number == 0) throw new IOException("解析结果没有可入库的语义切片");
+        JSONObject validation = result.getJSONObject("validation");
+        if (validation != null)
+        {
+            JSONObject validationMetadata = validation.getJSONObject("metadata");
+            if (validationMetadata != null && validationMetadata.getInteger("pages") != null)
+                version.setPageCount(validationMetadata.getInteger("pages"));
+        }
+        JSONObject parseSummary = new JSONObject();
+        parseSummary.put("validation", validation);
+        parseSummary.put("warnings", result.getJSONArray("warning"));
+        parseSummary.put("semantic_chunk_stats", result.getJSONObject("semantic_chunk_stats"));
+        version.setErrorMessage("解析校验：" + truncate(parseSummary.toJSONString(), 900));
+        completeChunks(version, number);
+    }
+
+    private String sanitizeOriginalName(String value)
+    {
+        return value == null || value.isBlank() ? "document.pdf" : Path.of(value).getFileName().toString();
+    }
+
+    private String stringName(Path value)
+    {
+        return value == null || value.getFileName() == null ? "文档解析任务" : value.getFileName().toString();
+    }
+
+    private Integer firstInteger(JSONObject value, String... keys)
+    {
+        for (String key : keys) if (value.containsKey(key) && value.getInteger(key) != null) return value.getInteger(key);
+        return null;
+    }
+
+    private String truncate(String value, int maximum)
+    {
+        return value == null || value.length() <= maximum ? value : value.substring(0, maximum);
     }
 
     private void processText(KnowledgeBase source, KnowledgeVersion version, String title, String text, Long reportId) throws IOException
@@ -367,6 +557,18 @@ public class KnowledgeIngestService
         Path snapshot = storage.saveNewsSnapshot(text, version.getContentSha256());
         version.setStoredPath(snapshot.toString()); version.setFetchedTime(LocalDateTime.now()); mapper.updateVersion(version);
         processText(source, version, title, text, null);
+    }
+
+    private void processCollectedNews(KnowledgeBase source, KnowledgeVersion version, String title, String text,
+        String evidenceJson) throws IOException
+    {
+        Path snapshot = storage.saveNewsSnapshot(text, version.getContentSha256());
+        version.setStoredPath(snapshot.toString()); version.setFetchedTime(LocalDateTime.now()); mapper.updateVersion(version);
+        clearGraph(version.getId()); mapper.deleteChunksByVersionId(version.getId());
+        int count = insertTextChunks(source, version, title, text, null, null, version.getSourceUrl(), null,
+            evidenceJson, "", 0);
+        if (count == 0) throw new IOException("新闻没有可入库正文");
+        completeChunks(version, count);
     }
 
     private void processPolicy(KnowledgeBase source, KnowledgeVersion version, String title, String text,

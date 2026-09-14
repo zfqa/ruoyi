@@ -12,6 +12,9 @@ public interface NewsCollectMapper
 {
     public List<NewsCollect> selectNewsCollectList(NewsCollect newsCollect);
 
+    /** Source names retained by historical tasks, including sources since disabled in YAML. */
+    public List<String> selectHistoricalSourceNames();
+
     public NewsCollect selectNewsCollectById(Long id);
 
     public int insertNewsCollect(NewsCollect newsCollect);
@@ -21,4 +24,6 @@ public interface NewsCollectMapper
     public int deleteNewsCollectById(Long id);
 
     public int deleteNewsCollectByIds(Long[] ids);
+    public int updateNewsCollectResult(NewsCollect task);
+    public int markInterruptedRunningTasks();
 }

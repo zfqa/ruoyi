@@ -2,7 +2,11 @@ package com.ruoyi.business.knowledge.controller;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
+import java.nio.file.Files;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -39,6 +43,7 @@ import com.ruoyi.business.knowledge.service.KnowledgeGraphService;
 @RequestMapping("/business/knowledge")
 public class KnowledgeBaseController extends BaseController
 {
+    private static final Set<String> SOURCE_TYPES = Set.of("PDF", "NEWS", "POLICY", "REPORT");
     @Autowired
     private IKnowledgeBaseService knowledgeBaseService;
 
@@ -59,7 +64,8 @@ public class KnowledgeBaseController extends BaseController
     public TableDataInfo list(KnowledgeBase knowledgeBase)
     {
         startPage();
-        List<KnowledgeBase> list = knowledgeBaseService.selectKnowledgeBaseList(knowledgeBase);
+        List<KnowledgeBase> list = knowledgeBaseService.selectAuthorizedKnowledgeBaseList(knowledgeBase, roleIds(),
+            getLoginUser().getUser().isAdmin());
         return getDataTable(list);
     }
 
@@ -68,7 +74,8 @@ public class KnowledgeBaseController extends BaseController
     @PostMapping("/export")
     public void export(HttpServletResponse response, KnowledgeBase knowledgeBase)
     {
-        List<KnowledgeBase> list = knowledgeBaseService.selectKnowledgeBaseList(knowledgeBase);
+        List<KnowledgeBase> list = knowledgeBaseService.selectAuthorizedKnowledgeBaseList(knowledgeBase, roleIds(),
+            getLoginUser().getUser().isAdmin());
         ExcelUtil<KnowledgeBase> util = new ExcelUtil<KnowledgeBase>(KnowledgeBase.class);
         util.exportExcel(response, list, "固定文件知识库及来源展示数据");
     }
@@ -77,7 +84,9 @@ public class KnowledgeBaseController extends BaseController
     @GetMapping(value = "/{id}")
     public AjaxResult getInfo(@PathVariable("id") Long id)
     {
-        return success(knowledgeBaseService.selectKnowledgeBaseById(id));
+        KnowledgeBase source = knowledgeBaseService.selectAuthorizedKnowledgeBaseById(id, roleIds(),
+            getLoginUser().getUser().isAdmin());
+        return source == null ? AjaxResult.error("资料不存在或无权访问") : success(source);
     }
 
     @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
@@ -87,6 +96,7 @@ public class KnowledgeBaseController extends BaseController
     {
         knowledgeBase.setCreateBy(getUsername());
         if (knowledgeBase.getSourceType() == null || knowledgeBase.getSourceType().isBlank()) knowledgeBase.setSourceType("PDF");
+        validateSourceType(knowledgeBase.getSourceType());
         if (knowledgeBase.getConfidentiality() == null || knowledgeBase.getConfidentiality().isBlank()) knowledgeBase.setConfidentiality("INTERNAL");
         if (knowledgeBase.getEnabled() == null || knowledgeBase.getEnabled().isBlank()) knowledgeBase.setEnabled("1");
         if (knowledgeBase.getStatus() == null || knowledgeBase.getStatus().isBlank()) knowledgeBase.setStatus("0");
@@ -98,8 +108,16 @@ public class KnowledgeBaseController extends BaseController
     @PutMapping
     public AjaxResult edit(@RequestBody KnowledgeBase knowledgeBase)
     {
+        if (knowledgeBase.getSourceType() != null && !knowledgeBase.getSourceType().isBlank())
+            validateSourceType(knowledgeBase.getSourceType());
         knowledgeBase.setUpdateBy(getUsername());
         return toAjax(knowledgeBaseService.updateKnowledgeBase(knowledgeBase));
+    }
+
+    private void validateSourceType(String sourceType)
+    {
+        if (!SOURCE_TYPES.contains(sourceType))
+            throw new IllegalArgumentException("知识分类仅支持PDF文档、新闻、政策和生成报告");
     }
 
     @PreAuthorize("@ss.hasPermi('business:knowledge:remove')")
@@ -231,6 +249,9 @@ public class KnowledgeBaseController extends BaseController
     @GetMapping("/{sourceId}/versions")
     public AjaxResult versions(@PathVariable Long sourceId)
     {
+        KnowledgeBase source = knowledgeBaseService.selectAuthorizedKnowledgeBaseById(sourceId, roleIds(),
+            getLoginUser().getUser().isAdmin());
+        if (source == null) return AjaxResult.error("资料不存在或无权访问");
         return success(knowledgeIngestService.getVersions(sourceId).stream().map(this::versionView).toList());
     }
 
@@ -288,6 +309,13 @@ public class KnowledgeBaseController extends BaseController
         {
             return AjaxResult.error(e.getMessage());
         }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/qa-tasks")
+    public AjaxResult qaTaskHistory(@RequestParam(value = "limit", defaultValue = "20") int limit)
+    {
+        return success(knowledgeQaTaskService.history(getUsername(), getLoginUser().getUser().isAdmin(), limit));
     }
 
     @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
@@ -367,6 +395,21 @@ public class KnowledgeBaseController extends BaseController
         {
             return AjaxResult.error(e.getMessage());
         }
+    }
+
+    /** 通过切片权限校验后流式返回PDF原件；服务器物理路径不会暴露给浏览器。 */
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/evidence/{chunkId}/file")
+    public void evidenceFile(@PathVariable Long chunkId, HttpServletResponse response) throws java.io.IOException
+    {
+        KnowledgeGraphService.SourceFile sourceFile = knowledgeGraphService.sourceFile(chunkId, roleIds(),
+            getLoginUser().getUser().isAdmin());
+        String encoded = URLEncoder.encode(sourceFile.originalName(), StandardCharsets.UTF_8).replace("+", "%20");
+        response.setContentType("application/pdf");
+        response.setHeader("Cache-Control", "no-store");
+        response.setHeader("Content-Disposition", "inline; filename*=UTF-8''" + encoded);
+        response.setContentLengthLong(Files.size(sourceFile.path()));
+        Files.copy(sourceFile.path(), response.getOutputStream());
     }
 
     private List<Long> roleIds()

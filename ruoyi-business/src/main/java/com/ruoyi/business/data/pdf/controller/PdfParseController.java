@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.multipart.MultipartFile;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
@@ -20,6 +22,8 @@ import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.utils.poi.ExcelUtil;
 import com.ruoyi.business.data.pdf.domain.PdfParse;
 import com.ruoyi.business.data.pdf.service.IPdfParseService;
+import com.ruoyi.business.data.pdf.service.PdfKnowledgePublishService;
+import com.ruoyi.business.data.pdf.service.PdfParseRetryService;
 
 /**
  * 文本型PDF正文与规则表格解析 控制器
@@ -32,6 +36,12 @@ public class PdfParseController extends BaseController
 {
     @Autowired
     private IPdfParseService pdfParseService;
+
+    @Autowired
+    private PdfKnowledgePublishService pdfKnowledgePublishService;
+
+    @Autowired
+    private PdfParseRetryService pdfParseRetryService;
 
     @PreAuthorize("@ss.hasPermi('business:data:pdf:list')")
     @GetMapping("/list")
@@ -67,6 +77,49 @@ public class PdfParseController extends BaseController
         return toAjax(pdfParseService.insertPdfParse(pdfParse));
     }
 
+    /**
+     * 上传 PDF/PPTX，复用当前 PDF 任务模块完成保存、解析和结果持久化。
+     */
+    @PreAuthorize("@ss.hasPermi('business:data:pdf:add')")
+    @Log(title = "文档上传并解析", businessType = BusinessType.IMPORT)
+    @PostMapping("/parse")
+    public AjaxResult parse(@RequestParam("file") MultipartFile file,
+            @RequestParam(value = "taskName", required = false) String taskName)
+    {
+        try
+        {
+            return success(pdfParseService.parseDocument(file, taskName));
+        }
+        catch (IllegalArgumentException e)
+        {
+            return error(e.getMessage());
+        }
+        catch (IllegalStateException e)
+        {
+            return error("文档解析失败，请查看任务错误信息");
+        }
+    }
+
+    /** 将已有的解析快照发布到 RuoYi MySQL 知识库；不会重新调用 Python。 */
+    @PreAuthorize("@ss.hasPermi('business:data:pdf:edit')")
+    @Log(title = "文档发布知识库", businessType = BusinessType.UPDATE)
+    @PostMapping("/{id}/publish-knowledge")
+    public AjaxResult publishKnowledge(@PathVariable("id") Long id)
+    {
+        try { return success(pdfKnowledgePublishService.publish(id, getUsername())); }
+        catch (IllegalArgumentException | IllegalStateException e) { return error(e.getMessage()); }
+    }
+
+    /** 仅重新提交失败的原任务；保留既有 task id 和已保存的原文件。 */
+    @PreAuthorize("@ss.hasPermi('business:data:pdf:edit')")
+    @Log(title = "重新解析文档", businessType = BusinessType.UPDATE)
+    @PostMapping("/{id}/retry-parse")
+    public AjaxResult retryParse(@PathVariable("id") Long id)
+    {
+        try { return success(pdfParseRetryService.retry(id, getUsername())); }
+        catch (IllegalArgumentException | IllegalStateException e) { return error(e.getMessage()); }
+    }
+
     @PreAuthorize("@ss.hasPermi('business:data:pdf:edit')")
     @Log(title = "文本型PDF正文与规则表格解析", businessType = BusinessType.UPDATE)
     @PutMapping
@@ -80,6 +133,7 @@ public class PdfParseController extends BaseController
     @DeleteMapping("/{ids}")
     public AjaxResult remove(@PathVariable Long[] ids)
     {
-        return toAjax(pdfParseService.deletePdfParseByIds(ids));
+        try { return toAjax(pdfParseService.deletePdfParseByIds(ids)); }
+        catch (IllegalStateException e) { return error(e.getMessage()); }
     }
 }

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.business.news.collect.mapper.NewsCollectArticleMapper">
+  <insert id="upsert">
+    insert into business_news_collect_article(crawl_task_id,article_id,operation,mysql_operation,create_time)
+    values(#{taskId},#{articleId},#{operation},#{mysqlOperation},sysdate())
+    on duplicate key update mysql_operation = case
+      when mysql_operation is null or mysql_operation = '' then values(mysql_operation)
+      else mysql_operation end
+  </insert>
+  <select id="selectTaskArticles" resultType="java.util.HashMap">
+    select a.id articleId,a.title,a.source_name sourceName,a.published_at publishedAt,a.crawled_at crawledAt,
+           a.canonical_url canonicalUrl,r.operation,r.mysql_operation mysqlOperation,
+           case when k.id is null then false else true end knowledgeStored
+    from business_news_collect_article r join business_news_article a on a.id=r.article_id
+    left join business_knowledge k on k.source_type='NEWS' and k.source_code=concat('NEWS-ARTICLE-', a.id)
+    where r.crawl_task_id=#{taskId} order by r.id
+  </select>
+  <select id="selectTaskArticleIds" resultType="java.lang.Long">
+    select article_id from business_news_collect_article where crawl_task_id=#{taskId} order by id
+  </select>
+  <select id="countTaskArticle" resultType="int">
+    select count(1) from business_news_collect_article where crawl_task_id=#{taskId} and article_id=#{articleId}
+  </select>
+  <select id="countKnowledgeStored" resultType="int">
+    select count(1) from business_knowledge where source_type='NEWS' and source_code=concat('NEWS-ARTICLE-', #{articleId})
+  </select>
+  <delete id="deleteSelected">delete from business_news_collect_article where crawl_task_id=#{taskId} and article_id in <foreach collection="articleIds" item="id" open="(" separator="," close=")">#{id}</foreach></delete>
+  <delete id="deleteByTaskIds">
+    delete from business_news_collect_article where crawl_task_id in
+    <foreach collection="taskIds" item="taskId" open="(" separator="," close=")">
+      #{taskId}
+    </foreach>
+  </delete>
+</mapper>

@@ -1,6 +1,8 @@
 package com.ruoyi.business.report.controller;
 
 import java.util.List;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -20,6 +22,7 @@ import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.utils.poi.ExcelUtil;
 import com.ruoyi.business.report.domain.AiReport;
 import com.ruoyi.business.report.service.IAiReportService;
+import com.ruoyi.business.report.service.AiReportOfficeExportService;
 
 /**
  * AI分析与报告 控制器
@@ -32,6 +35,9 @@ public class AiReportController extends BaseController
 {
     @Autowired
     private IAiReportService aiReportService;
+
+    @Autowired
+    private AiReportOfficeExportService officeExportService;
 
     @PreAuthorize("@ss.hasPermi('business:report:list')")
     @GetMapping("/list")
@@ -65,6 +71,36 @@ public class AiReportController extends BaseController
     {
         AiReport report = aiReportService.selectLatestAiReportByImportTaskId(importTaskId);
         return report == null ? AjaxResult.error("该解析任务尚未生成报告") : success(report);
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:report:export')")
+    @Log(title = "AI分析报告Office导出", businessType = BusinessType.EXPORT)
+    @GetMapping("/{id}/export/{format}")
+    public void exportOffice(@PathVariable Long id, @PathVariable String format, HttpServletResponse response)
+        throws java.io.IOException
+    {
+        AiReport report = aiReportService.selectAiReportById(id);
+        if (report == null) throw new IllegalArgumentException("报告不存在");
+        if (!"2".equals(report.getStatus())) throw new IllegalArgumentException("仅支持导出生成成功的报告");
+        String normalized = format == null ? "" : format.toLowerCase();
+        String extension;
+        if ("word".equals(normalized) || "docx".equals(normalized))
+        {
+            extension = "docx";
+            response.setContentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        }
+        else if ("ppt".equals(normalized) || "pptx".equals(normalized))
+        {
+            extension = "pptx";
+            response.setContentType("application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        }
+        else throw new IllegalArgumentException("导出格式仅支持word或ppt");
+        String baseName = officeExportService.safeFileName(report.getTaskName());
+        String encoded = URLEncoder.encode(baseName + "." + extension, StandardCharsets.UTF_8).replace("+", "%20");
+        response.setHeader("Cache-Control", "no-store");
+        response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
+        if ("docx".equals(extension)) officeExportService.writeWord(report, response.getOutputStream());
+        else officeExportService.writePowerPoint(report, response.getOutputStream());
     }
 
     @PreAuthorize("@ss.hasPermi('business:report:add')")

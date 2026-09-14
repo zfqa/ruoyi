@@ -35,6 +35,12 @@
             <artifactId>fastjson2</artifactId>
         </dependency>
 
+        <!-- 结构化分析报告导出为Word/PPT -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+        </dependency>
+
         <!-- PDF知识库按页正文提取 -->
         <dependency>
             <groupId>org.apache.pdfbox</groupId>

@@ -1,0 +1,1704 @@
+# 真实站点功能联调配置。每个启用来源单次最多采集 50 篇、至多遍历配置的栏目页数。
+sources:
+  - name: "中国长安汽车集团"
+    enabled: true
+    domain: "ccag.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls:
+      - "https://www.ccag.cn/news/group"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      # 官网页面预加载的公开内容接口，返回稳定的 records/pageNum 分页。
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://prod-api.ccag.cn/cms/app/content/page"
+      query_params:
+        pageSize: 5
+        categoryCode: "jituan_code"
+      records_path: "data.records"
+      article_url_template: "/news/detail/{contentId}"
+      article_title_field: "contentTitle"
+      article_time_field: "publicDate"
+      url_base: "https://www.ccag.cn"
+      pagination:
+        page_param: "pageNum"
+        start_page: 1
+    selectors:
+      article_link_selector: "a.news-item"
+      title_selector: "h1.text-gray-900"
+      content_selector: null
+      publish_time_selector: "span.flex.items-center.gap-1.whitespace-nowrap + span.flex.items-center.gap-1.whitespace-nowrap"
+      next_page_selector: null
+
+  - name: "长安汽车全球官网"
+    enabled: true
+    domain: "globalchangan.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls:
+      - "https://www.globalchangan.com/cn/newsroom.html"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "a[href*='/newsroom/']"
+      title_selector: ".article-detail-title"
+      content_selector: ".article-detail-page"
+      publish_time_selector: ".article-detail-date"
+      next_page_selector: null
+
+  - name: "上汽集团"
+    enabled: true
+    domain: "saicmotor.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls:
+      - "https://www.saicmotor.com/chinese/xwzx/xwk/index.shtml"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    selectors:
+      article_link_selector: "a[href*='/chinese/xwzx/xwk/']:not([href$='index.shtml']):not([href*='index_'])"
+      article_time_selector: ".intera .date"
+      title_selector: "h1:not(.logo)"
+      content_selector: null
+      publish_time_selector: ".post-date"
+      next_page_selector: "a.page-next"
+
+  - name: "小鹏汽车"
+    enabled: true
+    domain: "xiaopeng.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls:
+      - "https://www.xiaopeng.com/news/"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    selectors:
+      article_link_selector: "a.card-item-wrap"
+      title_selector: "h1.art-title"
+      content_selector: ".art-content"
+      publish_time_selector: "span.date"
+      next_page_selector: null
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://www.xiaopeng.com/api/newsInfoAll/page"
+      query_params:
+        pageIndex: 1
+        pageSize: 17
+        categoryCode: "company_news"
+        contentType: 1
+      pagination:
+        page_param: "pageIndex"
+        start_page: 1
+      records_path: "data.list"
+      article_url_field: "contentDetailUrl"
+      article_title_field: "title"
+      article_time_field: "publishTime"
+
+  # 已确认需要 JavaScript 渲染的新闻来源；动态模式不改变后续解析和入库流程。
+  - name: "比亚迪汽车"
+    enabled: true
+    domain: "byd.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 新闻列表分页来自官网公开 CMS JSON 接口；详情页仍用 Chromium 渲染。
+    crawler_type: "dynamic"
+    detail_crawler_type: "dynamic"
+    wait_time: 5
+    column_urls:
+      - "https://www.byd.com/cn/news"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://cms-api.byd.com/es/search"
+      request_method: "POST"
+      request_body:
+        brandName: "byd"
+        siteName: "cn"
+        size: 12
+        type: "news"
+        sortField: "date"
+        year: ""
+      records_path: "data.records"
+      article_url_field: "url"
+      article_title_field: "title"
+      article_time_field: "date"
+      url_base: "https://www.byd.com"
+      pagination:
+        page_param: "page"
+        start_page: 1
+    selectors:
+      article_link_selector: "li.news-item a.news-item-link[href^='/cn/detail'], .cmp-news__cards-body .news-card a[href^='/cn/detail']"
+      article_title_selector: "li.news-item h3.news-item-title a.news-item-link"
+      article_time_selector: "li.news-item p.news-time"
+      title_selector: ".cmp-news__detail-title"
+      content_selector: ".cmp-news__detail-content"
+      publish_time_selector: ".cmp-news__detail-date"
+      next_page_selector: null
+
+  - name: "财联社汽车"
+    enabled: true
+    domain: "cls.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    wait_time: 5
+    column_urls:
+      - "https://www.cls.cn/depth?id=1119"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "a.f-w-b.c-222.h-t-d-u[href^='/detail/']"
+      title_selector: null
+      content_selector: ".detail-content"
+      publish_time_selector: "div.c-b.m-b-20.f-s-14.l-h-2.c-999 > div.f-l.m-r-10:nth-of-type(3)"
+      # 栏目页的“加载更多”为无 href 的 div；点击后追加下一批 /detail/ 链接。
+      next_page_selector: "div.f-s-14.t-a-c.m-a.m-t-24.m-b-24.c-p"
+
+  - name: "懂车帝"
+    enabled: true
+    domain: "dongchedi.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    wait_time: 5
+    column_urls:
+      - "https://www.dongchedi.com/"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: null
+      title_selector: null
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  # 以下为本轮车企官网静态采集适配测试来源。
+  - name: "广汽集团"
+    enabled: true
+    domain: "gacgroup.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls:
+      - "https://www.gacgroup.com/cn/news"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    # 官网数字分页通过公开 CMS JSON POST 接口加载，pageNo 为页面序号。
+    # 统一由 Structured Discovery 推进，详情页仍使用既有正式解析链路。
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://www.gacgroup.com/boss-cms-app/frontend/article/queryByPageForPublish"
+      request_method: "POST"
+      request_headers:
+        Referer: "https://www.gacgroup.com/cn/news"
+        Accept: "application/json, text/plain, */*"
+      request_body:
+        categoryCode: "COL-XWZX-QYDT"
+        beginTime: ""
+        searchKeyword: ""
+        pageSize: 8
+        language: "1"
+      records_path: "data.list"
+      article_url_template: "/cn/news/detail?baseid={baseId}"
+      article_title_field: "title"
+      article_time_field: "publishTime"
+      url_base: "https://www.gacgroup.com"
+      pagination:
+        page_param: "pageNo"
+        start_page: 1
+    selectors:
+      article_link_selector: "a[href*='/cn/news/detail']"
+      title_selector: ".top_box .tit"
+      # .content 是“更多动态”卡片摘要；真实文章正文位于详情页 .article。
+      content_selector: ".article"
+      publish_time_selector: ".top_box .date p"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "吉利汽车"
+    enabled: true
+    domain: "geely.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    detail_crawler_type: "dynamic"
+    wait_time: 5
+    column_urls:
+      - "https://www.geely.com/news"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    selectors:
+      article_link_selector: "a[href*='/news/']"
+      title_selector: ".news-detail .title"
+      # detail-text 仅含标题、日期和导语；.info 才是新闻主体。其仅含图片
+      # 时复用通用媒体判定，写入“图片类新闻”标记而非错误保存导语。
+      content_selector: ".news-detail .info"
+      publish_time_selector: ".news-detail .date"
+      # 官网“加载更多”会在当前 DOM 追加下一批真实新闻卡片。
+      next_page_selector: "div.showMore.geely--global--button"
+
+  - name: "长城汽车"
+    enabled: true
+    domain: "haval.com.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官方新闻栏目由公开 JSON POST 接口分页提供；详情页继续使用现有静态解析器。
+    crawler_type: "static"
+    detail_crawler_type: "static"
+    wait_time: 3
+    column_urls:
+      - "https://www.haval.com.cn/news.html"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://www.haval.com.cn/search/news-search"
+      request_method: "POST"
+      request_encoding: "json"
+      request_crawler_type: "static"
+      request_body:
+        site_id: 183
+        size: 6
+        category_id:
+          - 1000078
+          - 1000074
+        content: ""
+      records_path: "data.list"
+      article_url_field: "release_url"
+      article_title_field: "title"
+      article_time_field: "publish_time"
+      article_time_format: "%Y-%m-%d"
+      url_base: "https://www.haval.com.cn"
+      pagination:
+        page_param: "page"
+        start_page: 1
+        page_step: 1
+    selectors:
+      article_link_selector: "a[href*='/news/'][href$='.html']"
+      title_selector: "h1.news-detail-title"
+      content_selector: ".news-cont-left"
+      publish_time_selector: ".news-by.source-str"
+      publish_time_regex: "(\\d{4}-\\d{2}-\\d{2})"
+      next_page_selector: null
+      infinite_scroll: false
+      require_title_selector: true
+      content_exclude_selectors:
+        - ".news-item-by"
+        - ".qrcode-tools"
+        - "#newsLableBoxPc"
+        - ".news_digest span"
+        - "#briefText"
+        - ".news_details_tool"
+        - ".poster_mask"
+
+  - name: "蔚来汽车"
+    enabled: false
+    domain: "nio.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # News 列表由官方服务端渲染，Show More 提供真实 ?page= 链接；静态
+    # 发现可稳定沿该公开链接翻页，无需依赖浏览器点击。
+    crawler_type: "static"
+    wait_time: 1
+    column_urls:
+      # www.nio.com/news currently returns an HTTP 567 block page to the
+      # headless browser.  This is NIO's official, publicly accessible
+      # newsroom on the same nio.com whitelist domain.
+      - "https://us.nio.com/news"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    published_time_order: desc
+    selectors:
+      # Exclude the newsroom contact page; all remaining matching links are
+      # article detail pages such as /news/20251001001.
+      article_link_selector: "a[href^='/news/']:not([href='/news/contact'])"
+      article_time_selector: ".news_newsItem__aH7_h p, .news_heroItem__l99Zi p"
+      title_selector: "h1"
+      content_selector: "div[class^='detail_content']"
+      publish_time_selector: "div[class^='detail_titles'] > p"
+      # 官方 Show More 是普通详情列表页链接（/news?page=1），点击后进入
+      # 下一批新闻；由共享 DynamicPagination 流程处理。
+      next_page_selector: ".news_action__Qoq4z a[href*='page=']"
+
+  - name: "理想汽车"
+    enabled: true
+    domain: "lixiang.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    detail_crawler_type: "static"
+    wait_time: 1
+    column_urls:
+      - "https://www.lixiang.com/news.html"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "a[href^='/news/'][href$='.html']"
+      title_selector: ".title.m-h1"
+      content_selector: null
+      publish_time_selector: ".date.m-exp1"
+      next_page_selector: null
+      infinite_scroll: true
+
+  - name: "哪吒汽车"
+    enabled: false
+    domain: "hozonauto.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    wait_time: 5
+    column_urls:
+      - "https://hozonauto.com/news.html"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    published_time_order: "desc"
+    selectors:
+      # The listing uses relative routes such as newsDetail.html?id=903;
+      # it does not use a /news/ path.
+      article_link_selector: "a[href^='newsDetail.html?id=']"
+      title_selector: "#newdata .detail-title"
+      content_selector: "#newdata .content"
+      publish_time_selector: "#newdata .tag"
+      # LayUI 分页会在点击后以公开 AJAX 请求替换新闻卡片；没有可用
+      # 的静态 href，因此使用现有通用 Dynamic click pagination。
+      next_page_selector: ".layui-laypage-next"
+
+  - name: "大众汽车中国"
+    enabled: true
+    domain: "vw.com.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "static"
+    detail_crawler_type: "static"
+    wait_time: 1
+    column_urls:
+      - "https://www.vw.com.cn/Home/PressReleaseList"
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://www.vw.com.cn/Home/getNewsPage"
+      query_params:
+        type: 0
+      request_method: "GET"
+      request_crawler_type: "dynamic"
+      records_path: "data.list"
+      article_url_template: "/Home/PressReleaseDetail?id={custom_id}"
+      article_title_field: "title"
+      article_time_field: "release_date"
+      article_time_format: "%Y-%m-%d"
+      url_base: "https://www.vw.com.cn"
+      pagination:
+        page_param: "page"
+        start_page: 1
+        page_step: 1
+    selectors:
+      article_link_selector: ".list-box.active a[href*='PressReleaseDetail']"
+      title_selector: "h1"
+      content_selector: null
+      publish_time_selector: "span.date"
+      # 官网“加载更多”不更改 URL，但会追加下一批新闻详情链接。
+      next_page_selector: ".load-more"
+
+  # 甲方补充的海外及国内官网。以下条目只使用官方新闻/媒体中心，
+  # 采集时由 publish_time_start / publish_time_end 控制新闻发布时间窗口。
+  - name: "丰田汽车"
+    enabled: true
+    domain: "global.toyota"
+    # Global Toyota 的官方 Latest News 汇总页还会列出其官方赛车新闻室。
+    # 仅允许这里明确列出的第一方域名；不会放开到任意外站。
+    allowed_domains:
+      - "global.toyota"
+      - "toyotagazooracing.com"
+      - "toyota-racing-newsroom.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 一个业务来源聚合其明确公开的三个官方新闻栏目；详情解析、时间过滤
+    # 与去重仍统一在“丰田汽车”这一来源下执行。
+    crawler_type: "static"
+    detail_crawler_type: "static"
+    wait_time: 1
+    column_urls: ["https://global.toyota/en/newsroom/toyota/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    # 三个 Feed 都提供官方列表/API发布时间；优先它而非详情正文中的
+    # 引用、赛事日期或历史资料日期。
+    prefer_listing_published_at: true
+    selectors:
+      title_selector: "h1.title, h2"
+      title_exclude_selectors:
+        - "span.subtitle"
+      content_selector: null
+      publish_time_selector: null
+    discovery_feeds:
+      # Toyota Global 的根 News Release 流，只保留 global.toyota 自身
+      # 记录并排除根列表中明确标记为 Lexus 的独立品牌新闻。
+      - name: "Toyota Global News Release"
+        column_urls: ["https://global.toyota/en/newsroom/"]
+        allowed_domains: ["global.toyota"]
+        crawler_type: "static"
+        max_pages: 10
+        published_time_order: desc
+        structured_discovery:
+          mode: "json_endpoint"
+          prefer: true
+          data_url: "https://global.toyota/en/_system/api/search/article"
+          request_method: "POST"
+          request_encoding: "form"
+          request_body:
+            limit: 20
+            tags[]: 3
+            tagOperation: "or"
+            labelTags[]: [553, 5272, 4592]
+            labelTagOperation: "or"
+            gridMoreSize: 10
+          records_path: "list"
+          article_url_field: "url"
+          article_title_field: "title"
+          article_time_field: "date"
+          record_exclude_filters:
+            category: "lexus"
+          pagination:
+            offset_param: "offset"
+            start_offset: 0
+            page_size: 20
+      # Toyota GAZOO Racing 的公开新闻 JSON；RSS 本身提供完整历史记录，
+      # 时间范围由共享过滤逻辑处理。
+      - name: "Toyota GAZOO Racing Press Release"
+        column_urls: ["https://toyotagazooracing.com/pressrelease/"]
+        allowed_domains: ["toyotagazooracing.com"]
+        crawler_type: "static"
+        published_time_order: desc
+        structured_discovery:
+          mode: "json_endpoint"
+          prefer: true
+          data_url: "https://toyotagazooracing.com/json/pressrelease/"
+          records_path: "rss.channel.item"
+          article_url_field: "link"
+          article_title_field: "title"
+          article_time_field: "pubDate"
+          url_base: "https://toyotagazooracing.com"
+          article_url_exclude_patterns:
+            - "^/gr/[^/]+/?$"
+      # Toyota Racing Newsroom 的公开 WEC Press Releases 接口。接口返回
+      # 服务器渲染的卡片片段，仍使用通用 selector 发现链接和列表日期。
+      - name: "Toyota Racing Newsroom WEC Press Releases"
+        column_urls: ["https://toyota-racing-newsroom.com/blog/wec/press-releases"]
+        allowed_domains: ["toyota-racing-newsroom.com"]
+        crawler_type: "static"
+        max_pages: 10
+        published_time_order: desc
+        selectors:
+          article_link_selector: "a.item-list-item-link[href]"
+          article_time_selector: ".item-list-item-date"
+        structured_discovery:
+          mode: "json_html_fragment"
+          prefer: true
+          data_url: "https://toyota-racing-newsroom.com/api/article"
+          query_params:
+            grid: 2
+            size: 12
+            type: "channel"
+            id: 32
+            q: ""
+          html_path: "items"
+          article_url_strip_suffixes: ["/text"]
+          pagination:
+            offset_param: "offset"
+            start_offset: 0
+            page_size: 12
+
+  - name: "宾利汽车"
+    enabled: true
+    domain: "bentleymedia.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官方公开搜索接口按日期返回完整新闻列表；详情页继续复用通用静态解析。
+    crawler_type: "static"
+    detail_crawler_type: "static"
+    wait_time: 2
+    column_urls: ["https://www.bentleymedia.com/en/news"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    # 官方响应当前声明 totalPages=25；此处保留有限硬上限，避免异常列表无限请求。
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://www.bentleymedia.com/dealernetapi/v1/search"
+      request_method: "POST"
+      request_encoding: "json"
+      request_crawler_type: "static"
+      request_body:
+        query: ""
+        searchType: "bulletins"
+        orderBy: "date"
+        paging:
+          resultsPerpage: 24
+      records_path: "results"
+      article_url_field: "url"
+      article_title_field: "title"
+      article_time_field: "published"
+      url_base: "https://www.bentleymedia.com"
+      pagination:
+        page_param: "paging.page"
+        start_page: 1
+    selectors:
+      article_link_selector: "a[href^='/en/newsitem/']"
+      # Official media entries have no rendered h1; their document title is
+      # consistently present in both the static and rendered representations.
+      title_selector: "title"
+      title_strip_prefix: "BENTLEY NEWSROOM : "
+      # Standard releases use .Content.s-cms.  Official media-only assets
+      # instead expose their primary image directly within the site body.
+      content_selector: ".Content.s-cms, main.Site-body"
+      publish_time_selector: ".Tags.Tags--article"
+      publish_time_regex: "(\\d{2}/\\d{2}/\\d{2})"
+      next_page_selector: null
+      infinite_scroll: false
+      # The strict media-item route prevents ordinary navigation pages from
+      # becoming candidates, while allowing a safe document-title fallback.
+      require_title_selector: false
+      # A small media-asset subset intentionally has no textual content
+      # container but remains a verified official news detail page.
+      require_content_selector: false
+      content_exclude_selectors:
+        - ".MediaCard"
+        - ".Menu"
+        - ".Alert"
+
+  - name: "现代汽车"
+    enabled: true
+    domain: "hyundai.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官方 News Releases 栏目使用公开 POST 表单分页，而非首页 Newsroom 的
+    # 聚合展示；pageNo 由 Structured Discovery 统一推进。
+    column_urls: ["https://www.hyundai.com/worldwide/en/newsroom/news-releases"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://www.hyundai.com/wsvc/ww/newsroom.list.do"
+      request_method: "POST"
+      request_encoding: "form"
+      request_headers:
+        Referer: "https://www.hyundai.com/worldwide/en/newsroom/news-releases"
+        X-Requested-With: "XMLHttpRequest"
+      request_body:
+        "year[]": "Latest"
+      records_path: "data.list"
+      article_url_template: "/worldwide/en/newsroom/detail/{postId}"
+      article_title_field: "postTitle"
+      article_time_field: "publicationDate"
+      url_base: "https://www.hyundai.com"
+      pagination:
+        page_param: "pageNo"
+        start_page: 1
+    selectors:
+      article_link_selector: "a[href*='/worldwide/en/newsroom/detail/']"
+      title_selector: "h1.ir_hidden"
+      content_selector: ".post-Hashtag__content"
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "通用汽车"
+    enabled: false
+    domain: "gm.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://news.gm.com/home.html"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    selectors:
+      article_link_selector: "a[href*='/content/public/us/en/gm/news/']"
+      title_selector: "h1"
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "斯特兰蒂斯"
+    enabled: true
+    domain: "stellantis.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://www.stellantis.com/en/news/press-releases"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    # 官网单页已完整渲染新闻归档；范围采集先由卡片日期过滤，详情保护
+    # 保持与其他正式来源一致的 50 条上限，不能将其误设为 5。
+    max_articles_per_run: 50
+    max_pages: 50
+    # 该公开站点在项目 HTTP 客户端中稳定返回 403，而 Chromium 正常获得
+    # 同一公开新闻 HTML，因此列表和详情统一使用现有通用 Dynamic crawler。
+    crawler_type: "dynamic"
+    wait_time: 1
+    published_time_order: desc
+    selectors:
+      # 每条记录有标题链接和仅含图标的箭头链接；只取标题链接，避免双重发现。
+      article_link_selector: "a.document-name[href^='/en/news/press-releases/']"
+      # 日期位于同一新闻记录的内部 .press-release-item 中。
+      article_time_selector: ".press-release-item b"
+      title_selector: "h1"
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "本田汽车"
+    enabled: true
+    domain: "global.honda"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://global.honda/en/newsroom/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    # 官方 pager 由前端根据公开的 ?offset=N 栏目页渲染。Structured HTML
+    # endpoint 直接按该稳定页码参数读取每一页，避免依赖页面内临时生成的按钮。
+    structured_discovery:
+      mode: "html_endpoint"
+      prefer: true
+      data_url: "https://global.honda/en/newsroom/"
+      pagination:
+        page_param: "offset"
+        start_page: 1
+    selectors:
+      article_link_selector: "section.newsroom_article_items ._title > a[href*='/en/newsroom/news/'][href$='.html']:not([href$='c260805eng.html'])"
+      article_time_selector: "._layoutgroup2 ._numeric1 ._num"
+      title_selector: "h1.p-post22__title"
+      content_selector: ".p-post22__body"
+      publish_time_selector: "time.c-time22"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "福特汽车"
+    enabled: false
+    domain: "ford.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://www.fromtheroad.ford.com/us/en/home"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 1
+    selectors:
+      article_link_selector: "a[href*='/us/en/articles/']"
+      article_time_selector: "span[class*='leading-[16px]'][class*='text-fordGreySubtle']"
+      title_selector: "meta[property='og:title']"
+      content_selector: "div[role='article']"
+      publish_time_selector: null
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "宝马汽车"
+    enabled: true
+    domain: "bmwgroup.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://www.press.bmwgroup.com/global/article"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    # BMW PressClub 主列表通过公开 HTML 片段接口按 page 懒加载；首页中的
+    # Top Articles 仅是侧栏推荐，不能作为新闻列表来源。
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "html_endpoint"
+      prefer: true
+      data_url: "/global/article/search"
+      query_params:
+        type: "article"
+      pagination:
+        page_param: "page"
+        start_page: 1
+    selectors:
+      # 只取左侧主新闻流，排除右侧 Top Articles 推荐卡；后者没有稳定的
+      # 卡片发布时间，且会抢先占用同一详情 URL 的去重键。
+      article_link_selector: ".content-left article.newsfeed h3 a[href*='/global/article/detail/']:not([href*='showMedia='])"
+      article_time_selector: "article.newsfeed .date"
+      title_selector: "h1"
+      content_selector: ".article-detail"
+      publish_time_selector: ".article-detail .date"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "日产汽车"
+    enabled: true
+    domain: "nissannews.com"
+    crawler_type: dynamic
+    wait_time: 3
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 首页只展示精选内容；View All Releases 指向完整公开新闻归档。
+    column_urls: ["https://global.nissannews.com/en/channels/news?selectedTabId=news-releases"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    # 官方 Load More 每批追加 24 张 release 卡片；只取每张卡片的主详情
+    # 链接和其可见发布时间，避免隐藏栏目、图片库及 URL 参数变体进入候选。
+    published_time_order: desc
+    selectors:
+      article_link_selector: "article.release-item a.release-item__image"
+      article_time_selector: "article.release-item time.pub-date"
+      title_selector: "h1.release-banner__title"
+      content_selector: "article"
+      publish_time_selector: "article time.pub-date"
+      # 官方归档的 Load More 会在当前 DOM 追加下一批 release 卡片。
+      next_page_selector: ".load-more-btn"
+      require_title_selector: true
+      require_content_selector: true
+      content_exclude_selectors:
+        - ".release-show__actions"
+        - ".mobile-sidebar"
+
+  - name: "奥迪汽车"
+    enabled: true
+    domain: "audi.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://www.audi.com/en/press-releases"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    selectors:
+      article_link_selector: "a.detailed-page-list-item--title"
+      title_selector: "h1"
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+      article_time_selector: ".detailed-page-list-item--meta .meta--item:first-child"
+    structured_discovery:
+      mode: "json_html_fragment"
+      prefer: true
+      data_url: "https://www.audi.com/en/press-releases"
+      request_headers:
+        Accept: "application/json, text/html;q=0.01"
+      query_params:
+        next: 1
+      pagination:
+        page_param: "next"
+        start_page: 1
+      html_path: "html"
+
+  - name: "马自达汽车"
+    enabled: true
+    domain: "mazda.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官方 View All 新闻稿页在首个 HTML 中已公开全部当前列表链接；首页只
+    # 是三条精选内容，会造成“只有第一页”的假象。
+    column_urls: ["https://newsroom.mazda.com/en/publicity/release/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      # 部分官方模板在 href 属性中保留换行空白；由通用 URL 规范化统一去除，
+      # 不在 CSS 末尾匹配阶段提前丢掉真实 .html 新闻链接。
+      article_link_selector: "a[href*='/en/publicity/release/20']"
+      title_selector: "title"
+      content_selector: ".c-container.c-article"
+      publish_time_selector: "time.c-article__time"
+      next_page_selector: null
+      title_strip_prefix: "MAZDA NEWSROOM｜"
+      title_strip_suffix: "｜NEWS RELEASES"
+      content_exclude_selectors:
+        - "#modal-download"
+        - ".bottomNav"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "铃木汽车"
+    enabled: true
+    domain: "globalsuzuki.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 新闻目录由官网公开 release.xml 在浏览器中渲染；动态模式只读取
+    # 已渲染 DOM，详情页仍复用通用解析和既有入库流程。
+    crawler_type: "dynamic"
+    wait_time: 1
+    column_urls: ["https://www.globalsuzuki.com/globalnews/index.html"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "a[href*='/globalnews/']"
+      title_selector: "h1.news-ttl"
+      content_selector: "#newsBody"
+      publish_time_selector: "p.date"
+      next_page_selector: null
+      title_strip_suffix: " | GLOBAL NEWS | Global Suzuki"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "雷诺集团"
+    enabled: true
+    domain: "renaultgroup.com"
+    # 官方列表由公开 WordPress AJAX POST 返回 HTML 片段。不要依赖被
+    # OneTrust 弹层遮挡的前端页码点击；每个 page 通过统一 Structured
+    # Discovery 的公开表单请求取得，不使用 Cookie、登录态或浏览器状态。
+    crawler_type: "static"
+    detail_crawler_type: "static"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官方 Press releases 归档；页面使用标准 <link rel="next"> 声明
+    # /page/2/ 等后续页，而首页只是精选内容。
+    column_urls: ["https://media.renaultgroup.com/section/communiques-de-presse/?lang=eng&page=1&per_page=12&type=news"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "html_endpoint"
+      prefer: true
+      data_url: "https://media.renaultgroup.com/wp-admin/admin-ajax.php"
+      request_method: "POST"
+      request_encoding: "form"
+      request_body:
+        action: "filter"
+        init: true
+        ppp: 12
+        s: ""
+        catModel: ""
+        cat: ""
+        typeContent: ""
+        start: ""
+        end: ""
+        othersSubjects: ""
+        lang: "eng"
+        isAlbum: ""
+        period: ""
+      article_time_format: "%d/%m/%Y"
+      pagination:
+        page_param: "page"
+        start_page: 1
+        page_step: 1
+    selectors:
+      article_link_selector: "a.post-overlink"
+      article_time_selector: ".date"
+      title_selector: "h1.cp-title"
+      content_selector: ".cp-content"
+      publish_time_selector: "p.cp-date"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "阿斯顿·马丁"
+    enabled: true
+    domain: "astonmartin.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官方 News 列表为常规页码归档。第 2 页起仍为真实新闻详情，不是首页
+    # 轮播或媒体资源卡片。
+    column_urls: ["https://www.astonmartin.com/en/our-world/news?page=1"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    crawler_type: "static"
+    published_time_order: "desc"
+    pagination_url_template: "https://www.astonmartin.com/en/our-world/news?page={page}"
+    pagination_start_page: 1
+    selectors:
+      article_link_selector: "a.news-item__heading[href]"
+      article_time_selector: ".news-item__date"
+      title_selector: "h1.news-article-block__title"
+      content_selector: ".news-article-block__content"
+      publish_time_selector: ".news-article-block__subheading"
+      next_page_selector: null
+      content_exclude_selectors:
+        - ".share-box"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "起亚汽车"
+    enabled: true
+    domain: "kiamedia.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    detail_crawler_type: "static"
+    wait_time: 1
+    # 首页仅展示少量精选新闻；官网导航中的 Press Releases 才是完整列表。
+    column_urls: ["https://www.kiamedia.com/us/en/media/pressreleases/list"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "a.card-press-release__title__link"
+      article_time_selector: ".card-press-release__id-bar .id-bar__date"
+      title_selector: "h2.media-details-subheader__title"
+      content_selector: ".media-details-content__inner"
+      publish_time_selector: ".media-details > .id-bar .id-bar__date"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+    # 官网首屏将公开的列表上下文放在 data-params，并以普通 form POST
+    # 到同源 medialist/loadpage 取得下一批 HTML。该配置只读取该公开
+    # DOM 属性；不使用 Cookie、登录态或私有接口。
+    structured_discovery:
+      mode: "html_endpoint"
+      prefer: true
+      data_url: "/us/en/medialist/loadpage"
+      request_method: "POST"
+      request_encoding: "form"
+      request_crawler_type: "dynamic"
+      request_headers:
+        # 与官网 jQuery 列表请求一致的普通 AJAX 标识，不携带身份信息。
+        X-Requested-With: "XMLHttpRequest"
+      request_body_from_page:
+        params:
+          selector: ".media-gallery--press-releases .listcontainer"
+          attribute: "data-params"
+      pagination:
+        page_param: "pagenumber"
+        start_page: 1
+
+  - name: "零跑汽车"
+    enabled: true
+    domain: "leapmotor.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 列表页是前端壳；“查看更多”实际调用下方公开 CMS 接口。用通用
+    # Structured 分页直接获取每批官方记录，避免浏览器列表超时。
+    crawler_type: "static"
+    detail_crawler_type: "dynamic"
+    wait_time: 2
+    column_urls: ["https://www.leapmotor.com/news/news.html"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://www.leapmotor.com/informationmaterial/select.do"
+      request_method: "POST"
+      request_encoding: "form"
+      request_body:
+        pageSize: 12
+      records_path: "data.list"
+      article_url_template: "/news/news-detail.html?id={id}"
+      article_title_field: "title"
+      article_time_field: "releaseTime"
+      url_base: "https://www.leapmotor.com"
+      pagination:
+        page_param: "pageNum"
+        start_page: 1
+    selectors:
+      article_link_selector: "a[href^='/news/news-detail.html?id=']"
+      title_selector: "h2.news-title"
+      content_selector: "div.page-news-detail div.content"
+      publish_time_selector: "div.page-news-detail div.time"
+      # 官网“查看更多”使用 div 而非 button/a，点击后追加下一批新闻卡片。
+      next_page_selector: ".news-more-btn"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "沃尔沃汽车"
+    enabled: false
+    domain: "volvocars.com.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://www.volvocars.com.cn/zh-cn/news/latest/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    selectors:
+      article_link_selector: "a[href*='/zh-cn/news/']"
+      title_selector: "h1"
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "保时捷"
+    # 只保留带年份的 Newsroom 文章详情页，排除 Sales、Production 等栏目页。
+    enabled: true
+    domain: "porsche.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官方栏目页的公开 HTML 已包含新闻链接；使用静态发现避免浏览器
+    # lifecycle 超时，详情页仍复用原有静态解析链路。
+    crawler_type: "static"
+    detail_crawler_type: "static"
+    wait_time: 1
+    column_urls: ["https://newsroom.porsche.com/en.html"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://newsroom.porsche.com/.rest/pnr/articles/v1/search?excludes=7a729051-f816-4337-8a1a-a0ada1cf86ca,2cab0a38-b07d-4869-8476-1aaf3cb67f6d,20ffd244-979c-409a-80f4-0ca0d6e4da87,bb632e68-cf92-4341-9254-bd8160d84a3b,fa34cd80-750e-4aa5-81d8-22e5bf3eccb1&hp=true"
+      query_params:
+        language: "en"
+        limit: 24
+        filter: "History,Digital & Deep Tech,Sport,Engineering,Scene and Passion,Company,Sustainability,Products,Motorsports,Innovation,Society"
+        path: ""
+        recursive: ""
+      records_path: "teaserList"
+      article_url_field: "teaserLink"
+      article_title_field: "title"
+      article_time_field: "datetime"
+      article_time_format: "%d/%m/%Y"
+      url_base: "https://newsroom.porsche.com"
+      pagination:
+        page_param: "offset"
+        start_page: 0
+        page_step: 24
+    selectors:
+      # Restrict discovery to the Newsroom host/path.  The column HTML also
+      # links to Christophorus magazine articles, which are not governed by
+      # this source's newsroom detail selectors.
+      article_link_selector: "a[href^='/en/202'][href$='.html'], a[href^='https://newsroom.porsche.com/en/202'][href$='.html']"
+      title_selector: "h1"
+      content_selector: ".article-main"
+      publish_time_selector: ".article-main time"
+      next_page_selector: null
+      content_exclude_selectors:
+        - ".sharing-bar"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "兰博基尼"
+    enabled: true
+    domain: "lamborghini.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官网表现为无限滚动，但新闻卡片来自公开 Offset JSON；用结构化发现
+    # 直接读取连续批次，避免浏览器滚动观察器遗漏后续新闻。
+    crawler_type: "static"
+    detail_crawler_type: "static"
+    wait_time: 1
+    column_urls: ["https://www.lamborghini.com/en-en/news"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://www.lamborghini.com/en-en/api"
+      query_params:
+        views: "rest_news_view"
+        langcode: "en"
+        tags[]: 137
+      records_path: "data[0].items"
+      article_url_field: "urls[0].url"
+      article_title_field: "elements[0].labelsLong[0].value[0]"
+      article_time_field: "dateTime.value.dateFormatted"
+      article_time_format: "%d %B %Y"
+      pagination:
+        offset_param: "params"
+        start_offset: 0
+        page_size: 7
+        offset_step: 7
+        parameter_template: "{offset},{limit}"
+    selectors:
+      article_link_selector: "a[href*='/en-en/news/']"
+      title_selector: "h2.lam-hero__title"
+      # 正文分散在多个 paragraphs section 中；以 main 为范围并排除栏目、
+      # 面包屑与相关推荐，避免把 NEWS 标签或关联文章写入正文。
+      content_selector: "main"
+      publish_time_selector: "#news-basics time"
+      next_page_selector: null
+      content_exclude_selectors:
+        - "nav"
+        - "style"
+        - "#news-basics"
+        - "#news-list"
+        - "#news-thumbs"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "东风汽车"
+    enabled: true
+    domain: "dfmc.com.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 栏目页通过公开 qiyexinwen.json 由页面脚本渲染；动态模式只读取
+    # 渲染结果，不改变详情页解析或入库流程。
+    crawler_type: "dynamic"
+    wait_time: 1
+    column_urls: ["https://www.dfmc.com.cn/news/qiyexinwen.html"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "#news-list a[href*='/news/company/news_']"
+      title_selector: ".infocontent_title h3"
+      content_selector: "#content_body"
+      publish_time_selector: ".infocontent_title em span:first-child"
+      publish_time_regex: "(\\d{4}-\\d{2}-\\d{2})"
+      # jPList 的页码控件通过 DOM 切换下一批新闻卡片。
+      next_page_selector: "li.jplist-next:not(.disabled) a"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "北汽集团"
+    # 本轮可发现并按日期入库，但通用正文选择器抓到了站点公共导航，
+    # 在未获得站点专用正文 selector 前不进入每周自动调度。
+    enabled: true
+    domain: "baicgroup.com.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 首页只展示精选新闻；“新闻简讯”栏目提供官方完整的 1–5 页列表，
+    # 其 › 链接可由通用 HTML 分页识别。
+    column_urls: ["https://www.baicgroup.com.cn/baicgroup/News/NewsShort/A160003006Gone1.html"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "a[href*='/baicgroup/News/NewsShort/202']"
+      title_selector: "h1"
+      content_selector: ".detail-body"
+      publish_time_selector: ".detail-1"
+      publish_time_regex: "(\\d{4}-\\d{2}-\\d{2})"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "极狐汽车"
+    enabled: true
+    domain: "arcfox.com.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 首页的“了解更多”会进入完整新闻页；该页使用公开 JSON 的 pageIndex
+    # 分页，而非仅展示首页精选卡片。
+    column_urls: ["https://www.arcfox.com.cn/news.html"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "/arcfox/web/findNews"
+      query_params:
+        title: ""
+        recommendStatus: ""
+        pageSize: 4
+      records_path: "data.list"
+      article_url_field: "url"
+      article_title_field: "title"
+      article_time_field: "publishTime"
+      url_base: "https://www.arcfox.com.cn"
+      pagination:
+        page_param: "pageIndex"
+        start_page: 1
+    selectors:
+      article_link_selector: "a[href*='/pagehtml/news']"
+      title_selector: "h1"
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "广汽埃安"
+    enabled: false
+    domain: "aion.com.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    wait_time: 5
+    column_urls: ["https://www.aion.com.cn/show/news?cid=66"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    selectors:
+      article_link_selector: "#news-list a[href^='newdetail/']"
+      title_selector: "#main .section h5.tit"
+      content_selector: "#main .section .num-box > div:last-child"
+      publish_time_selector: "#main .section .num-box .right .time"
+      # 官网分页不携带 href，使用可访问名称明确的下一页控件。
+      next_page_selector: "#page-box a[aria-label='Next']"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "阿维塔"
+    enabled: true
+    domain: "avatr.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://www.avatr.com/newscenter"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "a[href*='news']"
+      title_selector: "h1"
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "华为汽车"
+    enabled: true
+    domain: "huawei.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://auto.huawei.com/cn/news"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    selectors:
+      article_link_selector: "a[href*='/cn/news/']"
+      title_selector: "h1"
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  # P2 站点已完成本轮官网入口诊断；以下站点需要后续统一扩展后再启用。
+  - name: "奇瑞汽车"
+    enabled: true
+    domain: "chery.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    wait_time: 2
+    column_urls: ["https://www.chery.cn/brandshow/news/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: desc
+    selectors:
+      article_link_selector: null
+      title_selector: ".news-title"
+      content_selector: ".news-body"
+      publish_time_selector: ".news-sub-title"
+      publish_time_regex: "(\\d{4}-\\d{2}-\\d{2})"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://mobile-consumer-sapp.chery.cn/web/pgc/contents/paging-for-c-code-type"
+      query_params:
+        typeCode: "3190588336406437918"
+        pageNo: 1
+        pageSize: 20
+      pagination:
+        page_param: "pageNo"
+        start_page: 1
+      records_path: "data.data"
+      article_url_template: "/brandshow/newsdetail?id={id}"
+      article_title_field: "title"
+      article_time_field: "publishTime"
+      record_filters:
+        contentType: 1
+      url_base: "https://www.chery.cn"
+
+  - name: "小米汽车"
+    # Xiaomi Global Press & Media 明确将此 Newsroom 作为官方最新资讯入口；
+    # 该综合 Newsroom 同时发布 Xiaomi Auto / SU7 / YU7 官方文章。
+    enabled: false
+    domain: "mi.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "static"
+    detail_crawler_type: "dynamic"
+    wait_time: 2
+    column_urls: ["https://www.mi.com/global/discover/newsroom"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 5
+    max_pages: 1
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://go.buy.mi.com/global/page/discovery"
+      query_params:
+        from: "pc"
+        page_num: 1
+        show_type: "newsroom"
+      records_path: "data.page_data"
+      item_records_path: "assembly_info"
+      article_url_field: "go_to_url"
+      article_title_field: "title"
+      url_base: "https://www.mi.com"
+    selectors:
+      article_link_selector: null
+      title_selector: ".new-detail__title"
+      content_selector: ".new-detail__content"
+      publish_time_selector: ".new-detail__info"
+      publish_time_regex: "(\\d{2}/\\d{2}/\\d{4})"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "岚图汽车"
+    enabled: false
+    domain: "voyah.com.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    wait_time: 2
+    column_urls: ["https://www.voyah.com.cn/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    selectors:
+      article_link_selector: null
+      title_selector: null
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "鸿蒙智行"
+    enabled: false
+    domain: "hima.auto"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    wait_time: 2
+    column_urls: ["https://hima.auto/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    selectors:
+      article_link_selector: null
+      title_selector: null
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "赛力斯汽车"
+    enabled: false
+    domain: "seres.cn"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # auto.seres.cn 是面向用户的车型/服务 SPA，不提供独立新闻路由。
+    # 同属赛力斯官方体系的集团站公开提供公司新闻列表和 HTML 详情页。
+    column_urls: ["https://www.seres.cn/company-news.html?orderway=desc&page=1"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    # 公司新闻列表按发布日期倒序；分页“下一页”使用无文本的 a.next。
+    published_time_order: desc
+    selectors:
+      article_link_selector: "a.info[href^='/company-news/'][href$='.html']"
+      article_time_selector: ".date"
+      title_selector: "h1"
+      content_selector: ".news-content"
+      publish_time_selector: ".news-title p"
+      next_page_selector: ".pagination a.next"
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "雷克萨斯"
+    enabled: false
+    domain: "lexus.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://pressroom.lexus.com/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 5
+    selectors:
+      article_link_selector: null
+      title_selector: null
+      content_selector: null
+      publish_time_selector: null
+      next_page_selector: null
+
+  - name: "Mercedes-Benz"
+    enabled: true
+    domain: "media.mercedes-benz.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 页面视觉上为无限滚动；底层是官网公开 JSON 的 page=0、1、2… 分页。
+    # 直接读取该公开列表避免依赖前端滚动时机。
+    crawler_type: "static"
+    column_urls: ["https://media.mercedes-benz.com/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "json_endpoint"
+      prefer: true
+      data_url: "https://api.media.mercedes-benz.com/de/jsonapi/search/full"
+      query_params:
+        entity: "press_release"
+        tags: ""
+        sort: "display_date"
+        order: "DESC"
+        per_page: 10
+      records_path: "results"
+      article_url_template: "/article/{id}"
+      article_title_field: "title"
+      article_time_field: "display_date"
+      url_base: "https://media.mercedes-benz.com"
+      pagination:
+        page_param: "page"
+        start_page: 0
+    selectors:
+      article_link_selector: "a.card-container[href^='/article/']"
+      title_selector: "h1.article-headline"
+      content_selector: ".article-content"
+      publish_time_selector: "span.article-info-date"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  - name: "Peugeot"
+    enabled: false
+    domain: "media.stellantis.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    crawler_type: "dynamic"
+    column_urls: ["https://www.media.stellantis.com/em-en/peugeot/press"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 5
+    max_pages: 1
+    selectors:
+      article_link_selector: "a.gtm-content[href^='/em-en/peugeot/press/']"
+      title_selector: "h1.fca-Title"
+      content_selector: ".main-Content"
+      content_exclude_selectors:
+        - ".fca_Container_Newsletter-Desktop"
+        - ".fca_Container_Newsletter-Mobile"
+      publish_time_selector: "time"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  # Volkswagen 品牌官方 Newsroom；与既有“大众汽车中国”来源不同，覆盖全球英文新闻稿。
+  - name: "Volkswagen"
+    enabled: true
+    domain: "volkswagen-newsroom.com"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    # 官方 Show more 实际请求公开的 ?page=N HTML 片段。Structured endpoint
+    # 直接读取该页码序列，不依赖会被 Cookie 弹窗遮挡的浏览器点击。
+    crawler_type: "static"
+    detail_crawler_type: "static"
+    wait_time: 1
+    column_urls: ["https://www.volkswagen-newsroom.com/en/press-releases"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    # 时间范围模式下不可把已追加的公开新闻再次截断为 5 条。
+    max_articles_per_run: 50
+    max_pages: 50
+    published_time_order: "desc"
+    structured_discovery:
+      mode: "html_endpoint"
+      prefer: true
+      data_url: "https://www.volkswagen-newsroom.com/en/press-releases"
+      article_time_format: "%m/%d/%y"
+      pagination:
+        page_param: "page"
+        start_page: 1
+    selectors:
+      article_link_selector: "a.image-overlay--action"
+      article_time_selector: ".meta--item"
+      title_selector: "h1"
+      content_selector: "div.content"
+      publish_time_selector: null
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+  # Subaru Corporation 官方英文 News Release；原 subaru-global.com 已不可解析，改用同一官方体系的公开新闻中心。
+  - name: "Subaru"
+    enabled: false
+    domain: "subaru.co.jp"
+    schedule_type: "cron"
+    day_of_week: "mon"
+    crawl_time: "02:00"
+    column_urls: ["https://www.subaru.co.jp/en/news/"]
+    keywords: []
+    keyword_mode: "off"
+    crawl_frequency: "24h"
+    max_articles_per_run: 5
+    max_pages: 1
+    selectors:
+      article_link_selector: "a[href^='/news-en/']"
+      title_selector: "h1:not(.ub-l-header__logo)"
+      content_selector: "#main"
+      publish_time_selector: ".date"
+      next_page_selector: null
+      require_title_selector: true
+      require_content_selector: true
+
+

@@ -51,7 +51,8 @@ public class KnowledgeCitationValidator
             for (Integer index : indexes)
             {
                 KnowledgeChunk chunk = chunks.get(index - 1);
-                EvidenceLocation location = locateEvidence(claimText, chunk.getContent());
+                LocatedEvidence located = locateSupportingEvidence(claimText, chunk);
+                EvidenceLocation location = located.location;
                 if (!location.supported)
                     throw new IllegalStateException("事实句引用S" + index + "，但未在该来源原文中找到足够证据："
                         + abbreviate(claimText, 80));
@@ -61,12 +62,13 @@ public class KnowledgeCitationValidator
                 labels.add(label);
                 Map<String, Object> evidence = new LinkedHashMap<>();
                 evidence.put("citationLabel", label);
-                evidence.put("chunkId", chunk.getId());
-                evidence.put("sourceName", chunk.getSourceName());
-                evidence.put("originalName", chunk.getOriginalName());
-                evidence.put("versionNo", chunk.getVersionNo());
-                evidence.put("pageStart", chunk.getPageStart());
-                evidence.put("pageEnd", chunk.getPageEnd());
+                KnowledgeChunk evidenceChunk = located.chunk;
+                evidence.put("chunkId", evidenceChunk.getId());
+                evidence.put("sourceName", firstNonBlank(evidenceChunk.getSourceName(), chunk.getSourceName()));
+                evidence.put("originalName", firstNonBlank(evidenceChunk.getOriginalName(), chunk.getOriginalName()));
+                evidence.put("versionNo", firstNonBlank(evidenceChunk.getVersionNo(), chunk.getVersionNo()));
+                evidence.put("pageStart", evidenceChunk.getPageStart());
+                evidence.put("pageEnd", evidenceChunk.getPageEnd());
                 evidence.put("evidenceSnippet", location.snippet);
                 evidence.put("startOffset", location.startOffset);
                 evidence.put("endOffset", location.endOffset);
@@ -86,6 +88,38 @@ public class KnowledgeCitationValidator
         if (claims.isEmpty())
             throw new IllegalStateException("LLM回答没有可校验的带来源事实句");
         return new ValidationResult(new ArrayList<>(usedIndexes), claims, evidenceBySource);
+    }
+
+    private LocatedEvidence locateSupportingEvidence(String claim, KnowledgeChunk aggregate)
+    {
+        List<KnowledgeChunk> fragments = aggregate.getSourceFragments();
+        if (fragments == null || fragments.isEmpty())
+            return new LocatedEvidence(aggregate, locateEvidence(claim, aggregate.getContent(), false));
+        boolean structuredFragmentAllowed = metricIdentityMatches(claim, aggregate);
+        LocatedEvidence best = new LocatedEvidence(aggregate, EvidenceLocation.unsupported());
+        for (KnowledgeChunk fragment : fragments)
+        {
+            EvidenceLocation candidate = locateEvidence(claim, fragment.getContent(), structuredFragmentAllowed);
+            if (candidate.supported && (!best.location.supported || candidate.score > best.location.score))
+                best = new LocatedEvidence(fragment, candidate);
+        }
+        return best;
+    }
+
+    private boolean metricIdentityMatches(String claim, KnowledgeChunk aggregate)
+    {
+        List<String> required = new KnowledgeMetricQueryRouter().candidateTerms(claim);
+        if (required.size() < 2) return false;
+        String metadata = normalize(String.join(" ", safe(aggregate.getMetricId()), safe(aggregate.getTitlePath()),
+            safe(aggregate.getContent())));
+        return required.stream().allMatch(term -> metadata.contains(normalize(term)));
+    }
+
+    private String safe(String value) { return value == null ? "" : value; }
+
+    private String firstNonBlank(String primary, String fallback)
+    {
+        return primary == null || primary.isBlank() ? fallback : primary;
     }
 
     private void validateAllCitationNumbers(String answer, int sourceCount)
@@ -176,6 +210,11 @@ public class KnowledgeCitationValidator
 
     private EvidenceLocation locateEvidence(String claim, String content)
     {
+        return locateEvidence(claim, content, false);
+    }
+
+    private EvidenceLocation locateEvidence(String claim, String content, boolean allowStructuredNumeric)
+    {
         if (content == null || content.isBlank()) return EvidenceLocation.unsupported();
         List<TextWindow> windows = textWindows(content);
         Set<String> claimTerms = semanticTerms(claim);
@@ -190,7 +229,10 @@ public class KnowledgeCitationValidator
             double score = claimTerms.isEmpty() ? 0.0 : (double) matched.size() / claimTerms.size();
             String normalizedClaim = normalize(claim);
             boolean exact = normalizedClaim.length() >= 6 && normalize(window.text).contains(normalizedClaim);
-            boolean supported = numbersCovered && (exact || score >= 0.18 || matched.size() >= 3);
+            boolean structuredNumeric = allowStructuredNumeric
+                && (window.text.trim().startsWith("{") || window.text.trim().startsWith("["))
+                && claimNumbers.size() >= 2;
+            boolean supported = numbersCovered && (exact || score >= 0.18 || matched.size() >= 3 || structuredNumeric);
             if (supported && (!best.supported || score > best.score))
                 best = new EvidenceLocation(true, window.text.trim(), window.start, window.end,
                     Math.round(score * 1000.0) / 1000.0, new ArrayList<>(matched));
@@ -365,6 +407,8 @@ public class KnowledgeCitationValidator
     private record TextWindow(String text, int start, int end) { }
 
     private record NumericToken(double value, boolean percent, int decimals, boolean yearLike) { }
+
+    private record LocatedEvidence(KnowledgeChunk chunk, EvidenceLocation location) { }
 
     private static final class EvidenceLocation
     {

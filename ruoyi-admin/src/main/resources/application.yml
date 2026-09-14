@@ -148,6 +148,13 @@ xss:
 
 # 业务解析任务配置
 business:
+  pdf:
+    schema-auto-init: true
+  document:
+    private-root: ${BUSINESS_DOCUMENT_PRIVATE_ROOT:D:/ruoyi/business-document-private}
+  news:
+    # POC直接使用RuoYi原有MySQL数据源，启动时幂等补齐新闻采集扩展表
+    schema-auto-init: true
   llm:
     # 用于加密持久化前端保存的API Key；生产环境请通过LLM_CONFIG_SECRET设置独立且稳定的随机密钥
     persistence-secret: ${LLM_CONFIG_SECRET:${token.secret}}
@@ -156,8 +163,12 @@ business:
       # 推理型模型可能超过90秒，文本抽取独立设置较长超时
       timeout-seconds: ${TEXT_LLM_TIMEOUT_SECONDS:300}
   knowledge:
+    # POC启动时幂等创建问答审计表；正式环境使用迁移平台后可关闭
+    qa-schema-auto-init: true
     # Excel解析并生成报告后，只投影报告指标、结论和证据关系到知识库，不保存整份报告JSON副本
     auto-ingest-reports: true
+    # 使用同事的Python解析器；Python只返回结构化结果，正式入库仍由本服务写MySQL
+    agent-document-enabled: ${KNOWLEDGE_AGENT_DOCUMENT_ENABLED:true}
     executor:
       core-pool-size: 2
       max-pool-size: 2
@@ -193,3 +204,13 @@ business:
       report-timeout-seconds: ${ARK_REPORT_TIMEOUT_SECONDS:180}
       max-retries: ${ARK_MAX_RETRIES:0}
       max-table-calls: ${ARK_MAX_TABLE_CALLS:4}
+
+# Python新闻采集与PDF/PPTX解析侧车。LLM参数由上面的统一配置在每次内部请求中下发。
+agent-service:
+  base-url: ${AGENT_SERVICE_BASE_URL:http://127.0.0.1:8000}
+  connect-timeout: ${AGENT_SERVICE_CONNECT_TIMEOUT:10s}
+  read-timeout: ${AGENT_SERVICE_READ_TIMEOUT:300s}
+  document-read-timeout: ${AGENT_SERVICE_DOCUMENT_READ_TIMEOUT:1800s}
+  news-read-timeout: ${AGENT_SERVICE_NEWS_READ_TIMEOUT:600s}
+  vehicle-read-timeout: ${AGENT_SERVICE_VEHICLE_READ_TIMEOUT:600s}
+  internal-token: ${AGENT_INTERNAL_TOKEN:}

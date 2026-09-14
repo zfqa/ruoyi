@@ -59,6 +59,8 @@
       <el-table-column label="操作" align="center" class-name="small-padding fixed-width">
         <template slot-scope="scope">
           <el-button v-if="String(scope.row.status) === '2'" size="mini" type="text" icon="el-icon-view" @click="handleView(scope.row)">查看报告</el-button>
+          <el-button v-if="String(scope.row.status) === '2'" size="mini" type="text" icon="el-icon-document" @click="handleOfficeExport(scope.row, 'word')" v-hasPermi="['business:report:export']">Word</el-button>
+          <el-button v-if="String(scope.row.status) === '2'" size="mini" type="text" icon="el-icon-data-analysis" @click="handleOfficeExport(scope.row, 'ppt')" v-hasPermi="['business:report:export']">PPT</el-button>
           <el-button size="mini" type="text" icon="el-icon-edit" @click="handleUpdate(scope.row)" v-hasPermi="['business:report:edit']">修改</el-button>
           <el-button size="mini" type="text" icon="el-icon-delete" @click="handleDelete(scope.row)" v-hasPermi="['business:report:remove']">删除</el-button>
         </template>
@@ -100,6 +102,10 @@
     <el-dialog title="竞争社洞察报告" :visible.sync="reportOpen" width="90%" top="4vh" append-to-body>
       <div v-if="reportData" class="report-viewer">
         <h2>{{ reportData.title }}</h2>
+        <div class="report-export-actions" v-hasPermi="['business:report:export']">
+          <el-button type="primary" size="small" icon="el-icon-document" :loading="exportingFormat === 'word'" @click="handleOfficeExport(currentReport, 'word')">导出 Word</el-button>
+          <el-button type="success" size="small" icon="el-icon-data-analysis" :loading="exportingFormat === 'ppt'" @click="handleOfficeExport(currentReport, 'ppt')">导出 PPT</el-button>
+        </div>
         <el-alert
           v-if="reportData.quality && reportData.quality.data_gaps && reportData.quality.data_gaps.length"
           type="warning"
@@ -295,7 +301,8 @@
 </template>
 
 <script>
-import { listAiReport, getAiReport, addAiReport, updateAiReport, delAiReport, exportAiReport } from "@/api/business/report/aiReport";
+import { listAiReport, getAiReport, addAiReport, updateAiReport, delAiReport, exportAiReport, exportAiReportOffice } from "@/api/business/report/aiReport";
+import { blobValidate } from '@/utils/ruoyi';
 import * as echarts from 'echarts';
 require('echarts/theme/macarons');
 
@@ -314,6 +321,8 @@ export default {
       open: false,
       reportOpen: false,
       reportData: null,
+      currentReport: null,
+      exportingFormat: '',
       activeMaker: 'Tianma',
       shipmentShareChart: null,
       displayAreaShareChart: null,
@@ -598,6 +607,7 @@ export default {
     },
     openReportById(id) {
       getAiReport(id).then(response => {
+        this.currentReport = response.data;
         const content = response.data && response.data.reportContent;
         this.reportData = typeof content === 'string' ? JSON.parse(content) : content;
         const sectionNames = Object.keys((this.reportData || {}).maker_sections || {});
@@ -851,6 +861,19 @@ export default {
       this.download('/business/report/export', {
         ...this.queryParams
       }, `AI分析报告_${new Date().getTime()}.xlsx`)
+    },
+    handleOfficeExport(report, format) {
+      if (!report || !report.id || this.exportingFormat) return;
+      this.exportingFormat = format;
+      exportAiReportOffice(report.id, format).then(blob => {
+        if (!blobValidate(blob) || ((blob.type || '').toLowerCase().includes('json'))) {
+          return this.$download.printErrMsg(blob);
+        }
+        const suffix = format === 'word' ? 'docx' : 'pptx';
+        const baseName = (report.taskName || '车载市场分析报告').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 80);
+        this.$download.saveAs(blob, `${baseName}.${suffix}`);
+        this.$modal.msgSuccess(`${format === 'word' ? 'Word' : 'PPT'} 导出成功`);
+      }).finally(() => { this.exportingFormat = ''; });
     }
   }
 };
@@ -858,6 +881,7 @@ export default {
 
 <style scoped>
 .report-viewer { max-height: 78vh; overflow: auto; padding: 0 12px 20px; }
+.report-export-actions { position: sticky; top: 0; z-index: 6; padding: 10px 0; background: #fff; border-bottom: 1px solid #ebeef5; }
 .maker-card { margin: 16px 0; }
 .metric-table { margin: 12px 0 16px; }
 .summary-matrix { margin: 12px 0 16px; }

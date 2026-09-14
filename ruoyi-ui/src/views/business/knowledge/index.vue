@@ -2,9 +2,15 @@
   <div class="app-container kb-page">
     <el-tabs v-model="activeTab" @tab-click="onTabClick">
       <el-tab-pane label="固定资料" name="sources">
+        <div class="knowledge-category-filter">
+          <span class="category-title">知识分类</span>
+          <el-radio-group v-model="queryParams.sourceType" size="small" @change="handleCategoryChange">
+            <el-radio-button label="">全部</el-radio-button>
+            <el-radio-button v-for="t in sourceTypes" :key="t.value" :label="t.value">{{ t.label }}</el-radio-button>
+          </el-radio-group>
+        </div>
         <el-form :model="queryParams" ref="queryForm" size="small" :inline="true">
           <el-form-item label="资料名称"><el-input v-model="queryParams.sourceName" clearable @keyup.enter.native="getList" /></el-form-item>
-          <el-form-item label="类型"><el-select v-model="queryParams.sourceType" clearable><el-option v-for="t in sourceTypes" :key="t" :label="t" :value="t" /></el-select></el-form-item>
           <el-form-item><el-button type="primary" icon="el-icon-search" @click="getList">查询</el-button><el-button @click="resetQuery">重置</el-button></el-form-item>
         </el-form>
         <el-row :gutter="10" class="mb8">
@@ -13,7 +19,7 @@
         <el-table v-loading="loading" :data="sourceList">
           <el-table-column label="编码" prop="sourceCode" width="130" />
           <el-table-column label="资料名称" prop="sourceName" min-width="220" show-overflow-tooltip />
-          <el-table-column label="类型" prop="sourceType" width="90"><template slot-scope="s"><el-tag size="mini">{{ s.row.sourceType }}</el-tag></template></el-table-column>
+          <el-table-column label="知识分类" prop="sourceType" width="120"><template slot-scope="s"><el-tag :type="sourceTypeTag(s.row.sourceType)" size="mini">{{ sourceTypeLabel(s.row.sourceType) }}</el-tag></template></el-table-column>
           <el-table-column label="当前版本ID" prop="currentVersionId" width="110" align="center" />
           <el-table-column label="使用范围" prop="allowedPurpose" min-width="180" show-overflow-tooltip />
           <el-table-column label="状态" width="100"><template slot-scope="s"><el-tag :type="statusType(s.row.status)" size="mini">{{ statusText(s.row.status) }}</el-tag></template></el-table-column>
@@ -33,12 +39,12 @@
       <el-tab-pane label="知识检索" name="search">
         <el-form :inline="true" size="small" @submit.native.prevent>
           <el-form-item label="检索内容"><el-input v-model="searchForm.q" style="width:420px" placeholder="输入至少2个字符" @keyup.enter.native="doSearch" /></el-form-item>
-          <el-form-item label="来源"><el-select v-model="searchForm.sourceType" clearable><el-option v-for="t in sourceTypes" :key="t" :label="t" :value="t" /></el-select></el-form-item>
+          <el-form-item label="知识分类"><el-select v-model="searchForm.sourceType" clearable><el-option v-for="t in sourceTypes" :key="t.value" :label="t.label" :value="t.value" /></el-select></el-form-item>
           <el-form-item><el-button type="primary" icon="el-icon-search" :loading="searching" @click="doSearch">检索</el-button></el-form-item>
         </el-form>
         <el-empty v-if="searched && !searchResults.length" description="没有命中当前有效版本" />
         <el-card v-for="(item,index) in searchResults" :key="item.id" class="result-card" shadow="hover">
-          <div slot="header" class="result-head"><span><b>[S{{ index+1 }}]</b> {{ item.sourceName }}</span><el-tag size="mini">{{ item.sourceType }}</el-tag></div>
+          <div slot="header" class="result-head"><span><b>[S{{ index+1 }}]</b> {{ item.sourceName }}</span><el-tag :type="sourceTypeTag(item.sourceType)" size="mini">{{ sourceTypeLabel(item.sourceType) }}</el-tag></div>
           <p class="snippet">{{ item.sourceSnippet || item.content }}</p>
           <div class="source-meta">
             <span>版本：{{ item.versionNo }}</span><span v-if="item.originalName">原始文件：{{ item.originalName }}</span><span v-if="item.pageStart">PDF 第 {{ item.pageStart }} 页</span>
@@ -54,12 +60,24 @@
             <el-input v-model="qaForm.question" type="textarea" :rows="3" placeholder="回答只允许使用当前有效版本，并强制附带来源编号" />
           </el-form-item>
           <el-form-item label="限定来源">
-            <el-select v-model="qaForm.sourceType" clearable placeholder="留空：综合报告、新闻、政策和PDF"><el-option v-for="t in sourceTypes" :key="t" :label="t" :value="t" /></el-select>
+            <el-select v-model="qaForm.sourceType" clearable placeholder="留空：综合报告、新闻、政策和PDF"><el-option v-for="t in sourceTypes" :key="t.value" :label="t.label" :value="t.value" /></el-select>
             <el-checkbox v-model="qaForm.includeNews" :disabled="!!qaForm.sourceType" style="margin-left:16px">结合新闻/政策解释</el-checkbox>
             <el-button type="primary" icon="el-icon-chat-dot-round" :loading="asking" style="margin-left:12px" @click="doAsk">提问</el-button>
             <el-button icon="el-icon-setting" @click="openLlmConfig" v-hasPermi="['business:knowledge:edit']">LLM 配置</el-button>
           </el-form-item>
         </el-form>
+        <el-collapse class="qa-history">
+          <el-collapse-item title="最近问答记录（服务重启后仍可恢复）" name="history">
+            <el-button size="mini" icon="el-icon-refresh" :loading="qaHistoryLoading" @click="loadQaHistory">刷新</el-button>
+            <el-table :data="qaHistory" size="mini" style="margin-top:10px">
+              <el-table-column label="问题" prop="question" min-width="260" show-overflow-tooltip />
+              <el-table-column label="状态" prop="status" width="100" />
+              <el-table-column label="进度" prop="progress" width="80"><template slot-scope="s">{{ s.row.progress }}%</template></el-table-column>
+              <el-table-column label="创建时间" prop="createdAt" width="170" />
+              <el-table-column label="操作" width="90"><template slot-scope="s"><el-button type="text" size="mini" @click="restoreQaTask(s.row)">查看</el-button></template></el-table-column>
+            </el-table>
+          </el-collapse-item>
+        </el-collapse>
         <el-card v-if="asking && qaTask" shadow="never" class="qa-progress-card">
           <div class="qa-progress-head"><b>{{ qaTask.currentStage }}</b><span>{{ qaTask.progress || 0 }}%</span></div>
           <el-progress :percentage="qaTask.progress || 0" :status="qaTask.status==='FAILED' ? 'exception' : undefined" />
@@ -189,7 +207,7 @@
       <el-form ref="form" :model="form" :rules="rules" label-width="110px">
         <el-form-item label="资料编码" prop="sourceCode"><el-input v-model="form.sourceCode" placeholder="例如 POC-PDF-001" /></el-form-item>
         <el-form-item label="资料名称" prop="sourceName"><el-input v-model="form.sourceName" /></el-form-item>
-        <el-form-item label="来源类型" prop="sourceType"><el-radio-group v-model="form.sourceType"><el-radio-button v-for="t in sourceTypes" :key="t" :label="t" /></el-radio-group></el-form-item>
+        <el-form-item label="知识分类" prop="sourceType"><el-radio-group v-model="form.sourceType"><el-radio-button v-for="t in sourceTypes" :key="t.value" :label="t.value">{{ t.label }}</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="密级"><el-select v-model="form.confidentiality"><el-option label="内部" value="INTERNAL" /><el-option label="公开" value="PUBLIC" /><el-option label="受限" value="RESTRICTED" /></el-select></el-form-item>
         <el-form-item label="允许使用范围" prop="allowedPurpose"><el-input v-model="form.allowedPurpose" type="textarea" placeholder="例如：仅限POC问答和内部分析，不允许外发" /></el-form-item>
         <el-form-item label="允许角色ID"><el-input v-model="form.allowedRoleIds" placeholder="逗号分隔；留空则继承菜单权限" /></el-form-item>
@@ -200,7 +218,7 @@
     </el-dialog>
 
     <el-dialog title="资料入库" :visible.sync="ingestOpen" width="620px" :close-on-click-modal="false">
-      <el-alert v-if="ingestSource" :title="`${ingestSource.sourceName}（${ingestSource.sourceType}）`" type="info" :closable="false" class="mb16" />
+      <el-alert v-if="ingestSource" :title="`${ingestSource.sourceName}（${sourceTypeLabel(ingestSource.sourceType)}）`" type="info" :closable="false" class="mb16" />
       <el-form label-width="100px">
         <el-form-item label="版本号"><el-input v-model="ingestForm.versionNo" placeholder="留空自动生成时间版本" /></el-form-item>
         <template v-if="ingestSource && ingestSource.sourceType==='PDF'">
@@ -233,13 +251,14 @@
     </el-dialog>
 
     <el-dialog title="版本记录" :visible.sync="versionOpen" width="850px">
-      <el-table :data="versions"><el-table-column label="版本" prop="versionNo" /><el-table-column label="原始文件/标题" prop="originalName" min-width="220" /><el-table-column label="页数" prop="pageCount" width="70" /><el-table-column label="切片" prop="chunkCount" width="70" /><el-table-column label="状态" width="90"><template slot-scope="s">{{ statusText(s.row.status) }}</template></el-table-column><el-table-column label="创建时间" prop="createTime" width="170" /></el-table>
+      <el-table :data="versions"><el-table-column label="版本" prop="versionNo" /><el-table-column label="原始文件/标题" prop="originalName" min-width="220" /><el-table-column label="页数" prop="pageCount" width="70" /><el-table-column label="切片" prop="chunkCount" width="70" /><el-table-column label="状态" width="90"><template slot-scope="s">{{ statusText(s.row.status) }}</template></el-table-column><el-table-column label="解析提示" prop="errorMessage" min-width="220" show-overflow-tooltip /><el-table-column label="创建时间" prop="createTime" width="170" /></el-table>
     </el-dialog>
 
     <el-dialog title="源文档精确定位" :visible.sync="evidenceOpen" width="760px">
       <div v-if="evidenceDetail">
         <div class="source-meta"><span>{{ evidenceDetail.sourceName }}</span><span>{{ evidenceDetail.originalName }}</span><span>版本 {{ evidenceDetail.versionNo }}</span><span v-if="evidenceDetail.pageStart">PDF 第 {{ evidenceDetail.pageStart }} 页</span></div>
         <pre class="evidence-content"><span>{{ evidenceBefore }}</span><mark>{{ evidenceDetail.highlightedText }}</mark><span>{{ evidenceAfter }}</span></pre>
+        <el-button v-if="evidenceDetail.fileAvailable" type="primary" size="small" icon="el-icon-document" @click="openSourcePdf">在原 PDF 对应页查看</el-button>
         <a v-if="evidenceDetail.sourceUrl" :href="evidenceDetail.sourceUrl" target="_blank" rel="noopener noreferrer">打开新闻原文</a>
       </div>
     </el-dialog>
@@ -263,22 +282,29 @@
 <script>
 import { listKnowledgeBase, getKnowledgeBase, addKnowledgeBase, updateKnowledgeBase, delKnowledgeBase,
   ingestPdf, ingestNews, ingestPolicy, ingestNewsJson, ingestReport, getKnowledgeTask, listKnowledgeVersions, searchKnowledge,
-  submitKnowledgeQaTask, getKnowledgeQaTask,
-  getKnowledgeGraph, getKnowledgeEvidence, rebuildKnowledgeGraph, getKnowledgeLlmConfig, updateKnowledgeLlmConfig,
+  submitKnowledgeQaTask, getKnowledgeQaTask, listKnowledgeQaTasks,
+  getKnowledgeGraph, getKnowledgeEvidence, getKnowledgeEvidenceFile, rebuildKnowledgeGraph, getKnowledgeLlmConfig, updateKnowledgeLlmConfig,
   testKnowledgeLlmConfig } from '@/api/business/knowledge/knowledgeBase'
 import * as echarts from 'echarts'
+import { blobValidate } from '@/utils/ruoyi'
 
 export default {
   name: 'KnowledgeBase',
   data() {
     return {
-      activeTab: 'sources', sourceTypes: ['PDF', 'NEWS', 'POLICY', 'REPORT'], loading: false, total: 0, sourceList: [],
+      activeTab: 'sources', sourceTypes: [
+        { value: 'NEWS', label: '新闻' },
+        { value: 'REPORT', label: '生成报告' },
+        { value: 'PDF', label: 'PDF文档' },
+        { value: 'POLICY', label: '政策' }
+      ], loading: false, total: 0, sourceList: [],
       queryParams: { pageNum: 1, pageSize: 10, sourceName: undefined, sourceType: undefined },
       editOpen: false, form: {}, rules: { sourceCode: [{ required: true, message: '资料编码不能为空', trigger: 'blur' }], sourceName: [{ required: true, message: '资料名称不能为空', trigger: 'blur' }], sourceType: [{ required: true, message: '请选择类型', trigger: 'change' }], allowedPurpose: [{ required: true, message: '请填写允许使用范围', trigger: 'blur' }] },
       ingestOpen: false, ingestSource: null, ingestForm: {}, pdfFile: null, newsJsonFile: null, submitting: false, currentTask: null, poller: null,
       versionOpen: false, versions: [], searchForm: { q: '', sourceType: '' }, searching: false, searched: false, searchResults: [],
       qaForm: { question: '', sourceType: '', includeNews: true }, asking: false, qaResult: null,
       qaTask: null, qaPoller: null, qaRunningPanels: [], qaTracePanels: [],
+      qaHistory: [], qaHistoryLoading: false,
       graphFilter: { period: '', dataType: '' }, graphLoading: false, graphLoaded: false, graphRebuilding: false,
       graphData: { nodes: [], links: [], categories: [] }, graphCenterId: null, selectedRelation: null,
       graphChartInstance: null, qaGraphInstance: null, evidenceOpen: false, evidenceDetail: null,
@@ -304,11 +330,25 @@ export default {
     qaAnswerSegments() {
       const answer = (this.qaResult && this.qaResult.answer) || ''
       const citations = ((this.qaResult && this.qaResult.citations) || []).reduce((map, item) => { map[item.citationLabel] = item; return map }, {})
+      const evidenceQueues = {}
+      ;((this.qaResult && this.qaResult.claims) || []).forEach(claim => {
+        ;(claim.evidences || []).forEach(evidence => {
+          if (!evidenceQueues[evidence.citationLabel]) evidenceQueues[evidence.citationLabel] = []
+          evidenceQueues[evidence.citationLabel].push(evidence)
+        })
+      })
+      const evidenceCursors = {}
       const result = []; const pattern = /\[S(\d+)]/g; let start = 0; let match; let key = 0
       while ((match = pattern.exec(answer)) !== null) {
         if (match.index > start) result.push({ key: `text-${key++}`, text: answer.slice(start, match.index) })
         const label = `S${match[1]}`
-        result.push({ key: `citation-${key++}`, text: match[0], citation: citations[label] })
+        const queue = evidenceQueues[label] || []; const cursor = evidenceCursors[label] || 0
+        const exactEvidence = queue[Math.min(cursor, Math.max(0, queue.length - 1))]
+        evidenceCursors[label] = cursor + 1
+        const citation = citations[label] && exactEvidence
+          ? { ...citations[label], ...exactEvidence, evidenceLocations: [exactEvidence] }
+          : citations[label]
+        result.push({ key: `citation-${key++}`, text: match[0], citation })
         start = pattern.lastIndex
       }
       if (start < answer.length) result.push({ key: `text-${key++}`, text: answer.slice(start) })
@@ -317,6 +357,7 @@ export default {
   },
   methods: {
     getList() { this.loading = true; listKnowledgeBase(this.queryParams).then(r => { this.sourceList = r.rows; this.total = r.total }).finally(() => { this.loading = false }) },
+    handleCategoryChange() { this.queryParams.pageNum = 1; this.getList() },
     resetQuery() { this.queryParams = { pageNum: 1, pageSize: 10, sourceName: undefined, sourceType: undefined }; this.getList() },
     resetFormData() { this.form = { id: undefined, sourceCode: '', sourceName: '', sourceType: 'PDF', confidentiality: 'INTERNAL', allowedPurpose: '', allowedRoleIds: '', enabled: '1', status: '0', remark: '' } },
     handleAdd() { this.resetFormData(); this.editOpen = true },
@@ -374,7 +415,16 @@ export default {
       updateKnowledgeLlmConfig(this.llmConfigForm).then(r => { this.llmConfigForm = { ...r.data, apiKey: '', clearApiKey: false }; this.$modal.msgSuccess('LLM配置已保存，服务重启后仍然生效') }).finally(() => { this.llmSaving = false })
     },
     testLlm() { this.llmTesting = true; testKnowledgeLlmConfig().then(r => this.$modal.msgSuccess(`连接成功，耗时 ${r.data.durationMs} ms`)).finally(() => { this.llmTesting = false }) },
-    onTabClick(tab) { if (tab.name === 'graph' && !this.graphLoaded) this.loadGraph() },
+    onTabClick(tab) { if (tab.name === 'graph' && !this.graphLoaded) this.loadGraph(); if (tab.name === 'qa') this.loadQaHistory() },
+    loadQaHistory() { this.qaHistoryLoading = true; listKnowledgeQaTasks({ limit: 30 }).then(r => { this.qaHistory = r.data || [] }).finally(() => { this.qaHistoryLoading = false }) },
+    restoreQaTask(row) {
+      getKnowledgeQaTask(row.taskId).then(r => {
+        this.qaTask = r.data
+        if (r.data.status === 'SUCCESS') { this.qaResult = r.data.result; this.asking = false; this.$nextTick(() => this.renderGraph('qaGraph', this.qaResult && this.qaResult.graph, 'qaGraphInstance')) }
+        else if (r.data.status === 'QUEUED' || r.data.status === 'RUNNING') { this.asking = true; this.startQaPolling(row.taskId) }
+        else { this.qaResult = null; this.asking = false; this.$modal.msgWarning(r.data.errorMessage || '该任务执行失败') }
+      })
+    },
     loadGraph(centerId) { this.graphLoading = true; this.graphCenterId = centerId || null; this.selectedRelation = null; getKnowledgeGraph({ ...this.graphFilter, centerId: this.graphCenterId, limit: 300 }).then(r => { this.graphData = r.data || { nodes: [], links: [], categories: [] }; this.graphLoaded = true; this.$nextTick(() => this.renderGraph('graphChart', this.graphData, 'graphChartInstance')) }).finally(() => { this.graphLoading = false }) },
     resetGraph() { this.graphCenterId = null; this.loadGraph() },
     rebuildGraph() { this.graphRebuilding = true; rebuildKnowledgeGraph().then(r => { this.$modal.msgSuccess(`已处理 ${r.data.chunkCount} 个切片`); this.resetGraph() }).finally(() => { this.graphRebuilding = false }) },
@@ -386,9 +436,33 @@ export default {
       chart.on('click', params => { if (params.dataType === 'node' && refName === 'graphChart') this.loadGraph(Number(params.data.id)); if (params.dataType === 'edge') this.selectedRelation = params.data })
     },
     openEvidence(item) { const chunkId = item.chunkId || item.id; if (!chunkId) return this.$modal.msgError('该来源缺少切片定位信息'); getKnowledgeEvidence(chunkId, { startOffset: item.startOffset, endOffset: item.endOffset }).then(r => { this.evidenceDetail = r.data; this.evidenceOpen = true }) },
-    openCitation(item) { const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : {}; this.openEvidence({ id: item.id, chunkId: item.id, startOffset: evidence.startOffset, endOffset: evidence.endOffset }) },
+    openCitation(item) { const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : item; this.openEvidence({ id: item.id, chunkId: evidence.chunkId || item.chunkId || item.id, startOffset: evidence.startOffset, endOffset: evidence.endOffset }) },
+    openSourcePdf() {
+      if (!this.evidenceDetail || !this.evidenceDetail.chunkId) return
+      const viewer = window.open('about:blank', '_blank')
+      if (viewer) viewer.opener = null
+      getKnowledgeEvidenceFile(this.evidenceDetail.chunkId).then(blob => {
+        if (!blobValidate(blob) || ((blob.type || '').toLowerCase().includes('json'))) {
+          return blob.text().then(text => {
+            let message = 'PDF原件打开失败'
+            try { message = JSON.parse(text).msg || message } catch (e) { /* 保留通用提示 */ }
+            if (viewer) viewer.close()
+            this.$modal.msgError(message)
+          })
+        }
+        const url = URL.createObjectURL(blob)
+        const page = this.evidenceDetail.pageStart || 1
+        const search = encodeURIComponent((this.evidenceDetail.highlightedText || '').replace(/\s+/g, ' ').slice(0, 120))
+        const target = `${url}#page=${page}${search ? `&search=${search}` : ''}`
+        if (viewer) viewer.location.href = target
+        else window.open(target, '_blank', 'noopener')
+        setTimeout(() => URL.revokeObjectURL(url), 60000)
+      }).catch(() => { if (viewer) viewer.close() })
+    },
     citationPreview(item) { const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : null; return (evidence && evidence.evidenceSnippet) || item.sourceSnippet || '暂无摘要' },
     sourceIcon(type) { return ({ NEWS: 'el-icon-news', POLICY: 'el-icon-document-checked', PDF: 'el-icon-document', REPORT: 'el-icon-data-analysis' })[type] || 'el-icon-files' },
+    sourceTypeLabel(type) { const item = this.sourceTypes.find(t => t.value === type); return item ? item.label : (type || '未分类') },
+    sourceTypeTag(type) { return ({ NEWS: 'success', REPORT: 'primary', PDF: 'info', POLICY: 'warning' })[type] || 'info' },
     statusText(s) { return ({ '0': '待处理', '1': '处理中', '2': '成功', '3': '失败' })[s] || s },
     statusType(s) { return ({ '0': 'info', '1': 'warning', '2': 'success', '3': 'danger' })[s] || 'info' },
     answerModeText(mode) { return ({ LLM_VERIFIED: 'LLM 已核验', LLM_REPAIRED: 'LLM 引用已修复', EXTRACTIVE_FALLBACK: '原文安全降级' })[mode] || mode || '未知模式' },
@@ -400,6 +474,6 @@ export default {
 </script>
 
 <style scoped>
-.mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.graph-chart { height:650px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph { height:420px; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
+.mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.graph-chart { height:650px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph { height:420px; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
 .analysis-timeline { padding:6px 8px 0 6px; }.analysis-step-card { line-height:1.75; }.analysis-step-title { font-weight:700; font-size:15px; color:#303133; margin-bottom:6px; }.analysis-boundary { color:#e6a23c; }.analysis-evidences { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:6px; padding-top:6px; border-top:1px dashed #dcdfe6; }
 </style>

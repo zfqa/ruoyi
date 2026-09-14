@@ -2,6 +2,7 @@ package com.ruoyi.business.knowledge.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -27,6 +28,8 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 class KnowledgeGraphServiceTest
 {
@@ -126,6 +129,36 @@ class KnowledgeGraphServiceTest
             && "BYD".equals(n.getEntityName())));
         assertTrue(relations.stream().allMatch(r -> "POLICY".equals(r.getDataType())));
         assertTrue(relations.stream().allMatch(r -> "2025".equals(r.getPeriod())));
+    }
+
+    @Test
+    void returnsAuthorizedPdfWithoutExposingOrAcceptingAnOutsidePath() throws Exception
+    {
+        KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
+        Path profile = Path.of("target", "knowledge-graph-file-test").toAbsolutePath().normalize();
+        KnowledgeFileStorage storage = new KnowledgeFileStorage(profile.toString());
+        Path controlled = profile.resolve("knowledge/pdf/source.pdf");
+        Files.createDirectories(controlled.getParent());
+        Files.writeString(controlled, "%PDF-test");
+        KnowledgeChunk chunk = new KnowledgeChunk();
+        chunk.setId(88L); chunk.setVersionId(7L); chunk.setSourceType("PDF");
+        KnowledgeVersion version = new KnowledgeVersion();
+        version.setId(7L); version.setStoredPath(controlled.toString()); version.setOriginalName("终稿.pdf");
+        when(mapper.selectAuthorizedChunkById(eq(88L), anyList(), eq(false))).thenReturn(chunk);
+        when(mapper.selectVersionById(7L)).thenReturn(version);
+
+        KnowledgeGraphService.SourceFile result = new KnowledgeGraphService(mapper, storage)
+            .sourceFile(88L, List.of(2L), false);
+
+        assertEquals(controlled, result.path());
+        assertEquals("终稿.pdf", result.originalName());
+        version.setStoredPath(profile.resolve("outside.pdf").toString());
+        assertThrows(IllegalArgumentException.class,
+            () -> new KnowledgeGraphService(mapper, storage).sourceFile(88L, List.of(2L), false));
+        Files.deleteIfExists(controlled);
+        Files.deleteIfExists(controlled.getParent());
+        Files.deleteIfExists(controlled.getParent().getParent());
+        Files.deleteIfExists(profile);
     }
 
     private Map<String, Object> relationRow(Long relationId, Long toId, String type,

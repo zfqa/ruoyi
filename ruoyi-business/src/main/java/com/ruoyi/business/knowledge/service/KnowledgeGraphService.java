@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.nio.file.Path;
 import com.ruoyi.business.knowledge.domain.KnowledgeBase;
 import com.ruoyi.business.knowledge.domain.KnowledgeChunk;
 import com.ruoyi.business.knowledge.domain.KnowledgeGraphNode;
@@ -41,10 +42,18 @@ public class KnowledgeGraphService
     private static final int MAX_ENTITIES_PER_CHUNK = 24;
 
     private final KnowledgeBaseMapper mapper;
+    private final KnowledgeFileStorage fileStorage;
 
     public KnowledgeGraphService(KnowledgeBaseMapper mapper)
     {
+        this(mapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public KnowledgeGraphService(KnowledgeBaseMapper mapper, KnowledgeFileStorage fileStorage)
+    {
         this.mapper = mapper;
+        this.fileStorage = fileStorage;
     }
 
     public void clearVersion(Long versionId)
@@ -121,13 +130,51 @@ public class KnowledgeGraphService
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("chunkId", chunk.getId()); result.put("sourceName", chunk.getSourceName());
         result.put("originalName", chunk.getOriginalName()); result.put("versionNo", chunk.getVersionNo());
+        result.put("sourceType", chunk.getSourceType());
         result.put("pageStart", chunk.getPageStart()); result.put("pageEnd", chunk.getPageEnd());
         result.put("sourceUrl", chunk.getSourceUrl()); result.put("reportId", chunk.getReportId());
         result.put("metricId", chunk.getMetricId()); result.put("content", content);
         result.put("startOffset", start); result.put("endOffset", end);
         result.put("highlightedText", content.substring(start, end));
+        result.put("fileAvailable", isPdfFileAvailable(chunk));
         return result;
     }
+
+    public SourceFile sourceFile(Long chunkId, List<Long> roleIds, boolean admin)
+    {
+        if (fileStorage == null) throw new IllegalStateException("知识库文件存储服务不可用");
+        KnowledgeChunk chunk = mapper.selectAuthorizedChunkById(chunkId, safeRoles(roleIds), admin);
+        if (chunk == null) throw new IllegalArgumentException("原始文件不存在或无权访问");
+        KnowledgeVersion version = mapper.selectVersionById(chunk.getVersionId());
+        if (version == null || !"PDF".equalsIgnoreCase(chunk.getSourceType()))
+            throw new IllegalArgumentException("该引用没有可预览的PDF原件");
+        try
+        {
+            Path path = fileStorage.resolveForRead(version.getStoredPath());
+            return new SourceFile(path, safeFileName(version.getOriginalName()));
+        }
+        catch (java.io.IOException e)
+        {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
+    }
+
+    private boolean isPdfFileAvailable(KnowledgeChunk chunk)
+    {
+        if (fileStorage == null || chunk == null || !"PDF".equalsIgnoreCase(chunk.getSourceType())) return false;
+        KnowledgeVersion version = mapper.selectVersionById(chunk.getVersionId());
+        if (version == null) return false;
+        try { fileStorage.resolveForRead(version.getStoredPath()); return true; }
+        catch (java.io.IOException ignored) { return false; }
+    }
+
+    private String safeFileName(String value)
+    {
+        String name = value == null || value.isBlank() ? "knowledge-source.pdf" : value;
+        return name.replace("\r", "").replace("\n", "").replace("\"", "'");
+    }
+
+    public record SourceFile(Path path, String originalName) { }
 
     private void insertRelation(KnowledgeGraphNode from, KnowledgeGraphNode to, String type,
         KnowledgeBase source, KnowledgeVersion version, KnowledgeChunk chunk, String period)

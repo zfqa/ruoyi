@@ -56,7 +56,26 @@
         <if test="enabled != null and enabled != ''">and enabled=#{enabled}</if>
         </where> order by create_time desc
     </select>
+    <select id="selectAuthorizedKnowledgeBaseList" resultMap="KnowledgeBaseResult">
+        <include refid="selectKnowledgeBaseVo"/><where>
+        <if test="filter.sourceName != null and filter.sourceName != ''">and source_name like concat('%', #{filter.sourceName}, '%')</if>
+        <if test="filter.sourceType != null and filter.sourceType != ''">and source_type=#{filter.sourceType}</if>
+        <if test="filter.status != null and filter.status != ''">and status=#{filter.status}</if>
+        <if test="filter.enabled != null and filter.enabled != ''">and enabled=#{filter.enabled}</if>
+        <if test="!admin">
+          and (allowed_role_ids is null or allowed_role_ids=''
+          <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},allowed_role_ids)&gt;0</foreach>)
+        </if>
+        </where> order by create_time desc
+    </select>
     <select id="selectKnowledgeBaseById" resultMap="KnowledgeBaseResult"><include refid="selectKnowledgeBaseVo"/> where id=#{id}</select>
+    <select id="selectAuthorizedKnowledgeBaseById" resultMap="KnowledgeBaseResult">
+        <include refid="selectKnowledgeBaseVo"/> where id=#{id}
+        <if test="!admin">
+          and (allowed_role_ids is null or allowed_role_ids=''
+          <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},allowed_role_ids)&gt;0</foreach>)
+        </if>
+    </select>
     <select id="selectKnowledgeBaseBySourceCode" resultMap="KnowledgeBaseResult"><include refid="selectKnowledgeBaseVo"/> where source_code=#{sourceCode} limit 1</select>
     <insert id="insertKnowledgeBase" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeBase" useGeneratedKeys="true" keyProperty="id">
         insert into business_knowledge (source_code,source_name,source_type,current_version_id,owner_dept_id,
@@ -73,6 +92,10 @@
         <if test="enabled != null and enabled != ''">enabled=#{enabled},</if><if test="status != null and status != ''">status=#{status},</if>
         <if test="updateBy != null">update_by=#{updateBy},</if><if test="remark != null">remark=#{remark},</if>update_time=sysdate()
         </set> where id=#{id}
+    </update>
+    <update id="promoteCurrentVersionIfNewer">
+        update business_knowledge set current_version_id=#{versionId},status='2',remark=#{remark},update_time=sysdate()
+        where id=#{sourceId} and (current_version_id is null or current_version_id&lt;#{versionId})
     </update>
     <delete id="deleteKnowledgeBaseById">delete from business_knowledge where id=#{id}</delete>
     <delete id="deleteKnowledgeBaseByIds">delete from business_knowledge where id in <foreach collection="array" item="id" open="(" separator="," close=")">#{id}</foreach></delete>
@@ -170,7 +193,7 @@
     <select id="selectAuthorizedChunkById" resultMap="ChunkResult">
         select c.*,s.source_name,s.source_type,v.version_no,v.original_name
         from business_kb_chunk c
-        join business_knowledge s on s.id=c.source_id and s.enabled='1' and s.current_version_id=c.version_id
+        join business_knowledge s on s.id=c.source_id and s.enabled='1'
         join business_kb_version v on v.id=c.version_id and v.status='2'
         where c.id=#{id}
         <if test="!admin">
@@ -206,13 +229,14 @@
         join business_kb_entity f on f.id=r.from_entity_id
         join business_kb_entity t on t.id=r.to_entity_id
         join business_kb_chunk c on c.id=r.chunk_id
-        join business_knowledge s on s.id=r.source_id and s.enabled='1' and s.current_version_id=r.version_id
+        join business_knowledge s on s.id=r.source_id and s.enabled='1'
         join business_kb_version v on v.id=r.version_id and v.status='2'
     </sql>
 
     <select id="selectGraphRelations" resultType="java.util.LinkedHashMap">
         <include refid="graphRelationColumns"/>
         <where>
+          and s.current_version_id=r.version_id
           <if test="period != null and period != ''">and r.period=#{period}</if>
           <if test="dataType != null and dataType != ''">
             <choose>
@@ -248,4 +272,47 @@
         join business_kb_version v on v.id=c.version_id and v.status='2'
         order by c.version_id,c.chunk_no limit #{limit}
     </select>
+
+    <insert id="insertQaSession">
+        insert into business_kb_qa_session
+        (task_id,task_owner,question,source_type,include_news,status,progress,current_stage,error_message,snapshot_json,create_time,update_time)
+        values (#{taskId},#{owner},#{question},#{sourceType},#{includeNews},'QUEUED',0,'等待执行','',#{snapshotJson},sysdate(),sysdate())
+    </insert>
+    <update id="updateQaSession">
+        update business_kb_qa_session set status=#{status},progress=#{progress},current_stage=#{currentStage},
+        error_message=#{errorMessage},snapshot_json=#{snapshotJson},started_time=#{startedAt},finished_time=#{finishedAt},update_time=sysdate()
+        where task_id=#{taskId}
+    </update>
+    <select id="selectQaSession" resultType="java.util.LinkedHashMap">
+        select task_id taskId,task_owner owner,snapshot_json snapshotJson from business_kb_qa_session where task_id=#{taskId}
+    </select>
+    <select id="selectQaSessions" resultType="java.util.LinkedHashMap">
+        select task_id taskId,question,source_type sourceType,include_news includeNews,status,progress,
+        current_stage currentStage,error_message errorMessage,create_time createdAt,started_time startedAt,finished_time finishedAt
+        from business_kb_qa_session
+        <if test="!admin">where task_owner=#{owner}</if>
+        order by create_time desc limit #{limit}
+    </select>
+    <delete id="deleteQaClaims">delete from business_kb_qa_claim where task_id=#{taskId}</delete>
+    <delete id="deleteQaCitations">delete from business_kb_qa_citation where task_id=#{taskId}</delete>
+    <insert id="insertQaClaim">
+        insert into business_kb_qa_claim (task_id,claim_no,claim_text,verified,create_time)
+        values (#{taskId},#{claimNo},#{claimText},#{verified},sysdate())
+    </insert>
+    <insert id="insertQaCitation">
+        insert into business_kb_qa_citation
+        (task_id,claim_no,citation_label,chunk_id,source_name,page_start,page_end,start_offset,end_offset,evidence_snippet,create_time)
+        values (#{taskId},#{claimNo},#{citationLabel},#{chunkId},#{sourceName},#{pageStart},#{pageEnd},#{startOffset},#{endOffset},#{evidenceSnippet},sysdate())
+    </insert>
+    <delete id="deleteQaCitationsBefore">
+        delete c from business_kb_qa_citation c join business_kb_qa_session s on s.task_id=c.task_id
+        where s.finished_time is not null and s.finished_time&lt;#{cutoff}
+    </delete>
+    <delete id="deleteQaClaimsBefore">
+        delete c from business_kb_qa_claim c join business_kb_qa_session s on s.task_id=c.task_id
+        where s.finished_time is not null and s.finished_time&lt;#{cutoff}
+    </delete>
+    <delete id="deleteQaSessionsBefore">
+        delete from business_kb_qa_session where finished_time is not null and finished_time&lt;#{cutoff}
+    </delete>
 </mapper>

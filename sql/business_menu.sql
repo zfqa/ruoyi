@@ -16,10 +16,11 @@ insert into sys_menu values('2400', '固定知识库', '2000', '4', 'knowledge',
 -- 二级菜单：AI分析报告
 insert into sys_menu values('2500', 'AI分析报告', '2000', '5', 'report', 'business/report/index', '', '', 1, 0, 'C', '0', '0', 'business:report:list', 'report', 'admin', sysdate(), '', null, 'AI分析报告菜单');
 
--- 车载分析目录；同时保留整车市场分析与原车载市场分析
-insert into sys_menu values('2202', '车载分析', '2200', '1', 'display', null, '', '', 1, 0, 'M', '0', '0', '', 'monitor', 'admin', sysdate(), '', null, '车载分析目录');
-insert into sys_menu values('2201', '整车市场分析', '2202', '1', 'vehicle', 'business/analysis/vehicle/index', '', '', 1, 0, 'C', '0', '0', 'business:analysis:vehicle:list', 'chart', 'admin', sysdate(), '', null, '整车市场分析菜单');
-insert into sys_menu values('2101', '车载市场分析', '2202', '2', 'excel', 'business/data/excel/index', '', '', 1, 0, 'C', '0', '0', 'business:data:excel:list', 'excel', 'admin', sysdate(), '', null, '车载显示Excel解析、指标计算与竞争社报告菜单');
+-- 市场分析下将整车分析与车载分析分成两个独立目录
+insert into sys_menu values('2203', '整车分析', '2200', '1', 'vehicle', null, '', '', 1, 0, 'M', '0', '0', '', 'dashboard', 'admin', sysdate(), '', null, '整车分析目录');
+insert into sys_menu values('2201', '整车市场分析', '2203', '1', 'market', 'business/analysis/vehicle/index', '', '', 1, 0, 'C', '0', '0', 'business:analysis:vehicle:list', 'chart', 'admin', sysdate(), '', null, '整车市场分析菜单');
+insert into sys_menu values('2202', '车载分析', '2200', '2', 'display', null, '', '', 1, 0, 'M', '0', '0', '', 'monitor', 'admin', sysdate(), '', null, '车载分析目录');
+insert into sys_menu values('2101', '车载市场分析', '2202', '1', 'excel', 'business/data/excel/index', '', '', 1, 0, 'C', '0', '0', 'business:data:excel:list', 'excel', 'admin', sysdate(), '', null, '车载显示Excel解析、指标计算与竞争社报告菜单');
 
 -- PDF和文本结构化保持原位
 insert into sys_menu values('2102', 'PDF解析', '2100', '2', 'pdf', 'business/data/pdf/index', '', '', 1, 0, 'C', '0', '0', 'business:data:pdf:list', 'pdf', 'admin', sysdate(), '', null, 'PDF解析菜单');

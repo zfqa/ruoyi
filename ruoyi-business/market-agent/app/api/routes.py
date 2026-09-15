@@ -148,7 +148,13 @@ async def _stage_upload_job(files: List[UploadFile]) -> dict:
     settings = get_settings()
     job_id = uuid.uuid4().hex
     stage_dir = settings.job_dir / job_id / "files"
-    stage_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        stage_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=507,
+            detail=f"整车分析存储目录不可写：{settings.job_dir}。请使用 run-safe.ps1 重启服务或配置可写的 MARKET_AGENT_STORAGE_DIR",
+        ) from exc
     staged: list[tuple[str, str]] = []
     for index, file in enumerate(files):
         suffix = Path(file.filename or "").suffix.lower()

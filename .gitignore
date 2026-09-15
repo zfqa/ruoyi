@@ -51,6 +51,7 @@ nbdist/
 tmp/
 excel-results/
 runtime-uploadPath/
+runtime-market-agent-storage/
 tools/
 dump.rdb
 *.rdb

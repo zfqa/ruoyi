@@ -192,10 +192,30 @@ if (-not $marketAgentReady) {
     if ($LASTEXITCODE -ne 0) {
         throw "Market Agent dependencies are missing. Run: & '$env:PYTHON' -m pip install -r '$marketAgentRoot\requirements.txt'"
     }
+    $fallbackMarketStorage = Join-Path $projectRoot "runtime-market-agent-storage"
     if ([string]::IsNullOrWhiteSpace($env:MARKET_AGENT_STORAGE_DIR)) {
-        $env:MARKET_AGENT_STORAGE_DIR = "D:\ruoyi\market-agent-storage"
+        $env:MARKET_AGENT_STORAGE_DIR = $fallbackMarketStorage
     }
-    New-Item -ItemType Directory -Path $env:MARKET_AGENT_STORAGE_DIR -Force | Out-Null
+    try {
+        $marketJobRoot = Join-Path $env:MARKET_AGENT_STORAGE_DIR "jobs"
+        New-Item -ItemType Directory -Path $marketJobRoot -Force -ErrorAction Stop | Out-Null
+        $marketProbeDir = Join-Path $marketJobRoot (".startup-probe-" + [Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $marketProbeDir -ErrorAction Stop | Out-Null
+        $marketProbeFile = Join-Path $marketProbeDir "write.tmp"
+        Set-Content -LiteralPath $marketProbeFile -Value "ok" -Encoding Ascii -ErrorAction Stop
+        Remove-Item -LiteralPath $marketProbeFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $marketProbeDir -Force -ErrorAction SilentlyContinue
+    } catch {
+        if ($env:MARKET_AGENT_STORAGE_DIR -ne $fallbackMarketStorage) {
+            Write-Warning "$env:MARKET_AGENT_STORAGE_DIR is not writable; using $fallbackMarketStorage"
+        }
+        $env:MARKET_AGENT_STORAGE_DIR = $fallbackMarketStorage
+        $marketJobRoot = Join-Path $env:MARKET_AGENT_STORAGE_DIR "jobs"
+        New-Item -ItemType Directory -Path $marketJobRoot -Force -ErrorAction Stop | Out-Null
+        $marketProbeDir = Join-Path $marketJobRoot (".startup-probe-" + [Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $marketProbeDir -ErrorAction Stop | Out-Null
+        Remove-Item -LiteralPath $marketProbeDir -Force -ErrorAction SilentlyContinue
+    }
     $env:STORAGE_DIR = $env:MARKET_AGENT_STORAGE_DIR
     $env:MARKET_AGENT_HOST = "127.0.0.1"
     $env:MARKET_AGENT_PORT = [string]$marketAgentPort
@@ -218,7 +238,7 @@ if (-not $marketAgentReady) {
 if ([string]::IsNullOrWhiteSpace($env:MARKET_AGENT_BASE_URL)) {
     $env:MARKET_AGENT_BASE_URL = "http://127.0.0.1:$marketAgentPort/api"
 }
-Write-Host "Market Agent check passed: $env:MARKET_AGENT_BASE_URL"
+Write-Host "Market Agent check passed: $env:MARKET_AGENT_BASE_URL (storage: $env:MARKET_AGENT_STORAGE_DIR)"
 
 $jar = Join-Path $projectRoot "ruoyi-admin\target\ruoyi-admin.jar"
 if (-not (Test-Path -LiteralPath $jar -PathType Leaf)) {

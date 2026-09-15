@@ -113,6 +113,56 @@ class CompetitiveInsightReportTest(unittest.TestCase):
         evidence = report["narrative_sources"][0]["metrics"][0]["evidence"]
         self.assertEqual("Shipment", evidence["2025"]["sheet"])
 
+    def test_llm_metric_reference_variants_resolve_to_canonical_evidence_ids(self):
+        class FakeClient:
+            available = True
+            model = "fake"
+
+            def complete_json(self, system_prompt, user_prompt, max_tokens=3000):
+                return {
+                    "executive_summary": [
+                        "AUO客户增长 [auo.client.faurecia_coagent]",
+                        "LTPS大尺寸增长 [maker.auo.technology_size.ltps.gte15]",
+                    ]
+                }
+
+        parsed = {
+            "workbook_id": "sha256:test",
+            "file_name": "tracker.xlsx",
+            "computed_metrics": {
+                "engine": "test",
+                "client": {
+                    "metric_id": "auo.client.faurecia_coagent.shipment",
+                    "evidence": {"Y25Q1-Q3": {"sheet": "Supply Chain", "cells": ["A1"]}},
+                },
+                "technology_size": {
+                    "metric_id": "auo.technology_size.ltps.gte15",
+                    "evidence": {"Y25Q1-Q3": {"sheet": "Shipment", "cells": ["B2"]}},
+                },
+            },
+        }
+
+        report = generate_competitive_insight_report(parsed, llm_client=FakeClient())
+
+        self.assertEqual(
+            [
+                "auo.client.faurecia_coagent.shipment",
+                "auo.technology_size.ltps.gte15",
+            ],
+            report["quality"]["narrative_metric_refs"],
+        )
+        self.assertEqual(
+            [
+                "auo.client.faurecia_coagent.shipment",
+                "auo.technology_size.ltps.gte15",
+            ],
+            [item["metric_ids"][0] for item in report["narrative_sources"]],
+        )
+        self.assertFalse(any(
+            "无法解析的指标引用" in item
+            for item in report["quality"]["data_gaps"]
+        ))
+
     def test_llm_failure_returns_report_template_instead_of_failing_task(self):
         class FailingClient:
             available = True

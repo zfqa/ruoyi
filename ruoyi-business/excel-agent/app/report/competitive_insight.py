@@ -445,12 +445,22 @@ def _clean_narrative_list(values: list[Any]) -> list[str]:
 def _finalize_narrative_traceability(report: dict[str, Any]) -> dict[str, Any]:
     """Strip internal metric references from prose and retain a displayable conclusion-to-evidence map."""
     result = deepcopy(report)
-    declared_refs = set((result.get("quality") or {}).get("narrative_metric_refs") or [])
     source_file = (result.get("source") or {}).get("file_name")
     evidence_by_metric = {
         item.get("metric_id"): item.get("evidence")
         for item in (result.get("evidence") or [])
         if isinstance(item, dict) and item.get("metric_id")
+    }
+    metric_aliases = _metric_reference_aliases(evidence_by_metric)
+
+    def resolve_metric_id(metric_id: str) -> str | None:
+        if metric_id in evidence_by_metric:
+            return metric_id
+        return metric_aliases.get(metric_id)
+
+    declared_refs = {
+        resolve_metric_id(metric_id) or metric_id
+        for metric_id in ((result.get("quality") or {}).get("narrative_metric_refs") or [])
     }
     narrative_sources: list[dict[str, Any]] = []
     seen: dict[tuple[str, tuple[str, ...]], str] = {}
@@ -472,8 +482,9 @@ def _finalize_narrative_traceability(report: dict[str, Any]) -> dict[str, Any]:
             return value
         refs = METRIC_REF_TOKEN_PATTERN.findall(match.group(0))
         text = METRIC_REF_PATTERN.sub("", value).strip()
-        valid_refs = tuple(dict.fromkeys(ref for ref in refs if ref in evidence_by_metric))
-        invalid_refs.update(ref for ref in refs if ref not in evidence_by_metric)
+        resolved_refs = [resolve_metric_id(ref) for ref in refs]
+        valid_refs = tuple(dict.fromkeys(ref for ref in resolved_refs if ref))
+        invalid_refs.update(ref for ref, resolved in zip(refs, resolved_refs) if not resolved)
         if not text or not valid_refs:
             return text
         key = (text, valid_refs)
@@ -502,6 +513,32 @@ def _finalize_narrative_traceability(report: dict[str, Any]) -> dict[str, Any]:
             "分析文案包含无法解析的指标引用：" + "、".join(sorted(invalid_refs))
         )
     return result
+
+
+def _metric_reference_aliases(evidence_by_metric: dict[str, Any]) -> dict[str, str]:
+    """Map only unambiguous LLM formatting variants back to canonical metric IDs."""
+    candidates: dict[str, set[str]] = {}
+    for canonical in evidence_by_metric:
+        variants = {canonical}
+        if canonical.startswith("maker."):
+            variants.add(canonical[len("maker."):])
+        else:
+            variants.add(f"maker.{canonical}")
+        if canonical.endswith(".shipment"):
+            without_measure = canonical[:-len(".shipment")]
+            variants.add(without_measure)
+            if without_measure.startswith("maker."):
+                variants.add(without_measure[len("maker."):])
+            else:
+                variants.add(f"maker.{without_measure}")
+        for alias in variants:
+            if alias != canonical:
+                candidates.setdefault(alias, set()).add(canonical)
+    return {
+        alias: next(iter(canonical_ids))
+        for alias, canonical_ids in candidates.items()
+        if len(canonical_ids) == 1
+    }
 
 
 def _with_metric(text: str, metric: Any) -> str:

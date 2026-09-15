@@ -16,28 +16,17 @@ insert into sys_menu values('2400', '固定知识库', '2000', '4', 'knowledge',
 -- 二级菜单：AI分析报告
 insert into sys_menu values('2500', 'AI分析报告', '2000', '5', 'report', 'business/report/index', '', '', 1, 0, 'C', '0', '0', 'business:report:list', 'report', 'admin', sysdate(), '', null, 'AI分析报告菜单');
 
--- 三级市场菜单与车载分析目录；Excel数据接入归入车载分析
-insert into sys_menu values('2201', '整车市场分析', '2200', '1', 'vehicle', 'business/analysis/vehicle/index', '', '', 1, 0, 'C', '0', '0', 'business:analysis:vehicle:list', 'chart', 'admin', sysdate(), '', null, '整车市场分析菜单');
-insert into sys_menu values('2202', '车载分析', '2200', '2', 'display', null, '', '', 1, 0, 'M', '0', '0', '', 'monitor', 'admin', sysdate(), '', null, '车载分析目录');
+-- 车载分析目录；同时保留整车市场分析与原车载市场分析
+insert into sys_menu values('2202', '车载分析', '2200', '1', 'display', null, '', '', 1, 0, 'M', '0', '0', '', 'monitor', 'admin', sysdate(), '', null, '车载分析目录');
+insert into sys_menu values('2201', '整车市场分析', '2202', '1', 'vehicle', 'business/analysis/vehicle/index', '', '', 1, 0, 'C', '0', '0', 'business:analysis:vehicle:list', 'chart', 'admin', sysdate(), '', null, '整车市场分析菜单');
+insert into sys_menu values('2101', '车载市场分析', '2202', '2', 'excel', 'business/data/excel/index', '', '', 1, 0, 'C', '0', '0', 'business:data:excel:list', 'excel', 'admin', sysdate(), '', null, '车载显示Excel解析、指标计算与竞争社报告菜单');
 
--- Excel解析迁入车载分析；PDF和文本结构化保持原位
-insert into sys_menu values('2101', 'Excel导入', '2202', '2', 'excel', 'business/data/excel/index', '', '', 1, 0, 'C', '0', '0', 'business:data:excel:list', 'excel', 'admin', sysdate(), '', null, '车载分析Excel数据接入与解析菜单');
+-- PDF和文本结构化保持原位
 insert into sys_menu values('2102', 'PDF解析', '2100', '2', 'pdf', 'business/data/pdf/index', '', '', 1, 0, 'C', '0', '0', 'business:data:pdf:list', 'pdf', 'admin', sysdate(), '', null, 'PDF解析菜单');
 insert into sys_menu values('2103', '文本结构化', '2100', '3', 'text', 'business/data/text/index', '', '', 1, 0, 'C', '0', '0', 'business:data:text:list', 'edit', 'admin', sysdate(), '', null, '文本结构化菜单');
 
--- 车载分析原页面保留为概览
-insert into sys_menu values('2204', '车载分析概览', '2202', '1', 'overview', 'business/analysis/display/index', '', '', 1, 0, 'C', '0', '0', 'business:analysis:display:list', 'chart', 'admin', sysdate(), '', null, '车载显示分析数据概览');
-
 -- 三级菜单：新闻中心
 insert into sys_menu values('2301', '新闻采集', '2300', '1', 'collect', 'business/news/collect/index', '', '', 1, 0, 'C', '0', '0', 'business:news:collect:list', 'spider', 'admin', sysdate(), '', null, '新闻采集菜单');
-insert into sys_menu values('2302', '新闻处理', '2300', '2', 'process', 'business/news/process/index', '', '', 1, 0, 'C', '0', '0', 'business:news:process:list', 'edit', 'admin', sysdate(), '', null, '新闻处理菜单');
-
--- 按钮权限：Excel导入
-insert into sys_menu values('2110', 'Excel导入查询', '2101', '1', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:query', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2111', 'Excel导入新增', '2101', '2', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:add', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2112', 'Excel导入修改', '2101', '3', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:edit', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2113', 'Excel导入删除', '2101', '4', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:remove', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2114', 'Excel导入导出', '2101', '5', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:export', '#', 'admin', sysdate(), '', null, '');
 
 -- 按钮权限：PDF解析
 insert into sys_menu values('2120', 'PDF解析查询', '2102', '1', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:pdf:query', '#', 'admin', sysdate(), '', null, '');
@@ -60,12 +49,12 @@ insert into sys_menu values('2212', '整车市场分析修改', '2201', '3', '',
 insert into sys_menu values('2213', '整车市场分析删除', '2201', '4', '', '', '', '', 1, 0, 'F', '0', '0', 'business:analysis:vehicle:remove', '#', 'admin', sysdate(), '', null, '');
 insert into sys_menu values('2214', '整车市场分析导出', '2201', '5', '', '', '', '', 1, 0, 'F', '0', '0', 'business:analysis:vehicle:export', '#', 'admin', sysdate(), '', null, '');
 
--- 按钮权限：车载显示分析
-insert into sys_menu values('2220', '车载显示分析查询', '2204', '1', '', '', '', '', 1, 0, 'F', '0', '0', 'business:analysis:display:query', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2221', '车载显示分析新增', '2204', '2', '', '', '', '', 1, 0, 'F', '0', '0', 'business:analysis:display:add', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2222', '车载显示分析修改', '2204', '3', '', '', '', '', 1, 0, 'F', '0', '0', 'business:analysis:display:edit', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2223', '车载显示分析删除', '2204', '4', '', '', '', '', 1, 0, 'F', '0', '0', 'business:analysis:display:remove', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2224', '车载显示分析导出', '2204', '5', '', '', '', '', 1, 0, 'F', '0', '0', 'business:analysis:display:export', '#', 'admin', sysdate(), '', null, '');
+-- 按钮权限：车载市场分析
+insert into sys_menu values('2110', '车载市场分析查询', '2101', '1', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:query', '#', 'admin', sysdate(), '', null, '');
+insert into sys_menu values('2111', '车载市场分析新增', '2101', '2', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:add', '#', 'admin', sysdate(), '', null, '');
+insert into sys_menu values('2112', '车载市场分析修改', '2101', '3', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:edit', '#', 'admin', sysdate(), '', null, '');
+insert into sys_menu values('2113', '车载市场分析删除', '2101', '4', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:remove', '#', 'admin', sysdate(), '', null, '');
+insert into sys_menu values('2114', '车载市场分析导出', '2101', '5', '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:export', '#', 'admin', sysdate(), '', null, '');
 
 -- 按钮权限：新闻采集
 insert into sys_menu values('2310', '新闻采集查询', '2301', '1', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:collect:query', '#', 'admin', sysdate(), '', null, '');
@@ -73,13 +62,6 @@ insert into sys_menu values('2311', '新闻采集新增', '2301', '2', '', '', '
 insert into sys_menu values('2312', '新闻采集修改', '2301', '3', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:collect:edit', '#', 'admin', sysdate(), '', null, '');
 insert into sys_menu values('2313', '新闻采集删除', '2301', '4', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:collect:remove', '#', 'admin', sysdate(), '', null, '');
 insert into sys_menu values('2314', '新闻采集导出', '2301', '5', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:collect:export', '#', 'admin', sysdate(), '', null, '');
-
--- 按钮权限：新闻处理
-insert into sys_menu values('2320', '新闻处理查询', '2302', '1', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:process:query', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2321', '新闻处理新增', '2302', '2', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:process:add', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2322', '新闻处理修改', '2302', '3', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:process:edit', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2323', '新闻处理删除', '2302', '4', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:process:remove', '#', 'admin', sysdate(), '', null, '');
-insert into sys_menu values('2324', '新闻处理导出', '2302', '5', '', '', '', '', 1, 0, 'F', '0', '0', 'business:news:process:export', '#', 'admin', sysdate(), '', null, '');
 
 -- 按钮权限：固定知识库
 insert into sys_menu values('2410', '固定知识库查询', '2400', '1', '', '', '', '', 1, 0, 'F', '0', '0', 'business:knowledge:query', '#', 'admin', sysdate(), '', null, '');

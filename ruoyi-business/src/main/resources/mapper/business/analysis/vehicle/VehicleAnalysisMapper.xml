@@ -7,6 +7,13 @@
     <resultMap type="com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis" id="VehicleAnalysisResult">
         <id property="id" column="id"/>
         <result property="taskName" column="task_name"/>
+        <result property="datasetId" column="dataset_id"/>
+        <result property="fileName" column="file_name"/>
+        <result property="sourceFilesJson" column="source_files_json"/>
+        <result property="rowCount" column="row_count"/>
+        <result property="sheetCount" column="sheet_count"/>
+        <result property="issueCount" column="issue_count"/>
+        <result property="parserVersion" column="parser_version"/>
         <result property="status" column="status"/>
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
@@ -16,7 +23,9 @@
     </resultMap>
 
     <sql id="selectVehicleAnalysisVo">
-        select id, task_name, status, create_by, create_time, update_by, update_time, remark from business_analysis_vehicle
+        select id, task_name, dataset_id, file_name, source_files_json, row_count, sheet_count, issue_count,
+               parser_version, status, create_by, create_time, update_by, update_time, remark
+        from business_analysis_vehicle
     </sql>
 
     <select id="selectVehicleAnalysisList" parameterType="com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis" resultMap="VehicleAnalysisResult">
@@ -24,6 +33,8 @@
         <where>
             <if test="taskName != null and taskName != ''">and task_name like concat('%', #{taskName}, '%')</if>
             <if test="status != null and status != ''">and status = #{status}</if>
+            <if test="datasetId != null and datasetId != ''">and dataset_id = #{datasetId}</if>
+            <if test="createBy != null and createBy != ''">and create_by = #{createBy}</if>
         </where>
         order by create_time desc
     </select>
@@ -33,10 +44,23 @@
         where id = #{id}
     </select>
 
+    <select id="selectVehicleAnalysisByDatasetId" parameterType="String" resultMap="VehicleAnalysisResult">
+        <include refid="selectVehicleAnalysisVo"/>
+        where dataset_id = #{datasetId}
+        limit 1
+    </select>
+
     <insert id="insertVehicleAnalysis" parameterType="com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis" useGeneratedKeys="true" keyProperty="id">
         insert into business_analysis_vehicle
         <trim prefix="(" suffix=")" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">task_name,</if>
+            <if test="datasetId != null and datasetId != ''">dataset_id,</if>
+            <if test="fileName != null">file_name,</if>
+            <if test="sourceFilesJson != null">source_files_json,</if>
+            <if test="rowCount != null">row_count,</if>
+            <if test="sheetCount != null">sheet_count,</if>
+            <if test="issueCount != null">issue_count,</if>
+            <if test="parserVersion != null">parser_version,</if>
             <if test="status != null and status != ''">status,</if>
             <if test="createBy != null and createBy != ''">create_by,</if>
             <if test="remark != null and remark != ''">remark,</if>
@@ -44,6 +68,13 @@
         </trim>
         <trim prefix="values (" suffix=")" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">#{taskName},</if>
+            <if test="datasetId != null and datasetId != ''">#{datasetId},</if>
+            <if test="fileName != null">#{fileName},</if>
+            <if test="sourceFilesJson != null">#{sourceFilesJson},</if>
+            <if test="rowCount != null">#{rowCount},</if>
+            <if test="sheetCount != null">#{sheetCount},</if>
+            <if test="issueCount != null">#{issueCount},</if>
+            <if test="parserVersion != null">#{parserVersion},</if>
             <if test="status != null and status != ''">#{status},</if>
             <if test="createBy != null and createBy != ''">#{createBy},</if>
             <if test="remark != null and remark != ''">#{remark},</if>
@@ -55,6 +86,13 @@
         update business_analysis_vehicle
         <trim prefix="SET" suffixOverrides=",">
             <if test="taskName != null and taskName != ''">task_name = #{taskName},</if>
+            <if test="datasetId != null and datasetId != ''">dataset_id = #{datasetId},</if>
+            <if test="fileName != null">file_name = #{fileName},</if>
+            <if test="sourceFilesJson != null">source_files_json = #{sourceFilesJson},</if>
+            <if test="rowCount != null">row_count = #{rowCount},</if>
+            <if test="sheetCount != null">sheet_count = #{sheetCount},</if>
+            <if test="issueCount != null">issue_count = #{issueCount},</if>
+            <if test="parserVersion != null">parser_version = #{parserVersion},</if>
             <if test="status != null and status != ''">status = #{status},</if>
             <if test="updateBy != null and updateBy != ''">update_by = #{updateBy},</if>
             <if test="remark != null and remark != ''">remark = #{remark},</if>
@@ -72,6 +110,10 @@
         <foreach collection="array" item="id" open="(" separator="," close=")">
             #{id}
         </foreach>
+    </delete>
+
+    <delete id="deleteVehicleAnalysisByDatasetId" parameterType="String">
+        delete from business_analysis_vehicle where dataset_id = #{datasetId}
     </delete>
 
 </mapper>

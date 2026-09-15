@@ -122,18 +122,10 @@ export function testKnowledgeLlmConfig() {
   return request({ url: '/business/knowledge/llm-config/test', method: 'post', timeout: 60000 })
 }
 
-export function getKnowledgeGraph(params) {
-  return request({ url: '/business/knowledge/graph', method: 'get', params })
-}
-
 export function getKnowledgeEvidence(chunkId, params) {
   return request({ url: `/business/knowledge/evidence/${chunkId}`, method: 'get', params })
 }
 
 export function getKnowledgeEvidenceFile(chunkId) {
   return request({ url: `/business/knowledge/evidence/${chunkId}/file`, method: 'get', responseType: 'blob' })
-}
-
-export function rebuildKnowledgeGraph() {
-  return request({ url: '/business/knowledge/graph/rebuild', method: 'post' })
 }

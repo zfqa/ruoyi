@@ -14,6 +14,8 @@ public interface VehicleAnalysisMapper
 
     public VehicleAnalysis selectVehicleAnalysisById(Long id);
 
+    public VehicleAnalysis selectVehicleAnalysisByDatasetId(String datasetId);
+
     public int insertVehicleAnalysis(VehicleAnalysis vehicleAnalysis);
 
     public int updateVehicleAnalysis(VehicleAnalysis vehicleAnalysis);
@@ -21,4 +23,6 @@ public interface VehicleAnalysisMapper
     public int deleteVehicleAnalysisById(Long id);
 
     public int deleteVehicleAnalysisByIds(Long[] ids);
+
+    public int deleteVehicleAnalysisByDatasetId(String datasetId);
 }

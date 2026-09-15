@@ -78,11 +78,13 @@ try {
     Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
 }
 
-$envFile = Join-Path $projectRoot "ruoyi-business\excel-agent\.env"
-if (Test-Path -LiteralPath $envFile) {
-    foreach ($line in Get-Content -LiteralPath $envFile) {
-        if ($line -match "^\s*([^#][^=]*)=(.*)$") {
-            [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), "Process")
+$envFiles = @((Join-Path $projectRoot ".env"))
+foreach ($envFile in $envFiles) {
+    if (Test-Path -LiteralPath $envFile) {
+        foreach ($line in Get-Content -LiteralPath $envFile) {
+            if ($line -match "^\s*([^#][^=]*)=(.*)$") {
+                [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), "Process")
+            }
         }
     }
 }
@@ -165,6 +167,58 @@ if (-not $agentReady) {
     if (-not $agentReady) { throw "Python agent-service failed to start. Check $agentErr" }
 }
 Write-Host "Agent service check passed: http://127.0.0.1:8000"
+
+# Start the independent vehicle-market service on 8001. The browser never
+# connects to this port directly; Spring Boot remains the authenticated gateway.
+$marketAgentRoot = Join-Path $projectRoot "ruoyi-business\market-agent"
+$marketAgentPort = 8001
+$marketAgentReady = Test-LocalTcpPort $marketAgentPort
+if ($marketAgentReady) {
+    try {
+        $marketHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$marketAgentPort/api/health" -Method Get -TimeoutSec 2
+        $marketAgentReady = $marketHealth.status -eq "ok" -and $marketHealth.app_version -eq "21.0"
+    } catch {
+        $marketAgentReady = $false
+    }
+    if (-not $marketAgentReady) {
+        throw "Port $marketAgentPort is occupied by a service that is not Market Agent 21.0. Stop that service or configure another port."
+    }
+}
+if (-not $marketAgentReady) {
+    if (-not (Test-Path -LiteralPath $marketAgentRoot -PathType Container)) {
+        throw "Market Agent source is missing under $marketAgentRoot"
+    }
+    & $env:PYTHON -c "import fastapi, uvicorn, pandas, openpyxl, docx, pptx, pypdf, matplotlib" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Market Agent dependencies are missing. Run: & '$env:PYTHON' -m pip install -r '$marketAgentRoot\requirements.txt'"
+    }
+    if ([string]::IsNullOrWhiteSpace($env:MARKET_AGENT_STORAGE_DIR)) {
+        $env:MARKET_AGENT_STORAGE_DIR = "D:\ruoyi\market-agent-storage"
+    }
+    New-Item -ItemType Directory -Path $env:MARKET_AGENT_STORAGE_DIR -Force | Out-Null
+    $env:STORAGE_DIR = $env:MARKET_AGENT_STORAGE_DIR
+    $env:MARKET_AGENT_HOST = "127.0.0.1"
+    $env:MARKET_AGENT_PORT = [string]$marketAgentPort
+    $env:MARKET_AGENT_BASE_URL = "http://127.0.0.1:$marketAgentPort/api"
+    $marketOut = Join-Path $projectRoot "runtime-logs\market-agent.out.log"
+    $marketErr = Join-Path $projectRoot "runtime-logs\market-agent.err.log"
+    Start-Process -FilePath $env:PYTHON -ArgumentList "run_backend.py" -WorkingDirectory $marketAgentRoot -WindowStyle Hidden -RedirectStandardOutput $marketOut -RedirectStandardError $marketErr | Out-Null
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        Start-Sleep -Milliseconds 500
+        try {
+            $marketHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$marketAgentPort/api/health" -Method Get -TimeoutSec 2
+            $marketAgentReady = $marketHealth.status -eq "ok" -and $marketHealth.app_version -eq "21.0"
+        } catch {
+            $marketAgentReady = $false
+        }
+        if ($marketAgentReady) { break }
+    }
+    if (-not $marketAgentReady) { throw "Market Agent failed to start. Check $marketErr" }
+}
+if ([string]::IsNullOrWhiteSpace($env:MARKET_AGENT_BASE_URL)) {
+    $env:MARKET_AGENT_BASE_URL = "http://127.0.0.1:$marketAgentPort/api"
+}
+Write-Host "Market Agent check passed: $env:MARKET_AGENT_BASE_URL"
 
 $jar = Join-Path $projectRoot "ruoyi-admin\target\ruoyi-admin.jar"
 if (-not (Test-Path -LiteralPath $jar -PathType Leaf)) {

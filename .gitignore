@@ -60,6 +60,9 @@ __pycache__/
 agent-service/data/
 agent-service/reports/
 agent-service/.venv/
+ruoyi-business/market-agent/.env
+ruoyi-business/market-agent/.venv/
+ruoyi-business/market-agent/storage/
 
 !*/build/*.java
 !*/build/*.html

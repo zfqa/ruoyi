@@ -1,59 +1,65 @@
--- 将Excel数据接入与解析迁入“市场分析 / 车载分析”。
+-- 在“市场分析 / 车载分析”下同时保留整车市场分析与原车载市场分析。
 -- PDF解析和文本结构化继续保留在原“数据接入与解析”目录。
--- 可重复执行；功能权限标识保持不变。
+-- 可重复执行；不恢复已经确认删除的“车载分析概览”空壳页面。
 START TRANSACTION;
 
--- 撤回曾创建的整车概览中间菜单，并完整恢复整车市场分析。
 UPDATE sys_menu
-SET menu_name = '整车市场分析', parent_id = 2200, order_num = 1, path = 'vehicle',
+SET menu_name = '整车市场分析', parent_id = 2202, order_num = 1, path = 'vehicle',
     component = 'business/analysis/vehicle/index', query = '', route_name = '',
     is_frame = 1, is_cache = 0, menu_type = 'C', visible = '0', status = '0',
     perms = 'business:analysis:vehicle:list', icon = 'chart', remark = '整车市场分析菜单'
 WHERE menu_id = 2201;
 
-UPDATE sys_menu SET parent_id = 2201 WHERE menu_id IN (2210, 2211, 2212, 2213, 2214);
-DELETE FROM sys_role_menu WHERE menu_id = 2203;
-DELETE FROM sys_menu WHERE menu_id = 2203;
-
--- 原车载显示分析页面保留为车载分析目录下的概览页。
-INSERT INTO sys_menu
-    (menu_id, menu_name, parent_id, order_num, path, component, query, route_name,
-     is_frame, is_cache, menu_type, visible, status, perms, icon,
-     create_by, create_time, update_by, update_time, remark)
-VALUES
-    (2204, '车载分析概览', 2202, 1, 'overview', 'business/analysis/display/index', '', '',
-     1, 0, 'C', '0', '0', 'business:analysis:display:list', 'chart',
-     'admin', NOW(), '', NULL, '车载显示分析数据概览')
-ON DUPLICATE KEY UPDATE
-    menu_name = VALUES(menu_name), parent_id = VALUES(parent_id), order_num = VALUES(order_num),
-    path = VALUES(path), component = VALUES(component), menu_type = VALUES(menu_type),
-    visible = VALUES(visible), status = VALUES(status), perms = VALUES(perms), icon = VALUES(icon),
-    remark = VALUES(remark);
-
 UPDATE sys_menu
-SET menu_name = '车载分析', parent_id = 2200, order_num = 2, path = 'display',
+SET menu_name = '车载分析', parent_id = 2200, order_num = 1, path = 'display',
     component = NULL, query = '', route_name = '', is_frame = 1, is_cache = 0,
     menu_type = 'M', visible = '0', status = '0', perms = '', icon = 'monitor',
     remark = '车载分析目录'
 WHERE menu_id = 2202;
 
-UPDATE sys_menu
-SET parent_id = 2000, order_num = 1, path = 'data', menu_type = 'M',
-    component = NULL, perms = '', remark = 'PDF解析与文本结构化目录'
-WHERE menu_id = 2100;
+INSERT INTO sys_menu
+    (menu_id, menu_name, parent_id, order_num, path, component, query, route_name,
+     is_frame, is_cache, menu_type, visible, status, perms, icon,
+     create_by, create_time, update_by, update_time, remark)
+VALUES
+    (2101, '车载市场分析', 2202, 2, 'excel', 'business/data/excel/index', '', '',
+     1, 0, 'C', '0', '0', 'business:data:excel:list', 'excel',
+     'admin', NOW(), '', NULL, '车载显示Excel解析、指标计算与竞争社报告菜单')
+ON DUPLICATE KEY UPDATE
+    menu_name = VALUES(menu_name), parent_id = VALUES(parent_id), order_num = VALUES(order_num),
+    path = VALUES(path), component = VALUES(component), query = VALUES(query), route_name = VALUES(route_name),
+    is_frame = VALUES(is_frame), is_cache = VALUES(is_cache), menu_type = VALUES(menu_type),
+    visible = VALUES(visible), status = VALUES(status), perms = VALUES(perms), icon = VALUES(icon),
+    remark = VALUES(remark);
 
-UPDATE sys_menu
-SET parent_id = 2202, order_num = 2, path = 'excel',
-    component = 'business/data/excel/index', menu_type = 'C',
-    perms = 'business:data:excel:list', remark = '车载分析Excel数据接入与解析菜单'
-WHERE menu_id = 2101;
+INSERT INTO sys_menu
+    (menu_id, menu_name, parent_id, order_num, path, component, query, route_name,
+     is_frame, is_cache, menu_type, visible, status, perms, icon,
+     create_by, create_time, update_by, update_time, remark)
+VALUES
+    (2110, '车载市场分析查询', 2101, 1, '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:query', '#', 'admin', NOW(), '', NULL, ''),
+    (2111, '车载市场分析新增', 2101, 2, '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:add', '#', 'admin', NOW(), '', NULL, ''),
+    (2112, '车载市场分析修改', 2101, 3, '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:edit', '#', 'admin', NOW(), '', NULL, ''),
+    (2113, '车载市场分析删除', 2101, 4, '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:remove', '#', 'admin', NOW(), '', NULL, ''),
+    (2114, '车载市场分析导出', 2101, 5, '', '', '', '', 1, 0, 'F', '0', '0', 'business:data:excel:export', '#', 'admin', NOW(), '', NULL, '')
+ON DUPLICATE KEY UPDATE
+    menu_name = VALUES(menu_name), parent_id = VALUES(parent_id), order_num = VALUES(order_num),
+    perms = VALUES(perms), visible = VALUES(visible), status = VALUES(status);
 
+UPDATE sys_menu SET parent_id = 2201 WHERE menu_id IN (2210, 2211, 2212, 2213, 2214);
 UPDATE sys_menu SET parent_id = 2100 WHERE menu_id IN (2102, 2103);
 
-UPDATE sys_menu SET parent_id = 2204 WHERE menu_id IN (2220, 2221, 2222, 2223, 2224);
-
--- 已拥有原车载显示分析菜单的角色自动获得新概览页。
+-- 已能访问整车市场分析或车载分析目录的角色，自动获得恢复后的车载市场分析页面及按钮。
 INSERT IGNORE INTO sys_role_menu (role_id, menu_id)
-SELECT role_id, 2204 FROM sys_role_menu WHERE menu_id = 2202;
+SELECT DISTINCT role_id, 2101 FROM sys_role_menu WHERE menu_id IN (2201, 2202);
+INSERT IGNORE INTO sys_role_menu (role_id, menu_id)
+SELECT rm.role_id, ids.menu_id
+FROM sys_role_menu rm
+CROSS JOIN (SELECT 2110 AS menu_id UNION ALL SELECT 2111 UNION ALL SELECT 2112 UNION ALL SELECT 2113 UNION ALL SELECT 2114) ids
+WHERE rm.menu_id = 2101;
+
+-- 保持先前确认的清理：不恢复概览空壳与新闻处理菜单。
+DELETE FROM sys_role_menu WHERE menu_id IN (2204, 2220, 2221, 2222, 2223, 2224, 2320, 2321, 2322, 2323, 2324, 2302);
+DELETE FROM sys_menu WHERE menu_id IN (2220, 2221, 2222, 2223, 2224, 2204, 2320, 2321, 2322, 2323, 2324, 2302);
 
 COMMIT;

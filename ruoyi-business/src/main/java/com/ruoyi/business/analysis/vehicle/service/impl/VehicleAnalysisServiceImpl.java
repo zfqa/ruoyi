@@ -31,6 +31,12 @@ public class VehicleAnalysisServiceImpl implements IVehicleAnalysisService
     }
 
     @Override
+    public VehicleAnalysis selectVehicleAnalysisByDatasetId(String datasetId)
+    {
+        return vehicleAnalysisMapper.selectVehicleAnalysisByDatasetId(datasetId);
+    }
+
+    @Override
     public int insertVehicleAnalysis(VehicleAnalysis vehicleAnalysis)
     {
         return vehicleAnalysisMapper.insertVehicleAnalysis(vehicleAnalysis);
@@ -52,5 +58,11 @@ public class VehicleAnalysisServiceImpl implements IVehicleAnalysisService
     public int deleteVehicleAnalysisByIds(Long[] ids)
     {
         return vehicleAnalysisMapper.deleteVehicleAnalysisByIds(ids);
+    }
+
+    @Override
+    public int deleteVehicleAnalysisByDatasetId(String datasetId)
+    {
+        return vehicleAnalysisMapper.deleteVehicleAnalysisByDatasetId(datasetId);
     }
 }

@@ -5,12 +5,12 @@
         <span><i class="el-icon-magic-stick" /> 自由文本 LLM 实体抽取</span>
         <el-tag type="info" size="small">LLM识别 + Java单位归一</el-tag>
       </div>
-      <el-alert title="粘贴行业文字、数字或从Excel复制的表格片段；系统识别企业、车型、销量/出货量、尺寸和技术路线，并保留原文证据。" type="info" :closable="false" class="mb16" />
+      <el-alert title="支持中文、英文和中英混合内容。粘贴行业文字、数字或从Excel复制的表格片段；系统识别企业、车型、销量/出货量、尺寸和技术路线，并保留原文证据。" type="info" :closable="false" class="mb16" />
       <el-form label-width="90px">
         <el-form-item label="任务名称"><el-input v-model="extractForm.taskName" maxlength="200" placeholder="可选，例如：2025 Q1-Q3车载显示市场摘录" /></el-form-item>
         <el-form-item label="待解析文本">
           <el-input v-model="extractForm.sourceText" type="textarea" :rows="11" maxlength="30000" show-word-limit resize="vertical"
-            placeholder="示例：2025年Q1-Q3，Tianma LTPS车载显示出货量为1.2 Mpcs，主要应用于12.3英寸车型A。&#10;&#10;也可直接粘贴表格：&#10;企业    车型    技术    尺寸    销量&#10;Tianma  车型A   LTPS   12.3英寸  1.2 Mpcs" />
+            placeholder="中文示例：2025年Q1-Q3，Tianma LTPS车载显示出货量为1.2 Mpcs，主要应用于12.3英寸车型A。&#10;&#10;English example: In Q1 2025, Tesla Model Y deliveries reached 267,200 units. The vehicle uses a BEV powertrain and a 15-inch central display.&#10;&#10;表格/Table：&#10;Company    Vehicle Model    Technology    Display Size    Sales&#10;Tesla      Model Y          BEV           15 inch         267,200 units" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" icon="el-icon-cpu" :loading="submitting" @click="submitExtraction" v-hasPermi="['business:data:text:add']">开始智能抽取</el-button>

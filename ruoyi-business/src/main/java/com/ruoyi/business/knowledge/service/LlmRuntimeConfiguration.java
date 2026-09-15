@@ -21,7 +21,7 @@ import com.ruoyi.system.domain.SysConfig;
 import com.ruoyi.system.service.ISysConfigService;
 
 /**
- * Excel解析、报告生成、文本结构化和知识问答共用的LLM配置。
+ * 整车市场分析、报告生成、文本结构化和知识问答共用的LLM配置。
  * 前端保存后持久化到sys_config，API Key加密保存且读取接口永不返回密钥内容。
  */
 @Service
@@ -42,9 +42,9 @@ public class LlmRuntimeConfiguration
 
     @Autowired
     public LlmRuntimeConfiguration(
-        @Value("${business.excel.llm.api-url:https://ark.cn-beijing.volces.com/api/v3/chat/completions}") String apiUrl,
-        @Value("${business.excel.llm.model:glm-5-2-260617}") String model,
-        @Value("${business.excel.llm.api-key:}") String apiKey,
+        @Value("${business.llm.api-url:https://ark.cn-beijing.volces.com/api/v3/chat/completions}") String apiUrl,
+        @Value("${business.llm.model:glm-5-2-260617}") String model,
+        @Value("${business.llm.api-key:}") String apiKey,
         @Value("${business.llm.persistence-secret:${token.secret:}}") String persistenceSecret,
         ISysConfigService configService)
     {
@@ -88,7 +88,7 @@ public class LlmRuntimeConfiguration
         value.put("apiUrl", apiUrl);
         value.put("model", model);
         value.put("apiKeyConfigured", apiKey != null && !apiKey.isBlank());
-        value.put("appliesTo", "EXCEL_PARSE_REPORT_TEXT_EXTRACTION_AND_KNOWLEDGE_QA");
+        value.put("appliesTo", "VEHICLE_MARKET_REPORT_TEXT_EXTRACTION_AND_KNOWLEDGE_QA");
         value.put("apiKeyStorage", "MYSQL_ENCRYPTED");
         value.put("restartBehavior", "服务重启后优先加载MySQL持久化配置；未保存时才回退环境变量");
         return value;

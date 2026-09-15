@@ -2,27 +2,6 @@
 -- 业务模块表结构初始化
 -- ----------------------------
 
--- Excel/CSV导入与字段映射
-DROP TABLE IF EXISTS business_data_excel;
-CREATE TABLE business_data_excel (
-  id                bigint(20)      NOT NULL AUTO_INCREMENT    COMMENT '主键',
-  task_name         varchar(200)    DEFAULT ''                 COMMENT '任务名称',
-  file_name         varchar(255)    DEFAULT ''                 COMMENT '原始文件名',
-  file_path         varchar(500)    DEFAULT ''                 COMMENT '上传文件路径',
-  workbook_id       varchar(100)    DEFAULT ''                 COMMENT '工作簿哈希ID',
-  sheet_count       int             DEFAULT 0                  COMMENT 'Sheet数量',
-  table_count       int             DEFAULT 0                  COMMENT '识别表格数量',
-  record_count      int             DEFAULT 0                  COMMENT '预览记录数量',
-  result_json       longtext                                   COMMENT '解析结果JSON',
-  status            char(1)         DEFAULT '0'                COMMENT '状态（0待处理 1处理中 2成功 3失败）',
-  create_by         varchar(64)     DEFAULT ''                 COMMENT '创建者',
-  create_time       datetime                                   COMMENT '创建时间',
-  update_by         varchar(64)     DEFAULT ''                 COMMENT '更新者',
-  update_time       datetime                                   COMMENT '更新时间',
-  remark            varchar(500)    DEFAULT ''                 COMMENT '备注',
-  PRIMARY KEY (id)
-) ENGINE=InnoDB AUTO_INCREMENT=1 COMMENT='Excel/CSV导入与字段映射';
-
 -- 文本型PDF正文与规则表格解析
 DROP TABLE IF EXISTS business_data_pdf;
 CREATE TABLE business_data_pdf (
@@ -64,28 +43,23 @@ DROP TABLE IF EXISTS business_analysis_vehicle;
 CREATE TABLE business_analysis_vehicle (
   id                bigint(20)      NOT NULL AUTO_INCREMENT    COMMENT '主键',
   task_name         varchar(200)    DEFAULT ''                 COMMENT '任务名称',
-  status            char(1)         DEFAULT '0'                COMMENT '状态（0待处理 1处理中 2成功 3失败）',
+  dataset_id        varchar(80)     DEFAULT NULL               COMMENT 'Python分析数据集ID',
+  file_name         varchar(255)    DEFAULT ''                 COMMENT '源文件显示名称',
+  source_files_json text                                       COMMENT '源文件列表JSON',
+  row_count         bigint(20)      DEFAULT 0                  COMMENT '标准化记录数',
+  sheet_count       int(11)         DEFAULT 0                  COMMENT '工作表数',
+  issue_count       int(11)         DEFAULT 0                  COMMENT '数据质量问题数',
+  parser_version    varchar(32)     DEFAULT '21.0'             COMMENT '解析引擎版本',
+  status            char(1)         DEFAULT '0'                COMMENT '状态（0待处理 1处理中 2成功 3失败 4归档）',
   create_by         varchar(64)     DEFAULT ''                 COMMENT '创建者',
   create_time       datetime                                   COMMENT '创建时间',
   update_by         varchar(64)     DEFAULT ''                 COMMENT '更新者',
   update_time       datetime                                   COMMENT '更新时间',
   remark            varchar(500)    DEFAULT ''                 COMMENT '备注',
-  PRIMARY KEY (id)
-) ENGINE=InnoDB AUTO_INCREMENT=1 COMMENT='整车市场分析';
-
--- 车载显示分析-标准模板基础统计
-DROP TABLE IF EXISTS business_analysis_display;
-CREATE TABLE business_analysis_display (
-  id                bigint(20)      NOT NULL AUTO_INCREMENT    COMMENT '主键',
-  task_name         varchar(200)    DEFAULT ''                 COMMENT '任务名称',
-  status            char(1)         DEFAULT '0'                COMMENT '状态（0待处理 1处理中 2成功 3失败）',
-  create_by         varchar(64)     DEFAULT ''                 COMMENT '创建者',
-  create_time       datetime                                   COMMENT '创建时间',
-  update_by         varchar(64)     DEFAULT ''                 COMMENT '更新者',
-  update_time       datetime                                   COMMENT '更新时间',
-  remark            varchar(500)    DEFAULT ''                 COMMENT '备注',
-  PRIMARY KEY (id)
-) ENGINE=InnoDB AUTO_INCREMENT=1 COMMENT='车载显示分析';
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_market_dataset_id (dataset_id),
+  KEY idx_market_create_by_time (create_by, create_time)
+) ENGINE=InnoDB AUTO_INCREMENT=1 COMMENT='整车市场分析任务';
 
 -- 白名单官网新闻抓取
 DROP TABLE IF EXISTS business_news_collect;
@@ -142,20 +116,6 @@ CREATE TABLE business_news_collect_article (
   PRIMARY KEY (id), UNIQUE KEY uk_news_collect_article_task_article (crawl_task_id, article_id),
   KEY idx_news_collect_article_task (crawl_task_id), KEY idx_news_collect_article_article (article_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='新闻采集任务与文章关系';
-
--- 新闻清洗、分类与事件提取
-DROP TABLE IF EXISTS business_news_process;
-CREATE TABLE business_news_process (
-  id                bigint(20)      NOT NULL AUTO_INCREMENT    COMMENT '主键',
-  task_name         varchar(200)    DEFAULT ''                 COMMENT '任务名称',
-  status            char(1)         DEFAULT '0'                COMMENT '状态（0待处理 1处理中 2成功 3失败）',
-  create_by         varchar(64)     DEFAULT ''                 COMMENT '创建者',
-  create_time       datetime                                   COMMENT '创建时间',
-  update_by         varchar(64)     DEFAULT ''                 COMMENT '更新者',
-  update_time       datetime                                   COMMENT '更新时间',
-  remark            varchar(500)    DEFAULT ''                 COMMENT '备注',
-  PRIMARY KEY (id)
-) ENGINE=InnoDB AUTO_INCREMENT=1 COMMENT='新闻清洗分类与事件提取';
 
 -- 固定文件知识库及来源展示
 DROP TABLE IF EXISTS business_knowledge;

@@ -37,6 +37,10 @@ public class VehicleAnalysisController extends BaseController
     @GetMapping("/list")
     public TableDataInfo list(VehicleAnalysis vehicleAnalysis)
     {
+        if (!getLoginUser().getUser().isAdmin())
+        {
+            vehicleAnalysis.setCreateBy(getUsername());
+        }
         startPage();
         List<VehicleAnalysis> list = vehicleAnalysisService.selectVehicleAnalysisList(vehicleAnalysis);
         return getDataTable(list);
@@ -47,6 +51,7 @@ public class VehicleAnalysisController extends BaseController
     @PostMapping("/export")
     public void export(HttpServletResponse response, VehicleAnalysis vehicleAnalysis)
     {
+        if (!getLoginUser().getUser().isAdmin()) vehicleAnalysis.setCreateBy(getUsername());
         List<VehicleAnalysis> list = vehicleAnalysisService.selectVehicleAnalysisList(vehicleAnalysis);
         ExcelUtil<VehicleAnalysis> util = new ExcelUtil<VehicleAnalysis>(VehicleAnalysis.class);
         util.exportExcel(response, list, "整车市场分析-基础统计、排名与趋势数据");
@@ -56,7 +61,9 @@ public class VehicleAnalysisController extends BaseController
     @GetMapping(value = "/{id}")
     public AjaxResult getInfo(@PathVariable("id") Long id)
     {
-        return success(vehicleAnalysisService.selectVehicleAnalysisById(id));
+        VehicleAnalysis record = vehicleAnalysisService.selectVehicleAnalysisById(id);
+        if (!canAccess(record)) return error("任务不存在或无权访问");
+        return success(record);
     }
 
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:add')")
@@ -72,6 +79,11 @@ public class VehicleAnalysisController extends BaseController
     @PutMapping
     public AjaxResult edit(@RequestBody VehicleAnalysis vehicleAnalysis)
     {
+        if (!canAccess(vehicleAnalysisService.selectVehicleAnalysisById(vehicleAnalysis.getId())))
+        {
+            return error("任务不存在或无权修改");
+        }
+        vehicleAnalysis.setUpdateBy(getUsername());
         return toAjax(vehicleAnalysisService.updateVehicleAnalysis(vehicleAnalysis));
     }
 
@@ -80,6 +92,18 @@ public class VehicleAnalysisController extends BaseController
     @DeleteMapping("/{ids}")
     public AjaxResult remove(@PathVariable Long[] ids)
     {
+        for (Long id : ids)
+        {
+            if (!canAccess(vehicleAnalysisService.selectVehicleAnalysisById(id)))
+            {
+                return error("任务不存在或无权删除");
+            }
+        }
         return toAjax(vehicleAnalysisService.deleteVehicleAnalysisByIds(ids));
+    }
+
+    private boolean canAccess(VehicleAnalysis record)
+    {
+        return record != null && (getLoginUser().getUser().isAdmin() || getUsername().equals(record.getCreateBy()));
     }
 }

@@ -41,6 +41,17 @@ mysql -u root -p ry-vue < sql/business_agent_integration_20260913.sql
 
 该脚本只扩展新闻任务表并创建新闻文章/任务关系表。新闻正文随后由 Java 自动投影到现有统一知识库表，不创建第二套新闻知识库。
 
+在已有数据库上升级车载市场分析到 Market Agent 21.0 时，执行：
+
+```bash
+mysql -u root -p ry-vue < sql/business_vehicle_market_v21.sql
+```
+
+脚本只为 `business_analysis_vehicle` 幂等补齐数据集标识、源文件、统计信息、解析器版本、
+任务状态及索引，不删除已有记录。默认配置下后端启动器也会执行同等的幂等结构检查；
+生产数据库账号不具备 DDL 权限时，应先执行脚本并将
+`business.vehicle.schema-auto-init` 设置为 `false`。
+
 ## 3. 配置后端数据库连接
 
 数据库密码不要提交到 Git。启动前通过环境变量配置：

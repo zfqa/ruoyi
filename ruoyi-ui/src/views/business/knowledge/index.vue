@@ -48,7 +48,9 @@
           <p class="snippet">{{ item.sourceSnippet || item.content }}</p>
           <div class="source-meta">
             <span>版本：{{ item.versionNo }}</span><span v-if="item.originalName">原始文件：{{ item.originalName }}</span><span v-if="item.pageStart">PDF 第 {{ item.pageStart }} 页</span>
-            <span v-if="item.metricId">指标：{{ item.metricId }}</span><a v-if="item.sourceUrl" :href="item.sourceUrl" target="_blank" rel="noopener noreferrer">查看来源原文</a>
+            <span v-if="item.metricId">指标：{{ item.metricId }}</span>
+            <el-button v-if="['PDF', 'NEWS'].includes(item.sourceType)" class="source-link-button" type="text" size="mini" :icon="item.sourceType === 'PDF' ? 'el-icon-document' : 'el-icon-news'" @click="openEvidence(item)">查看原文</el-button>
+            <a v-else-if="item.sourceUrl" :href="item.sourceUrl" target="_blank" rel="noopener noreferrer">查看原文</a>
           </div>
           <el-collapse v-if="item.evidenceJson"><el-collapse-item title="查看结构化来源证据"><pre>{{ prettyEvidence(item.evidenceJson) }}</pre></el-collapse-item></el-collapse>
         </el-card>
@@ -177,30 +179,38 @@
             <el-button type="text" size="mini" @click="openCitation(item)">点击定位引用段落</el-button>
           </div>
           <template v-if="qaResult.graph && qaResult.graph.nodes && qaResult.graph.nodes.length">
-            <el-divider content-position="left">本次回答关联图谱</el-divider>
-            <div ref="qaGraph" class="qa-graph" />
+            <el-divider content-position="left">本次问答生成的多源知识图谱</el-divider>
+            <el-alert title="图谱仅包含本次回答实际引用的资料。点击节点可下钻查看直接关系，点击连线可查看并定位原文证据。" type="info" :closable="false" class="mb16" />
+            <el-form :inline="true" size="small" class="qa-graph-filter" @submit.native.prevent>
+              <el-form-item label="时间维度"><el-input v-model="qaGraphFilter.period" clearable placeholder="例如 2023 Q3" @keyup.enter.native="applyQaGraphFilter" /></el-form-item>
+              <el-form-item label="资料类型">
+                <el-select v-model="qaGraphFilter.dataType" clearable placeholder="全部资料">
+                  <el-option label="财报" value="FINANCIAL" /><el-option label="新闻" value="NEWS" />
+                  <el-option label="政策" value="POLICY" /><el-option label="生成报告" value="REPORT" />
+                  <el-option label="PDF文档" value="PDF" />
+                </el-select>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" icon="el-icon-search" @click="applyQaGraphFilter">筛选</el-button>
+                <el-button v-if="qaGraphCenterId" icon="el-icon-back" @click="resetQaGraphCenter">返回本次问答全图</el-button>
+                <el-button icon="el-icon-refresh-left" @click="resetQaGraphFilter">清除筛选</el-button>
+              </el-form-item>
+            </el-form>
+            <div v-if="qaGraphCenterId" class="qa-graph-status">当前正在下钻节点：{{ qaGraphCenterName }}</div>
+            <el-empty v-if="!qaGraphData.nodes.length" description="当前筛选条件下，本次问答没有匹配的图谱关系" />
+            <div v-show="qaGraphData.nodes.length" ref="qaGraph" class="qa-graph" />
+            <el-card v-if="selectedQaRelation" shadow="never" class="relation-card">
+              <b>{{ selectedQaRelation.name }}</b> · {{ selectedQaRelation.sourceName }} · {{ selectedQaRelation.versionNo }}
+              <el-tag v-if="selectedQaRelation.mentionCount > 1" size="mini">{{ selectedQaRelation.mentionCount }} 条证据 / {{ selectedQaRelation.sourceCount }} 个来源</el-tag>
+              <span v-if="selectedQaRelation.pageStart"> · PDF 第 {{ selectedQaRelation.pageStart }} 页</span>
+              <div class="citation-snippet">{{ selectedQaRelation.evidenceSnippet }}</div>
+              <el-button type="text" @click="openEvidence(selectedQaRelation)">定位源文档段落</el-button>
+              <a v-if="selectedQaRelation.sourceUrl" :href="selectedQaRelation.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源原文</a>
+            </el-card>
           </template>
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="多源知识图谱" name="graph">
-        <el-form :inline="true" size="small" @submit.native.prevent>
-          <el-form-item label="时间"><el-input v-model="graphFilter.period" clearable placeholder="如 2023 Q3" /></el-form-item>
-          <el-form-item label="数据类型"><el-select v-model="graphFilter.dataType" clearable placeholder="全部来源"><el-option label="财报" value="FINANCIAL" /><el-option label="新闻" value="NEWS" /><el-option label="政策" value="POLICY" /><el-option label="结构化分析报告" value="REPORT" /><el-option label="PDF资料" value="PDF" /></el-select></el-form-item>
-          <el-form-item><el-button type="primary" icon="el-icon-share" :loading="graphLoading" @click="loadGraph()">查询图谱</el-button><el-button v-if="graphCenterId" @click="resetGraph">返回全图</el-button><el-button icon="el-icon-refresh" :loading="graphRebuilding" @click="rebuildGraph" v-hasPermi="['business:knowledge:edit']">重建现有资料图谱</el-button></el-form-item>
-        </el-form>
-        <el-alert title="点击实体节点可下钻展开直接关系；点击连线可查看来源和原文证据。" type="info" :closable="false" class="mb16" />
-        <el-empty v-if="graphLoaded && (!graphData.nodes || !graphData.nodes.length)" description="当前筛选条件下暂无图谱关系，请先入库包含实体的资料" />
-        <div v-show="graphData.nodes && graphData.nodes.length" ref="graphChart" class="graph-chart" />
-        <el-card v-if="selectedRelation" shadow="never" class="relation-card">
-          <b>{{ selectedRelation.name }}</b> · {{ selectedRelation.sourceName }} · {{ selectedRelation.versionNo }}
-          <el-tag v-if="selectedRelation.mentionCount > 1" size="mini">{{ selectedRelation.mentionCount }} 条证据 / {{ selectedRelation.sourceCount }} 个来源</el-tag>
-          <span v-if="selectedRelation.pageStart"> · PDF 第 {{ selectedRelation.pageStart }} 页</span>
-          <div class="citation-snippet">{{ selectedRelation.evidenceSnippet }}</div>
-          <el-button type="text" @click="openEvidence(selectedRelation)">定位源文档段落</el-button>
-          <a v-if="selectedRelation.sourceUrl" :href="selectedRelation.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源原文</a>
-        </el-card>
-      </el-tab-pane>
     </el-tabs>
 
     <el-dialog :title="form.id ? '编辑固定资料' : '登记固定资料'" :visible.sync="editOpen" width="620px">
@@ -259,12 +269,12 @@
         <div class="source-meta"><span>{{ evidenceDetail.sourceName }}</span><span>{{ evidenceDetail.originalName }}</span><span>版本 {{ evidenceDetail.versionNo }}</span><span v-if="evidenceDetail.pageStart">PDF 第 {{ evidenceDetail.pageStart }} 页</span></div>
         <pre class="evidence-content"><span>{{ evidenceBefore }}</span><mark>{{ evidenceDetail.highlightedText }}</mark><span>{{ evidenceAfter }}</span></pre>
         <el-button v-if="evidenceDetail.fileAvailable" type="primary" size="small" icon="el-icon-document" @click="openSourcePdf">在原 PDF 对应页查看</el-button>
-        <a v-if="evidenceDetail.sourceUrl" :href="evidenceDetail.sourceUrl" target="_blank" rel="noopener noreferrer">打开新闻原文</a>
+        <a v-if="evidenceDetail.sourceUrl" class="external-source-link" :href="evidenceDetail.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源网站原文</a>
       </div>
     </el-dialog>
 
     <el-dialog title="知识问答 LLM 配置" :visible.sync="llmConfigOpen" width="620px">
-      <el-alert title="此配置同时用于 Excel 表头识别、报告生成、文本实体抽取和知识问答。保存后持久化到 MySQL，服务重启仍然生效；API Key 加密保存且永不回显。" type="success" :closable="false" class="mb16" />
+      <el-alert title="此配置同时用于整车市场分析、报告生成、文本实体抽取和知识问答。保存后持久化到 MySQL，服务重启仍然生效；API Key 加密保存且永不回显。" type="success" :closable="false" class="mb16" />
       <el-form label-width="110px" size="small">
         <el-form-item label="请求地址"><el-input v-model="llmConfigForm.apiUrl" placeholder="https://ark.cn-beijing.volces.com/api/v3/chat/completions" /></el-form-item>
         <el-form-item label="模型名称"><el-input v-model="llmConfigForm.model" placeholder="glm-5-2-260617" /></el-form-item>
@@ -283,7 +293,7 @@
 import { listKnowledgeBase, getKnowledgeBase, addKnowledgeBase, updateKnowledgeBase, delKnowledgeBase,
   ingestPdf, ingestNews, ingestPolicy, ingestNewsJson, ingestReport, getKnowledgeTask, listKnowledgeVersions, searchKnowledge,
   submitKnowledgeQaTask, getKnowledgeQaTask, listKnowledgeQaTasks,
-  getKnowledgeGraph, getKnowledgeEvidence, getKnowledgeEvidenceFile, rebuildKnowledgeGraph, getKnowledgeLlmConfig, updateKnowledgeLlmConfig,
+  getKnowledgeEvidence, getKnowledgeEvidenceFile, getKnowledgeLlmConfig, updateKnowledgeLlmConfig,
   testKnowledgeLlmConfig } from '@/api/business/knowledge/knowledgeBase'
 import * as echarts from 'echarts'
 import { blobValidate } from '@/utils/ruoyi'
@@ -305,19 +315,24 @@ export default {
       qaForm: { question: '', sourceType: '', includeNews: true }, asking: false, qaResult: null,
       qaTask: null, qaPoller: null, qaRunningPanels: [], qaTracePanels: [],
       qaHistory: [], qaHistoryLoading: false,
-      graphFilter: { period: '', dataType: '' }, graphLoading: false, graphLoaded: false, graphRebuilding: false,
-      graphData: { nodes: [], links: [], categories: [] }, graphCenterId: null, selectedRelation: null,
-      graphChartInstance: null, qaGraphInstance: null, evidenceOpen: false, evidenceDetail: null,
+      qaGraphFilter: { period: '', dataType: '' }, qaGraphData: { nodes: [], links: [], categories: [] },
+      qaGraphCenterId: null, selectedQaRelation: null, qaGraphInstance: null,
+      evidenceOpen: false, evidenceDetail: null,
       llmConfigOpen: false,
       llmConfigForm: { apiUrl: '', model: '', apiKey: '', apiKeyConfigured: false, clearApiKey: false },
       llmSaving: false, llmTesting: false
     }
   },
   created() { this.getList() },
-  beforeDestroy() { this.stopPolling(); this.stopQaPolling(); if (this.graphChartInstance) this.graphChartInstance.dispose(); if (this.qaGraphInstance) this.qaGraphInstance.dispose() },
+  beforeDestroy() { this.stopPolling(); this.stopQaPolling(); if (this.qaGraphInstance) this.qaGraphInstance.dispose() },
   computed: {
     evidenceBefore() { if (!this.evidenceDetail) return ''; return this.evidenceDetail.content.slice(0, this.evidenceDetail.startOffset) },
     evidenceAfter() { if (!this.evidenceDetail) return ''; return this.evidenceDetail.content.slice(this.evidenceDetail.endOffset) },
+    qaGraphCenterName() {
+      if (!this.qaGraphCenterId || !this.qaResult || !this.qaResult.graph) return ''
+      const node = (this.qaResult.graph.nodes || []).find(item => String(item.id) === String(this.qaGraphCenterId))
+      return node ? node.name : this.qaGraphCenterId
+    },
     runningActiveStep() {
       if (!this.qaTask || !this.qaTask.queryPlan) return 0
       if ((this.qaTask.progress || 0) >= 90) return this.qaTask.queryPlan.length
@@ -391,6 +406,7 @@ export default {
     doAsk() {
       if (!this.qaForm.question || this.qaForm.question.trim().length < 2) return this.$modal.msgError('问题至少2个字符')
       this.stopQaPolling(); this.asking = true; this.qaResult = null; this.qaTask = null; this.qaTracePanels = []
+      this.resetQaGraphState()
       submitKnowledgeQaTask(this.qaForm).then(r => { this.qaTask = r.data; this.startQaPolling(r.data.taskId) }).catch(() => { this.asking = false })
     },
     startQaPolling(taskId) {
@@ -399,7 +415,7 @@ export default {
           this.qaTask = r.data
           if (r.data.status === 'SUCCESS') {
             this.qaResult = r.data.result; this.asking = false; this.stopQaPolling()
-            this.$nextTick(() => this.renderGraph('qaGraph', this.qaResult.graph, 'qaGraphInstance'))
+            this.initializeQaGraph()
           } else if (r.data.status === 'FAILED') {
             this.asking = false; this.stopQaPolling(); this.$modal.msgError(r.data.errorMessage || '知识问答处理失败')
           } else this.qaPoller = setTimeout(tick, 1200)
@@ -415,25 +431,69 @@ export default {
       updateKnowledgeLlmConfig(this.llmConfigForm).then(r => { this.llmConfigForm = { ...r.data, apiKey: '', clearApiKey: false }; this.$modal.msgSuccess('LLM配置已保存，服务重启后仍然生效') }).finally(() => { this.llmSaving = false })
     },
     testLlm() { this.llmTesting = true; testKnowledgeLlmConfig().then(r => this.$modal.msgSuccess(`连接成功，耗时 ${r.data.durationMs} ms`)).finally(() => { this.llmTesting = false }) },
-    onTabClick(tab) { if (tab.name === 'graph' && !this.graphLoaded) this.loadGraph(); if (tab.name === 'qa') this.loadQaHistory() },
+    onTabClick(tab) { if (tab.name === 'qa') this.loadQaHistory() },
     loadQaHistory() { this.qaHistoryLoading = true; listKnowledgeQaTasks({ limit: 30 }).then(r => { this.qaHistory = r.data || [] }).finally(() => { this.qaHistoryLoading = false }) },
     restoreQaTask(row) {
       getKnowledgeQaTask(row.taskId).then(r => {
         this.qaTask = r.data
-        if (r.data.status === 'SUCCESS') { this.qaResult = r.data.result; this.asking = false; this.$nextTick(() => this.renderGraph('qaGraph', this.qaResult && this.qaResult.graph, 'qaGraphInstance')) }
+        if (r.data.status === 'SUCCESS') { this.qaResult = r.data.result; this.asking = false; this.initializeQaGraph() }
         else if (r.data.status === 'QUEUED' || r.data.status === 'RUNNING') { this.asking = true; this.startQaPolling(row.taskId) }
         else { this.qaResult = null; this.asking = false; this.$modal.msgWarning(r.data.errorMessage || '该任务执行失败') }
       })
     },
-    loadGraph(centerId) { this.graphLoading = true; this.graphCenterId = centerId || null; this.selectedRelation = null; getKnowledgeGraph({ ...this.graphFilter, centerId: this.graphCenterId, limit: 300 }).then(r => { this.graphData = r.data || { nodes: [], links: [], categories: [] }; this.graphLoaded = true; this.$nextTick(() => this.renderGraph('graphChart', this.graphData, 'graphChartInstance')) }).finally(() => { this.graphLoading = false }) },
-    resetGraph() { this.graphCenterId = null; this.loadGraph() },
-    rebuildGraph() { this.graphRebuilding = true; rebuildKnowledgeGraph().then(r => { this.$modal.msgSuccess(`已处理 ${r.data.chunkCount} 个切片`); this.resetGraph() }).finally(() => { this.graphRebuilding = false }) },
+    resetQaGraphState() {
+      this.qaGraphFilter = { period: '', dataType: '' }
+      this.qaGraphData = { nodes: [], links: [], categories: [] }
+      this.qaGraphCenterId = null; this.selectedQaRelation = null
+      if (this.qaGraphInstance) { this.qaGraphInstance.dispose(); this.qaGraphInstance = null }
+    },
+    initializeQaGraph() {
+      this.qaGraphFilter = { period: '', dataType: '' }; this.qaGraphCenterId = null; this.selectedQaRelation = null
+      this.$nextTick(() => this.applyQaGraphFilter())
+    },
+    applyQaGraphFilter() {
+      const source = (this.qaResult && this.qaResult.graph) || { nodes: [], links: [], categories: [] }
+      const allNodes = source.nodes || []
+      const nodeMap = allNodes.reduce((map, node) => { map[String(node.id)] = node; return map }, {})
+      const period = (this.qaGraphFilter.period || '').replace(/\s+/g, '').toLowerCase()
+      const dataType = (this.qaGraphFilter.dataType || '').toUpperCase()
+      let links = (source.links || []).filter(link => {
+        const linkPeriod = String(link.period || '').replace(/\s+/g, '').toLowerCase()
+        const sourceNode = nodeMap[String(link.source)] || {}; const targetNode = nodeMap[String(link.target)] || {}
+        const periodMatched = !period || linkPeriod.includes(period)
+        const typeMatched = !dataType || String(link.dataType || '').toUpperCase() === dataType
+          || String(sourceNode.entityType || '').toUpperCase() === dataType
+          || String(targetNode.entityType || '').toUpperCase() === dataType
+        return periodMatched && typeMatched
+      })
+      if (this.qaGraphCenterId) {
+        links = links.filter(link => String(link.source) === String(this.qaGraphCenterId) || String(link.target) === String(this.qaGraphCenterId))
+      }
+      const ids = new Set(); links.forEach(link => { ids.add(String(link.source)); ids.add(String(link.target)) })
+      const nodes = allNodes.filter(node => ids.has(String(node.id))).map(node => ({
+        ...node, symbolSize: String(node.id) === String(this.qaGraphCenterId) ? 54 : node.symbolSize
+      }))
+      this.qaGraphData = { nodes, links, categories: source.categories || [] }; this.selectedQaRelation = null
+      this.$nextTick(() => {
+        if (!nodes.length) {
+          if (this.qaGraphInstance) { this.qaGraphInstance.dispose(); this.qaGraphInstance = null }
+          return
+        }
+        this.renderGraph('qaGraph', this.qaGraphData, 'qaGraphInstance')
+      })
+    },
+    drillQaGraph(nodeId) { this.qaGraphCenterId = String(nodeId); this.applyQaGraphFilter() },
+    resetQaGraphCenter() { this.qaGraphCenterId = null; this.applyQaGraphFilter() },
+    resetQaGraphFilter() { this.qaGraphFilter = { period: '', dataType: '' }; this.qaGraphCenterId = null; this.applyQaGraphFilter() },
     renderGraph(refName, data, instanceName) {
       const element = this.$refs[refName]; if (!element || !data || !data.nodes || !data.nodes.length) return
       if (this[instanceName]) this[instanceName].dispose()
       const chart = echarts.init(element); this[instanceName] = chart
       chart.setOption({ tooltip: { formatter: p => p.dataType === 'edge' ? `${p.data.name}<br/>${p.data.sourceName || ''}` : `${p.data.name}<br/>${p.data.entityType}` }, legend: [{ bottom: 8, data: (data.categories || []).map(c => c.name) }], series: [{ type: 'graph', layout: 'force', roam: true, draggable: true, categories: data.categories || [], data: data.nodes, links: data.links, label: { show: true, position: 'right' }, edgeLabel: { show: true, formatter: p => p.data.name, fontSize: 10 }, edgeSymbol: ['none', 'arrow'], force: { repulsion: 260, edgeLength: [90, 170], gravity: 0.08 }, lineStyle: { color: 'source', curveness: 0.12, opacity: 0.75 } }] })
-      chart.on('click', params => { if (params.dataType === 'node' && refName === 'graphChart') this.loadGraph(Number(params.data.id)); if (params.dataType === 'edge') this.selectedRelation = params.data })
+      chart.on('click', params => {
+        if (params.dataType === 'node' && refName === 'qaGraph') this.drillQaGraph(params.data.id)
+        if (params.dataType === 'edge') this.selectedQaRelation = params.data
+      })
     },
     openEvidence(item) { const chunkId = item.chunkId || item.id; if (!chunkId) return this.$modal.msgError('该来源缺少切片定位信息'); getKnowledgeEvidence(chunkId, { startOffset: item.startOffset, endOffset: item.endOffset }).then(r => { this.evidenceDetail = r.data; this.evidenceOpen = true }) },
     openCitation(item) { const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : item; this.openEvidence({ id: item.id, chunkId: evidence.chunkId || item.chunkId || item.id, startOffset: evidence.startOffset, endOffset: evidence.endOffset }) },
@@ -474,6 +534,7 @@ export default {
 </script>
 
 <style scoped>
-.mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.graph-chart { height:650px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph { height:420px; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
+.mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.qa-graph { height:500px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph-filter { margin-bottom:4px; }.qa-graph-status { margin:0 0 12px; color:#409eff; font-weight:600; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
+.source-meta { align-items:center; }.source-link-button { padding:0; }.external-source-link { margin-left:16px; }
 .analysis-timeline { padding:6px 8px 0 6px; }.analysis-step-card { line-height:1.75; }.analysis-step-title { font-weight:700; font-size:15px; color:#303133; margin-bottom:6px; }.analysis-boundary { color:#e6a23c; }.analysis-evidences { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:6px; padding-top:6px; border-top:1px dashed #dcdfe6; }
 </style>

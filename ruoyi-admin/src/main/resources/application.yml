@@ -59,7 +59,7 @@ spring:
       # 单个文件大小
       max-file-size: 50MB
       # 设置总上传的文件大小
-      max-request-size: 100MB
+      max-request-size: 200MB
   jackson:
     time-zone: GMT+8
     date-format: yyyy-MM-dd HH:mm:ss
@@ -148,6 +148,13 @@ xss:
 
 # 业务解析任务配置
 business:
+  vehicle:
+    schema-auto-init: true
+  market-agent:
+    # 新闻/PDF侧车继续使用8000；整车市场分析独立使用8001。
+    base-url: ${MARKET_AGENT_BASE_URL:http://127.0.0.1:8001/api}
+    connect-timeout-seconds: ${MARKET_AGENT_CONNECT_TIMEOUT_SECONDS:5}
+    request-timeout-seconds: ${MARKET_AGENT_REQUEST_TIMEOUT_SECONDS:600}
   pdf:
     schema-auto-init: true
   document:
@@ -158,6 +165,9 @@ business:
   llm:
     # 用于加密持久化前端保存的API Key；生产环境请通过LLM_CONFIG_SECRET设置独立且稳定的随机密钥
     persistence-secret: ${LLM_CONFIG_SECRET:${token.secret}}
+    api-url: ${ARK_API_URL:https://ark.cn-beijing.volces.com/api/v3/chat/completions}
+    model: ${ARK_MODEL:glm-5-2-260617}
+    api-key: ${ARK_API_KEY:}
   text:
     llm:
       # 推理型模型可能超过90秒，文本抽取独立设置较长超时
@@ -165,7 +175,7 @@ business:
   knowledge:
     # POC启动时幂等创建问答审计表；正式环境使用迁移平台后可关闭
     qa-schema-auto-init: true
-    # Excel解析并生成报告后，只投影报告指标、结论和证据关系到知识库，不保存整份报告JSON副本
+    # AI报告入库时只投影指标、结论和证据关系，不保存整份报告JSON副本
     auto-ingest-reports: true
     # 使用同事的Python解析器；Python只返回结构化结果，正式入库仍由本服务写MySQL
     agent-document-enabled: ${KNOWLEDGE_AGENT_DOCUMENT_ENABLED:true}
@@ -188,23 +198,18 @@ business:
       # 知识问答需要同时综合报告与新闻，推理模型可能超过90秒
       timeout-seconds: ${KNOWLEDGE_LLM_TIMEOUT_SECONDS:300}
   excel:
-    # 大型xlsm包含工作簿扫描和有限次数LLM识别，保留充足的全局执行时间
+    # 车载市场分析沿用受限后台任务，避免解析占用Tomcat请求线程
     parse-timeout-minutes: 30
     executor:
       core-pool-size: 2
       max-pool-size: 2
       queue-capacity: 20
     llm:
-      api-url: ${ARK_API_URL:https://ark.cn-beijing.volces.com/api/v3/chat/completions}
-      model: ${ARK_MODEL:glm-5-2-260617}
-      # API Key只从环境变量读取，禁止写入源码
-      api-key: ${ARK_API_KEY:}
-      # 单次LLM调用失败时快速降级，避免阻塞整个工作簿任务
+      # 与系统前端维护的统一LLM配置共用接口、模型和API Key
       table-timeout-seconds: ${ARK_TABLE_TIMEOUT_SECONDS:30}
       report-timeout-seconds: ${ARK_REPORT_TIMEOUT_SECONDS:180}
       max-retries: ${ARK_MAX_RETRIES:0}
       max-table-calls: ${ARK_MAX_TABLE_CALLS:4}
-
 # Python新闻采集与PDF/PPTX解析侧车。LLM参数由上面的统一配置在每次内部请求中下发。
 agent-service:
   base-url: ${AGENT_SERVICE_BASE_URL:http://127.0.0.1:8000}

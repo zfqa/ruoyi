@@ -362,25 +362,6 @@ public class KnowledgeBaseController extends BaseController
     }
 
     @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
-    @GetMapping("/graph")
-    public AjaxResult graph(@RequestParam(value = "period", required = false) String period,
-        @RequestParam(value = "dataType", required = false) String dataType,
-        @RequestParam(value = "centerId", required = false) Long centerId,
-        @RequestParam(value = "limit", defaultValue = "300") int limit)
-    {
-        return success(knowledgeGraphService.graph(period, dataType, centerId, roleIds(),
-            getLoginUser().getUser().isAdmin(), limit));
-    }
-
-    @PreAuthorize("@ss.hasPermi('business:knowledge:edit')")
-    @Log(title = "重建知识图谱", businessType = BusinessType.UPDATE)
-    @PostMapping("/graph/rebuild")
-    public AjaxResult rebuildGraph()
-    {
-        return success(knowledgeGraphService.rebuildCurrentGraph());
-    }
-
-    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
     @GetMapping("/evidence/{chunkId}")
     public AjaxResult evidence(@PathVariable Long chunkId,
         @RequestParam(value = "startOffset", required = false) Integer startOffset,

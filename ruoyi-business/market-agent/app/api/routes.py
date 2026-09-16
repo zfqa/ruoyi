@@ -41,14 +41,14 @@ def _persist_upload(source, target: Path, display_name: str) -> None:
         ) from exc
 from app.models.schemas import (
     ChatRequest, ChatResponse, ParseResult, FileParseResult, ExportResponse,
-    ContextTextRequest, ContextResult, ContextItem, ContextDeleteRequest,
+    ContextTextRequest, ContextResult, ContextItem, ContextDeleteRequest, ContextCategoryUpdateRequest,
     ReportPlanInstructionRequest, ReportConfigRequest, VisualReportCompositionRequest,
 )
 from app.services.parser import parse_file, file_hash
 from app.services.validator import validate_market_data
 from app.services.storage import (
     save_dataset, load_dataset, load_meta, load_context, append_context, clear_context,
-    delete_context_items, delete_dataset, processed_base,
+    delete_context_items, update_context_category, delete_dataset, processed_base,
     save_sheet_datasets, load_sheet_dataset, available_sheets, sheet_selector_meta, COMPREHENSIVE_SHEET_NAME,
 )
 from app.services.market_analysis import MarketAnalyzer
@@ -507,9 +507,12 @@ def dashboard_components(
 def add_context_text(dataset_id: str, req: ContextTextRequest):
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="文本不能为空")
-    items = items_from_text(req.text, req.source_name)
+    items = items_from_text(req.text, req.source_name, category=req.category)
+    before = len(load_context(dataset_id))
     current = append_context(dataset_id, items)
-    return ContextResult(dataset_id=dataset_id, added=len(items), total=len(current), items=[ContextItem(**x) for x in current[-min(len(current), 30):]])
+    added = len(current) - before
+    recent = current[-min(added, 30):] if added else []
+    return ContextResult(dataset_id=dataset_id, added=added, total=len(current), items=[ContextItem(**x) for x in recent])
 
 
 @router.post("/context/{dataset_id}/upload", response_model=ContextResult)
@@ -587,6 +590,21 @@ def delete_selected_context(dataset_id: str, req: ContextDeleteRequest):
         category = item.get("category", "other")
         counts[category] = counts.get(category, 0) + 1
     return {"dataset_id": dataset_id, "deleted": before - len(remaining), "total": len(remaining), "counts": counts}
+
+
+@router.put("/context/{dataset_id}/{item_id}/category")
+def change_context_category(dataset_id: str, item_id: str, req: ContextCategoryUpdateRequest):
+    try:
+        items = update_context_category(dataset_id, item_id, req.category)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"行业资料不存在：{item_id}") from exc
+    counts: dict[str, int] = {}
+    for item in items:
+        category = item.get("category", "other")
+        counts[category] = counts.get(category, 0) + 1
+    return {"dataset_id": dataset_id, "updated": 1, "total": len(items), "counts": counts, "items": items[:200]}
 
 
 @router.post("/chat", response_model=ChatResponse)

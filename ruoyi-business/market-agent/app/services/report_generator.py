@@ -55,6 +55,7 @@ SECTION_LABELS = {
     "strategy": "2.2 战略调整与布局",
     "industry_chain": "3.1 产业链观察",
     "competition": "4.1 竞争追踪",
+    "other": "5.1 其他资料",
 }
 
 
@@ -535,7 +536,7 @@ def build_report_payload(
 
     market_subsections = [f"{x['number']} {x['title']}" for x in dynamic_observations] if dynamic_mode else ["1.1 " + payload["market_observation_title"]]
     macro_number = f"1.{len(market_subsections) + 1}"
-    payload["section_numbers"] = {"macro_policy": macro_number, "personnel": "2.1", "strategy": "2.2", "industry_chain": "3.1", "competition": "4.1"}
+    payload["section_numbers"] = {"macro_policy": macro_number, "personnel": "2.1", "strategy": "2.2", "industry_chain": "3.1", "competition": "4.1", "other": "5.1"}
     for category, section_number in payload["section_numbers"].items():
         for item_index, item in enumerate(payload.get(category, []), 1):
             item["number"] = f"{section_number}.{item_index}"
@@ -549,6 +550,8 @@ def build_report_payload(
             {"number": "3", "title": "产业链观察", "subsections": ["3.1 产业链观察"]},
             {"number": "4", "title": "竞争追踪", "subsections": ["4.1 竞争追踪"]},
         ])
+        if payload.get("other"):
+            payload["outline"].append({"number": "5", "title": "其他资料", "subsections": ["5.1 其他资料"]})
     payload["report_sections"] = {
         **{f"{x['number']} {x['title']}": x.get("insights", []) for x in dynamic_observations},
         macro_number + " 宏观政策动态": [x["title"] for x in payload["macro_policy"]],
@@ -556,6 +559,7 @@ def build_report_payload(
         "2.2 战略调整与布局": [x["title"] for x in payload["strategy"]],
         "3. 产业链观察": [x["title"] for x in payload["industry_chain"]],
         "4. 竞争追踪": [x["title"] for x in payload["competition"]],
+        "5.1 其他资料": [x["title"] for x in payload["other"]],
     }
     modules = []
     if dynamic_mode:
@@ -579,7 +583,7 @@ def build_report_payload(
             if config.get(key):
                 modules.append(label)
     payload["included_dashboard_modules"] = modules
-    payload["source_note"] = f"当前报告计划版本：v{payload.get('report_plan_revision', 0)}；默认数据分析周期：{payload.get('period_label') or '未指定'}；同比基期：{payload.get('comparison_period_label') or '无可比同期'}。所有市场观察中的数字、排名、占比、同比和图表数据均来自当前上传Excel/CSV的Python确定性计算；每个市场观察可以拥有独立的分析周期和看板组件。区间模式下销量/产量/出口等流量指标按月累计，库存等时点指标采用期末值。宏观政策、人事、战略、产业链和竞争追踪完整保留用户补充资料；资料缺失时不自动编造。"
+    payload["source_note"] = f"当前报告计划版本：v{payload.get('report_plan_revision', 0)}；默认数据分析周期：{payload.get('period_label') or '未指定'}；同比基期：{payload.get('comparison_period_label') or '无可比同期'}。所有市场观察中的数字、排名、占比、同比和图表数据均来自当前上传Excel/CSV的Python确定性计算；每个市场观察可以拥有独立的分析周期和看板组件。区间模式下销量/产量/出口等流量指标按月累计，库存等时点指标采用期末值。宏观政策、人事、战略、产业链、竞争追踪和其他资料完整保留用户补充内容；资料缺失时不自动编造。"
     return _json_safe(payload)
 
 
@@ -746,6 +750,8 @@ def export_excel(df: pd.DataFrame, out_path: Path, context_items=None, meta=None
         sheets.append(("异常提示", payload["anomalies"]))
     if cfg.get("include_weekly_content"):
         sheets.extend([("宏观政策", payload["macro_policy"]), ("人事调整", payload["personnel"]), ("战略布局", payload["strategy"]), ("产业链观察", payload["industry_chain"]), ("竞争追踪", payload["competition"])])
+        if payload.get("other"):
+            sheets.append(("其他资料", payload["other"]))
     for name, rows in sheets:
         s = wb.create_sheet(name)
         write_table(s, 1, name, rows)
@@ -1142,6 +1148,9 @@ def export_docx(df: pd.DataFrame, out_path: Path, context_items=None, meta=None,
             _doc_event_section(doc, "3.1 产业链观察", payload["industry_chain"])
             doc.add_heading("4. 竞争追踪", level=1)
             _doc_event_section(doc, "4.1 竞争追踪", payload["competition"])
+            if payload.get("other"):
+                doc.add_heading("5. 其他资料", level=1)
+                _doc_event_section(doc, "5.1 其他资料", payload["other"])
 
         if cfg.get("include_anomalies") and payload.get("anomalies"):
             add_docx_table(doc, "异常指标提示", payload["anomalies"])
@@ -1794,6 +1803,9 @@ def export_pptx(df: pd.DataFrame, out_path: Path, context_items=None, meta=None,
         page = _add_event_cards(prs, blank, "3.1 产业链观察", payload["industry_chain"], page)
         add_section_divider(prs, blank, "4", "竞争追踪", page); page += 1
         page = _add_event_cards(prs, blank, "4.1 竞争追踪", payload["competition"], page)
+        if payload.get("other"):
+            add_section_divider(prs, blank, "5", "其他资料", page); page += 1
+            page = _add_event_cards(prs, blank, "5.1 其他资料", payload["other"], page)
 
     # Formal output contains actual anomaly rows only. Missing-field warnings
     # and report-plan diagnostics remain available through the analysis API.

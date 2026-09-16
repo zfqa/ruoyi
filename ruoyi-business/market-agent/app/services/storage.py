@@ -118,6 +118,24 @@ def delete_context_items(dataset_id: str, item_ids: list[str]) -> list[dict[str,
     return remaining
 
 
+def update_context_category(dataset_id: str, item_id: str, category: str) -> list[dict[str, Any]]:
+    """Update one saved item without changing its source text or evidence metadata."""
+    base = processed_base(dataset_id)
+    if not (base / "data.csv").exists():
+        raise FileNotFoundError(f"dataset_id 不存在：{dataset_id}")
+    current = load_context(dataset_id)
+    matched = False
+    for item in current:
+        if str(item.get("id")) == str(item_id):
+            item["category"] = category
+            matched = True
+            break
+    if not matched:
+        raise KeyError(item_id)
+    (base / "context.json").write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    return current
+
+
 def delete_dataset(dataset_id: str) -> dict[str, int]:
     """Remove one dataset and only files recorded as belonging to it.
 

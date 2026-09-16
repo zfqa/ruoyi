@@ -96,7 +96,7 @@ def _split_long_text(text: str, max_chars: int = 1200) -> list[str]:
     return chunks
 
 
-def items_from_text(text: str, source_name: str, locator: str = "") -> list[ContextItem]:
+def items_from_text(text: str, source_name: str, locator: str = "", category: str | None = None) -> list[ContextItem]:
     items: list[ContextItem] = []
     section_only = re.compile(r"^(?:\d+(?:\.\d+)?[.、]?\s*)?(?:行业全景|企业行动|人事调整|人事任命|战略调整与布局|产业链观察|竞争追踪|宏观政策动态)$")
     for idx, chunk in enumerate(_split_long_text(text), 1):
@@ -109,7 +109,8 @@ def items_from_text(text: str, source_name: str, locator: str = "") -> list[Cont
             continue
         loc = locator or (f"片段{idx}" if idx > 1 else "")
         items.append(ContextItem(
-            category=classify_text(chunk),
+            # 手工录入以用户明确选择的分类为准；文件解析未传分类时仍使用自动识别。
+            category=category or classify_text(chunk),
             title=_title_from_text(chunk, source_name),
             content=chunk,
             source_name=source_name,

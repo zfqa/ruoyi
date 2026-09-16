@@ -1,6 +1,19 @@
 $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+$workspaceRoot = Split-Path -Parent $projectRoot
+$environmentRoot = if ([string]::IsNullOrWhiteSpace($env:RUOYI_ENV_ROOT)) {
+    Join-Path $workspaceRoot "ruoyi-environment"
+} else {
+    $env:RUOYI_ENV_ROOT
+}
+$environmentRoot = (Resolve-Path -LiteralPath $environmentRoot).Path
+$nativeRuntimeRoot = if ([string]::IsNullOrWhiteSpace($env:RUOYI_NATIVE_ROOT)) {
+    "D:\ruoyi-master2-runtime"
+} else {
+    $env:RUOYI_NATIVE_ROOT
+}
+$nativeRuntimeRoot = (Resolve-Path -LiteralPath $nativeRuntimeRoot).Path
 Set-Location -LiteralPath $projectRoot
 
 function Test-LocalTcpPort([int]$Port) {
@@ -23,7 +36,7 @@ $javaCandidates = @()
 if (-not [string]::IsNullOrWhiteSpace($env:JAVA_HOME)) {
     $javaCandidates += (Join-Path $env:JAVA_HOME "bin\java.exe")
 }
-$javaCandidates += "D:\jdk-17.0.19+10\bin\java.exe"
+$javaCandidates += (Join-Path $environmentRoot "jdk_extract\PFiles64\Eclipse Adoptium\jdk-17.0.20.101-hotspot\bin\java.exe")
 $pathJava = Get-Command java.exe -ErrorAction SilentlyContinue
 if ($null -ne $pathJava) {
     $javaCandidates += $pathJava.Source
@@ -53,7 +66,7 @@ if ($null -eq $javaExe) {
 Write-Host ("Java check passed: {0}" -f $javaExe)
 
 if ([string]::IsNullOrWhiteSpace($env:RUOYI_PROFILE)) {
-    $preferredProfile = "D:\ruoyi\uploadPath"
+    $preferredProfile = Join-Path $environmentRoot "data\ruoyi_upload"
     try {
         New-Item -ItemType Directory -Path $preferredProfile -Force -ErrorAction Stop | Out-Null
         $probe = Join-Path $preferredProfile ".startup-write-probe.tmp"
@@ -93,6 +106,8 @@ foreach ($envFile in $envFiles) {
 # real python.exe before startup so Java child processes can invoke it directly.
 if ([string]::IsNullOrWhiteSpace($env:PYTHON) -or -not (Test-Path -LiteralPath $env:PYTHON -PathType Leaf)) {
     $pythonCandidates = @(
+        (Join-Path $environmentRoot "python-market-agent\Scripts\python.exe"),
+        (Join-Path $environmentRoot "python\python312\python.exe"),
         (Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"),
         (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe")
     )
@@ -114,16 +129,17 @@ $env:PYTHONIOENCODING = "utf-8"
 # is not already served. This keeps the one-command startup self-contained.
 $redisReady = Test-LocalTcpPort 6379
 if (-not $redisReady) {
-    $redisRoot = Join-Path $projectRoot "tools\redis"
+    $redisRoot = Join-Path $nativeRuntimeRoot "redis\Redis-8.10.1-Windows-x64-msys2"
     $redisExe = Join-Path $redisRoot "redis-server.exe"
-    $redisConfig = Join-Path $redisRoot "redis.windows.conf"
+    $redisConfig = Join-Path $nativeRuntimeRoot "redis.conf"
+    $redisConfigArgument = "..\..\redis.conf"
     if (-not (Test-Path -LiteralPath $redisExe -PathType Leaf) -or -not (Test-Path -LiteralPath $redisConfig -PathType Leaf)) {
         throw "Bundled Redis is missing under $redisRoot"
     }
-    $redisOut = Join-Path $projectRoot "runtime-logs\redis.out.log"
-    $redisErr = Join-Path $projectRoot "runtime-logs\redis.err.log"
+    $redisOut = Join-Path $environmentRoot "data\logs\redis.out.log"
+    $redisErr = Join-Path $environmentRoot "data\logs\redis.err.log"
     New-Item -ItemType Directory -Path (Split-Path -Parent $redisOut) -Force | Out-Null
-    Start-Process -FilePath $redisExe -ArgumentList $redisConfig -WorkingDirectory $redisRoot -WindowStyle Hidden -RedirectStandardOutput $redisOut -RedirectStandardError $redisErr | Out-Null
+    Start-Process -FilePath $redisExe -ArgumentList $redisConfigArgument -WorkingDirectory $redisRoot -WindowStyle Hidden -RedirectStandardOutput $redisOut -RedirectStandardError $redisErr | Out-Null
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
         Start-Sleep -Milliseconds 250
         $redisReady = Test-LocalTcpPort 6379
@@ -138,6 +154,17 @@ Write-Host "Redis check passed: 127.0.0.1:6379"
 # per internal request and does not persist a second knowledge base.
 $agentRoot = Join-Path $projectRoot "agent-service"
 $agentReady = Test-LocalTcpPort 8000
+if ($agentReady) {
+    try {
+        $agentHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -Method Get -TimeoutSec 2
+        $agentReady = $agentHealth.status -eq "ok"
+    } catch {
+        $agentReady = $false
+    }
+    if (-not $agentReady) {
+        throw "Port 8000 is occupied by a service that is not agent-service. Stop that service before starting RuoYi."
+    }
+}
 if ($agentReady -and [string]::IsNullOrWhiteSpace($env:AGENT_INTERNAL_TOKEN)) {
     throw "Port 8000 is already in use, but AGENT_INTERNAL_TOKEN is not set. Stop the old agent-service or set the same token before starting RuoYi."
 }
@@ -149,8 +176,8 @@ if (-not $agentReady) {
     if ($LASTEXITCODE -ne 0) {
         throw "Python agent dependencies are missing. Run: & '$env:PYTHON' -m pip install -r '$agentRoot\requirements.txt'"
     }
-    $agentOut = Join-Path $projectRoot "runtime-logs\agent-service.out.log"
-    $agentErr = Join-Path $projectRoot "runtime-logs\agent-service.err.log"
+    $agentOut = Join-Path $environmentRoot "data\logs\agent-service.out.log"
+    $agentErr = Join-Path $environmentRoot "data\logs\agent-service.err.log"
     New-Item -ItemType Directory -Path (Split-Path -Parent $agentOut) -Force | Out-Null
     Start-Process -FilePath $env:PYTHON -ArgumentList @("-m", "uvicorn", "api.routes:app", "--host", "127.0.0.1", "--port", "8000") -WorkingDirectory $agentRoot -WindowStyle Hidden -RedirectStandardOutput $agentOut -RedirectStandardError $agentErr | Out-Null
     $agentReady = $false
@@ -192,7 +219,7 @@ if (-not $marketAgentReady) {
     if ($LASTEXITCODE -ne 0) {
         throw "Market Agent dependencies are missing. Run: & '$env:PYTHON' -m pip install -r '$marketAgentRoot\requirements.txt'"
     }
-    $fallbackMarketStorage = Join-Path $projectRoot "runtime-market-agent-storage"
+    $fallbackMarketStorage = Join-Path $environmentRoot "data\market-agent"
     if ([string]::IsNullOrWhiteSpace($env:MARKET_AGENT_STORAGE_DIR)) {
         $env:MARKET_AGENT_STORAGE_DIR = $fallbackMarketStorage
     }
@@ -220,8 +247,8 @@ if (-not $marketAgentReady) {
     $env:MARKET_AGENT_HOST = "127.0.0.1"
     $env:MARKET_AGENT_PORT = [string]$marketAgentPort
     $env:MARKET_AGENT_BASE_URL = "http://127.0.0.1:$marketAgentPort/api"
-    $marketOut = Join-Path $projectRoot "runtime-logs\market-agent.out.log"
-    $marketErr = Join-Path $projectRoot "runtime-logs\market-agent.err.log"
+    $marketOut = Join-Path $environmentRoot "data\logs\market-agent.out.log"
+    $marketErr = Join-Path $environmentRoot "data\logs\market-agent.err.log"
     Start-Process -FilePath $env:PYTHON -ArgumentList "run_backend.py" -WorkingDirectory $marketAgentRoot -WindowStyle Hidden -RedirectStandardOutput $marketOut -RedirectStandardError $marketErr | Out-Null
     for ($attempt = 0; $attempt -lt 40; $attempt++) {
         Start-Sleep -Milliseconds 500

@@ -218,9 +218,15 @@
             </div>
           </el-tab-pane>
           <el-tab-pane label="行业资料" name="context">
+            <div class="context-entry-meta">
+              <span class="context-entry-label">资料类别</span>
+              <el-select v-model="contextInputCategory" size="small" placeholder="请先选择资料类别" style="width:180px">
+                <el-option v-for="item in contextCategories" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+              <el-input v-model="contextSource" size="small" placeholder="资料来源名称（选填）" class="context-source" />
+            </div>
             <el-input v-model="contextText" type="textarea" :rows="6" placeholder="粘贴宏观政策、人事、战略、产业链或竞争动态等事实资料" />
-            <el-input v-model="contextSource" size="small" placeholder="资料来源名称" class="context-source" />
-            <el-button type="primary" size="small" :disabled="!contextText.trim()" @click="saveContext">添加资料</el-button>
+            <el-button type="primary" size="small" :disabled="!contextInputCategory || !contextText.trim()" @click="saveContext">添加资料</el-button>
             <el-upload action="#" multiple :auto-upload="false" :on-change="onContextChange" :on-remove="onContextRemove" :file-list="contextFiles" accept=".txt,.md,.docx,.pptx,.pdf,.xlsx,.xlsm,.csv" class="context-upload">
               <el-button size="small" icon="el-icon-folder-opened">选择资料文件</el-button>
             </el-upload>
@@ -236,7 +242,7 @@
             </div>
             <el-table :data="filteredContextItems" border stripe size="mini" max-height="420" @selection-change="onContextSelection">
               <el-table-column type="selection" width="45" />
-              <el-table-column label="分类" width="100"><template slot-scope="scope"><el-tag size="mini">{{ categoryLabel(scope.row.category) }}</el-tag></template></el-table-column>
+              <el-table-column label="分类" width="145"><template slot-scope="scope"><el-select :value="scope.row.category" size="mini" style="width:120px" @change="changeContextCategory(scope.row, $event)"><el-option v-for="item in contextCategories" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
               <el-table-column prop="title" label="标题" min-width="180" show-overflow-tooltip />
               <el-table-column prop="content" label="内容" min-width="360" show-overflow-tooltip />
               <el-table-column prop="source_name" label="来源" width="160" show-overflow-tooltip />
@@ -445,7 +451,7 @@
 import { saveAs } from 'file-saver'
 import DynamicTable from './components/DynamicTable'
 import MarketChart from './components/MarketChart'
-import { marketHealth, llmStatus, testLlmConnection, createMarketUploadJob, getMarketUploadJob, cancelMarketUploadJob, retryMarketUploadJob, getSheets, getPeriodOptions, getMarketAnalysis, getDashboardComponents, addContextText, getContext, deleteContextItems, clearContext, uploadContextFiles, askMarketAgent, getMarketReport, exportMarketReport, downloadMarketReport, getReportPlan, updateReportPlan, saveVisualReportPlan, resetReportPlan, getReportConfig } from '@/api/business/market/marketAgent'
+import { marketHealth, llmStatus, testLlmConnection, createMarketUploadJob, getMarketUploadJob, cancelMarketUploadJob, retryMarketUploadJob, getSheets, getPeriodOptions, getMarketAnalysis, getDashboardComponents, addContextText, updateContextCategory, getContext, deleteContextItems, clearContext, uploadContextFiles, askMarketAgent, getMarketReport, exportMarketReport, downloadMarketReport, getReportPlan, updateReportPlan, saveVisualReportPlan, resetReportPlan, getReportConfig } from '@/api/business/market/marketAgent'
 
 const metricLabels = { production: '产量', sales: '销量', retail_sales: '零售销量', wholesale: '批发销量', domestic_sales: '国内销量', domestic_wholesale: '国内批发销量', export: '出口', inventory: '库存量' }
 const trustMetricKeys = ['production', 'sales', 'retail_sales', 'wholesale', 'domestic_sales', 'domestic_wholesale', 'export', 'inventory']
@@ -475,17 +481,16 @@ const matrixSegments = [
 ]
 
 export default {
-  // 动态菜单的路由名由 path=vehicle 生成为 Vehicle。与路由缓存名保持
-  // 一致后，切换页签不会销毁已选择文件、上传任务和分析结果；右上角
-  // “刷新”会主动移除该缓存并创建一个新的初始页面。
-  name: 'Vehicle', components: { DynamicTable, MarketChart },
+  // 必须与数据库菜单的 route_name 保持一致，才能被 AppMain 的 keep-alive 正确缓存。
+  // 普通页签切换保留分析现场；右上角刷新会通过 tagsView 主动清除此缓存。
+  name: 'VehicleMarket', components: { DynamicTable, MarketChart },
   data() {
     return {
       datasetId: '', analysisFiles: [], uploadJob: null, uploadTimer: null, uploading: false, analysisPhase: 'idle', serviceOnline: false, serviceBuild: {}, loading: false, sheets: [], sheetName: '', periodMode: 'latest', periods: [], years: [], startPeriod: '', endPeriod: '', year: '',
       llmState: { enabled: false, model: '', base_url: '', api_key_configured: false, proxy_configured: false, network_mode: 'direct' }, llmTesting: false, llmConnectionState: 'unknown', llmLastError: '',
       analysis: null, activeTab: 'overview', rankDimension: 'market', rankLimit: 20, chartIndex: 0, powerTrendMode: 'both', powerTrendModes,
       trustMetricFilter: 'all', trustOpenPanels: ['sources', 'dimensions', 'issues'],
-      contextText: '', contextSource: '手工补充文本', contextFiles: [], contextUploading: false, contextResult: { total: 0, counts: {}, items: [] }, contextCategory: '', selectedContextIds: [], contextCategories,
+      contextText: '', contextSource: '手工补充文本', contextInputCategory: '', contextFiles: [], contextUploading: false, contextResult: { total: 0, counts: {}, items: [] }, contextCategory: '', selectedContextIds: [], contextCategories,
       question: '', useLlm: true, chatLoading: false, chatMessages: [],
       report: null, reportLoading: false, exporting: '', planInstruction: '', planLoading: false, reportPlan: { market_observations: [], revision: 0 },
       dashboardComponents: [], dashboardDimensions: {}, indicatorCapabilities: { metrics: [], dimensions: [], aggregations: [], comparisons: [], suggested_indicators: [], matrix_row_templates: [], matrix_column_templates: [], segment_capabilities: [], segment_mapping_items: [], schema_hash: '' }, powerGroupCapabilities: { groups: [], mapping_options: [], mappings: [] }, selectedComponentId: '', selectedComponentTitle: '',
@@ -953,7 +958,27 @@ export default {
       })
     },
     saveContext() {
-      addContextText(this.datasetId, { text: this.contextText, source_name: this.contextSource || '手工补充文本' }).then(data => { this.contextText = ''; this.contextResult = data; this.loadContextItems(); this.$modal.msgSuccess(`已添加 ${data.added} 条资料`) })
+      if (!this.contextInputCategory) return this.$modal.msgWarning('请先选择资料类别')
+      const category = this.contextInputCategory
+      const label = this.categoryLabel(category)
+      addContextText(this.datasetId, { text: this.contextText, category, source_name: this.contextSource || '手工补充文本' }).then(data => {
+        this.contextText = ''
+        this.contextCategory = category
+        this.contextResult = data
+        return this.loadContextItems().then(() => {
+          if (!data.added) return this.$modal.msgWarning('该资料已经存在，未重复添加')
+          return this.generateReport().then(() => this.$modal.msgSuccess(`资料已添加至${label}，周报已同步更新`)).catch(() => this.$modal.msgWarning(`资料已添加至${label}，周报自动刷新失败，请点击“生成/刷新周报”重试`))
+        })
+      })
+    },
+    changeContextCategory(row, category) {
+      const previous = row.category
+      updateContextCategory(this.datasetId, row.id, category).then(data => {
+        this.contextResult = data
+        return this.loadContextItems().then(() => this.generateReport())
+      }).then(() => this.$modal.msgSuccess(`分类已调整为${this.categoryLabel(category)}，周报已同步更新`)).catch(() => {
+        row.category = previous
+      })
     },
     onContextChange(file, files) { this.contextFiles = files }, onContextRemove(file, files) { this.contextFiles = files },
     submitContextFiles() {
@@ -1039,7 +1064,18 @@ export default {
         return
       }
       this.exporting = format
-      exportMarketReport(this.datasetId, format, this.queryParams).then(result => downloadMarketReport(result.file_name).then(blob => saveAs(new Blob([blob]), result.file_name))).finally(() => { this.exporting = '' })
+      exportMarketReport(this.datasetId, format, this.queryParams).then(result => {
+        return downloadMarketReport(result.file_name).then(blob => {
+          saveAs(new Blob([blob]), result.file_name)
+          if (result.knowledge_ingest_status === 'failed') {
+            this.$modal.msgWarning(result.knowledge_message || '报告已下载，但自动入库失败；可重新导出重试')
+          } else if (['submitted', 'completed'].includes(result.knowledge_ingest_status)) {
+            this.$modal.msgSuccess('报告已下载，并已自动提交到固定知识库（生成报告）')
+          } else {
+            this.$modal.msgSuccess('报告已下载')
+          }
+        })
+      }).finally(() => { this.exporting = '' })
     },
     loadReportState() {
       if (!this.datasetId) return Promise.resolve()
@@ -1381,7 +1417,7 @@ export default {
 .tab-tools { margin:0 8px 14px 0; }.rank-limit { margin:0 0 14px; }.warning { margin-bottom:8px; }.context-source { width:300px;margin:12px 8px 12px 0; }.context-upload { display:inline-block;margin:12px 8px 0 0; }
 .report-actions,.plan-actions,.chat-actions { display:flex;gap:8px;align-items:center;margin-bottom:14px; }.plan-actions { margin-top:10px; }.muted { color:#909399; }
 .chat-card { margin-top:14px; }.message { margin-bottom:10px;padding:10px 12px;border-radius:5px;line-height:1.65; }.message.user { background:#ecf5ff; }.message.assistant { background:#f4f4f5; }.chat-actions { justify-content:space-between;margin-top:10px;margin-bottom:0; }
-.component-button { margin:0 0 14px 8px; }.context-toolbar { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px; }.selected-component { display:flex;gap:10px;align-items:center;margin-bottom:12px;color:#606266; }
+.component-button { margin:0 0 14px 8px; }.context-entry-meta { display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px; }.context-entry-meta .context-source { margin:0; }.context-entry-label { color:#606266;font-weight:600; }.context-toolbar { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px; }.selected-component { display:flex;gap:10px;align-items:center;margin-bottom:12px;color:#606266; }
 .report-section { margin-top:20px;padding-top:4px;border-top:1px solid #ebeef5; }.report-component { padding:10px 0; }.event-card { margin-bottom:8px; }.event-card p { margin:8px 0;line-height:1.65;white-space:pre-wrap; }.event-card small { color:#909399; }
 .danger-text { color:#f56c6c; }
 .plan-overview { margin-bottom:14px; }.plan-overview p { margin:6px 0;line-height:1.6; }

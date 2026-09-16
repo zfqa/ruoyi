@@ -135,6 +135,7 @@ class ChatResponse(BaseModel):
 
 class ContextTextRequest(BaseModel):
     text: str
+    category: Literal["macro_policy", "personnel", "strategy", "industry_chain", "competition", "other"]
     source_name: str = "手工补充文本"
 
 
@@ -158,6 +159,10 @@ class ContextResult(BaseModel):
 
 class ContextDeleteRequest(BaseModel):
     item_ids: list[str] = Field(default_factory=list)
+
+
+class ContextCategoryUpdateRequest(BaseModel):
+    category: Literal["macro_policy", "personnel", "strategy", "industry_chain", "competition", "other"]
 
 
 class ReportConfigRequest(BaseModel):

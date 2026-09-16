@@ -291,6 +291,101 @@ public class KnowledgeIngestService
         return submitReport(source, "report-" + report.getId(), report, username, true);
     }
 
+    /**
+     * Automatically publish one market-analysis Office export as a generated-report
+     * knowledge source.  The Office binary is retained for traceability while the
+     * deterministic report JSON is chunked for search and Q&A.
+     */
+    public synchronized KnowledgeIngestTask submitGeneratedMarketReport(String datasetId, String format,
+        String fileName, byte[] fileContent, String reportContent, String exportScope, String username) throws IOException
+    {
+        String actualDatasetId = clean(datasetId);
+        String actualFormat = clean(format).toLowerCase(Locale.ROOT);
+        if (actualDatasetId.isBlank()) throw new IllegalArgumentException("整车分析数据集不能为空");
+        if (!Set.of("xlsx", "docx", "pptx").contains(actualFormat))
+            throw new IllegalArgumentException("生成报告格式必须是XLSX、DOCX或PPTX");
+        String safeFileName = sanitizeOriginalName(fileName);
+        if (!safeFileName.toLowerCase(Locale.ROOT).endsWith("." + actualFormat))
+            throw new IllegalArgumentException("生成报告文件名与格式不一致");
+
+        JSONObject report;
+        try { report = JSON.parseObject(reportContent); }
+        catch (Exception ex) { throw new IllegalArgumentException("整车市场报告不是有效JSON", ex); }
+        if (report == null || report.isEmpty()) throw new IllegalArgumentException("整车市场报告内容为空");
+        String canonicalReport = JSON.toJSONString(report);
+        String sourceCode = "AUTO-MARKET-REPORT-"
+            + storage.sha256(actualDatasetId).substring(0, 20).toUpperCase(Locale.ROOT)
+            + "-" + actualFormat.toUpperCase(Locale.ROOT);
+        KnowledgeBase source = mapper.selectKnowledgeBaseBySourceCode(sourceCode);
+        if (source == null)
+        {
+            source = new KnowledgeBase(); source.setSourceCode(sourceCode); source.setSourceName(safeFileName);
+            source.setSourceType("REPORT"); source.setConfidentiality("INTERNAL");
+            source.setAllowedPurpose("知识问答、报告分析及来源追溯"); source.setAllowedRoleIds("");
+            source.setEnabled("1"); source.setStatus("0"); source.setCreateBy(username);
+            source.setRemark("整车市场分析" + actualFormat.toUpperCase(Locale.ROOT) + "周报自动入库");
+            mapper.insertKnowledgeBase(source);
+        }
+        else
+        {
+            source.setSourceName(safeFileName); source.setUpdateBy(username);
+            source.setRemark("整车市场分析" + actualFormat.toUpperCase(Locale.ROOT) + "周报自动入库");
+            mapper.updateKnowledgeBase(source);
+        }
+
+        String logicalHash = storage.sha256(actualDatasetId + "\n" + actualFormat + "\n"
+            + clean(exportScope) + "\n" + canonicalReport);
+        KnowledgeVersion existing = mapper.selectVersionByHash(source.getId(), logicalHash);
+        KnowledgeBase actualSource = source;
+        if (existing != null)
+        {
+            KnowledgeIngestTask task = mapper.selectIngestTaskByVersionId(existing.getId());
+            if (task == null) throw new IllegalStateException("该生成报告版本已存在但缺少入库任务");
+            if ("3".equals(task.getStatus()))
+                return retryMarketReport(task, existing, actualSource, report, actualDatasetId, actualFormat, safeFileName);
+            return task;
+        }
+
+        KnowledgeFileStorage.StoredFile stored = storage.saveGeneratedReport(fileContent, safeFileName);
+        KnowledgeVersion createdVersion = null;
+        try
+        {
+            String versionNo = "market-" + actualFormat + "-" + logicalHash.substring(0, 12);
+            String sourceUrl = "/business/market/files/" + safeFileName;
+            createdVersion = createVersion(source, versionNo, stored.originalName(), stored.path().toString(),
+                sourceUrl, logicalHash, username);
+            KnowledgeVersion version = createdVersion;
+            return submit(version, username, () -> processMarketReport(actualSource, version, report,
+                actualDatasetId, actualFormat, safeFileName));
+        }
+        catch (RuntimeException ex)
+        {
+            // Preserve files belonging to a failed queued version so the audit trail and
+            // subsequent retry remain usable; only an unreferenced copy is discarded.
+            if (createdVersion == null) storage.delete(stored.path());
+            throw ex;
+        }
+    }
+
+    private KnowledgeIngestTask retryMarketReport(KnowledgeIngestTask task, KnowledgeVersion version,
+        KnowledgeBase source, JSONObject report, String datasetId, String format, String fileName)
+    {
+        task.setStatus("0"); task.setProgress(0); task.setCurrentStage("重新排队"); task.setErrorMessage("");
+        task.setStartedTime(null); task.setFinishedTime(null); mapper.updateIngestTask(task);
+        version.setStatus("0"); version.setErrorMessage(""); mapper.updateVersion(version);
+        try
+        {
+            executor.execute(() -> runTask(task.getId(), version.getId(),
+                () -> processMarketReport(source, version, report, datasetId, format, fileName)));
+        }
+        catch (RuntimeException ex)
+        {
+            fail(task, version, "知识库入库队列已满，请稍后重试");
+            throw new IllegalStateException("知识库入库队列已满，请稍后重试");
+        }
+        return task;
+    }
+
     private KnowledgeIngestTask submitReport(KnowledgeBase source, String versionNo, AiReport report,
         String username, boolean idempotent)
     {
@@ -657,6 +752,31 @@ public class KnowledgeIngestService
                 null, null, null, report.getId(), item.evidenceJson(), item.metricId(), count);
         }
         if (count == 0) throw new IOException("结构化报告没有可入库内容");
+        completeChunks(version, count);
+    }
+
+    private void processMarketReport(KnowledgeBase source, KnowledgeVersion version, JSONObject report,
+        String datasetId, String format, String fileName) throws IOException
+    {
+        clearGraph(version.getId());
+        mapper.deleteChunksByVersionId(version.getId());
+        int count = 0;
+        for (Map.Entry<String, Object> entry : report.entrySet())
+        {
+            if (entry.getValue() == null) continue;
+            String section = entry.getKey();
+            String value = entry.getValue() instanceof String stringValue ? stringValue
+                : JSON.toJSONString(entry.getValue());
+            if (value == null || value.isBlank()) continue;
+            String text = "报告文件：" + fileName + "\n数据集：" + datasetId + "\n报告格式："
+                + format.toUpperCase(Locale.ROOT) + "\n章节：" + section + "\n内容：\n" + value;
+            JSONObject evidence = new JSONObject(); evidence.put("kind", "MARKET_REPORT");
+            evidence.put("dataset_id", datasetId); evidence.put("format", format.toUpperCase(Locale.ROOT));
+            evidence.put("file_name", fileName); evidence.put("section", section);
+            count = insertTextChunks(source, version, fileName + " / " + section, text, null, null,
+                version.getSourceUrl(), null, evidence.toJSONString(), "market." + section, count);
+        }
+        if (count == 0) throw new IOException("整车市场报告没有可入库内容");
         completeChunks(version, count);
     }
 

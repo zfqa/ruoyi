@@ -3,6 +3,8 @@ package com.ruoyi.business.analysis.vehicle.controller;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import jakarta.servlet.http.HttpServletRequest;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
@@ -11,7 +13,10 @@ import com.ruoyi.business.analysis.vehicle.service.MarketAgentGateway.AgentRespo
 import com.ruoyi.business.analysis.vehicle.service.MarketAgentGateway.BinaryResponse;
 import com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis;
 import com.ruoyi.business.analysis.vehicle.service.IVehicleAnalysisService;
+import com.ruoyi.business.knowledge.domain.KnowledgeIngestTask;
+import com.ruoyi.business.knowledge.service.KnowledgeIngestService;
 import com.ruoyi.common.core.controller.BaseController;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -42,10 +47,26 @@ public class MarketAgentController extends BaseController
 
     private final MarketAgentGateway gateway;
     private final IVehicleAnalysisService vehicleAnalysisService;
-    public MarketAgentController(MarketAgentGateway gateway, IVehicleAnalysisService vehicleAnalysisService)
+    private final KnowledgeIngestService knowledgeIngestService;
+    /**
+     * Excel 导入页的临时解析任务只用于返回解析预览，不能升级为整车分析数据集。
+     * 所有权只保存到任务结束，页面刷新也不会恢复该任务。
+     */
+    private final ConcurrentMap<String, String> excelParseJobOwners = new ConcurrentHashMap<>();
+
+    @Autowired
+    public MarketAgentController(MarketAgentGateway gateway, IVehicleAnalysisService vehicleAnalysisService,
+        KnowledgeIngestService knowledgeIngestService)
     {
         this.gateway = gateway;
         this.vehicleAnalysisService = vehicleAnalysisService;
+        this.knowledgeIngestService = knowledgeIngestService;
+    }
+
+    /** Kept for focused gateway integration tests that do not bootstrap the knowledge subsystem. */
+    public MarketAgentController(MarketAgentGateway gateway, IVehicleAnalysisService vehicleAnalysisService)
+    {
+        this(gateway, vehicleAnalysisService, null);
     }
 
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:list')")
@@ -59,6 +80,85 @@ public class MarketAgentController extends BaseController
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:query')")
     @PostMapping("/llm/test")
     public ResponseEntity<String> testLlm() { return post("/llm/test", null, "{}"); }
+
+    /**
+     * Excel 导入模块的解析入口。
+     *
+     * 与 /upload/jobs 不同：此入口不会创建 business_analysis_vehicle 记录，
+     * 不会把 dataset_id 暴露为可分析任务，也不会建立 Excel 导入到市场分析的跳转关系。
+     */
+    @PreAuthorize("@ss.hasPermi('business:data:excel:add')")
+    @PostMapping(value = "/parse/jobs", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<String> createExcelParseJob(@RequestParam("files") MultipartFile[] files)
+    {
+        if (files == null || files.length == 0) return gatewayError("至少选择一个Excel/CSV文件", 400);
+        try
+        {
+            AgentResponse response = gateway.postMultipart("/upload/jobs", "files", files);
+            if (response.getStatusCode() >= 200 && response.getStatusCode() < 300)
+            {
+                String jobId = JSON.parseObject(response.getBody()).getString("job_id");
+                if (jobId != null && !jobId.isBlank()) excelParseJobOwners.put(jobId, getUsername());
+            }
+            return json(response);
+        }
+        catch (Exception ex)
+        {
+            log.error("创建 Excel 临时解析任务失败", ex);
+            return unavailable(ex);
+        }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:data:excel:list')")
+    @GetMapping("/parse/jobs/{jobId}")
+    public ResponseEntity<String> excelParseJob(@PathVariable String jobId)
+    {
+        if (!canAccessExcelParseJob(jobId)) return parseJobForbidden();
+        try
+        {
+            AgentResponse response = gateway.get("/upload/jobs/" + MarketAgentGateway.encodePath(jobId), null);
+            if (response.getStatusCode() >= 200 && response.getStatusCode() < 300)
+            {
+                JSONObject body = JSON.parseObject(response.getBody());
+                String status = body.getString("status");
+                if ("success".equals(status))
+                {
+                    JSONObject result = body.getJSONObject("result");
+                    if (result != null) result.remove("dataset_id");
+                    excelParseJobOwners.remove(jobId);
+                    return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body.toJSONString());
+                }
+            }
+            return json(response);
+        }
+        catch (Exception ex) { return unavailable(ex); }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:data:excel:edit')")
+    @PostMapping("/parse/jobs/{jobId}/cancel")
+    public ResponseEntity<String> cancelExcelParseJob(@PathVariable String jobId)
+    {
+        if (!canAccessExcelParseJob(jobId)) return parseJobForbidden();
+        return post("/upload/jobs/" + MarketAgentGateway.encodePath(jobId) + "/cancel", null, "{}");
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:data:excel:add')")
+    @PostMapping("/parse/jobs/{jobId}/retry")
+    public ResponseEntity<String> retryExcelParseJob(@PathVariable String jobId)
+    {
+        if (!canAccessExcelParseJob(jobId)) return parseJobForbidden();
+        try
+        {
+            AgentResponse response = gateway.postJson("/upload/jobs/" + MarketAgentGateway.encodePath(jobId) + "/retry", null, "{}");
+            if (response.getStatusCode() >= 200 && response.getStatusCode() < 300)
+            {
+                String newJobId = JSON.parseObject(response.getBody()).getString("job_id");
+                if (newJobId != null && !newJobId.isBlank()) excelParseJobOwners.put(newJobId, getUsername());
+            }
+            return json(response);
+        }
+        catch (Exception ex) { return unavailable(ex); }
+    }
 
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:add')")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -305,6 +405,23 @@ public class MarketAgentController extends BaseController
             null, JSON.toJSONString(body));
     }
 
+    @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:edit')")
+    @PutMapping("/context/{datasetId}/{itemId}/category")
+    public ResponseEntity<String> updateContextCategory(@PathVariable String datasetId,
+        @PathVariable String itemId, @RequestBody Map<String, Object> body)
+    {
+        if (!canAccessDataset(datasetId)) return datasetForbidden();
+        try
+        {
+            return json(gateway.putJson("/context/" + MarketAgentGateway.encodePath(datasetId) + "/"
+                + MarketAgentGateway.encodePath(itemId) + "/category", null, JSON.toJSONString(body)));
+        }
+        catch (Exception ex)
+        {
+            return unavailable(ex);
+        }
+    }
+
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:query')")
     @PostMapping("/chat")
     public ResponseEntity<String> chat(@RequestBody Map<String, Object> body)
@@ -326,8 +443,59 @@ public class MarketAgentController extends BaseController
     public ResponseEntity<String> export(@PathVariable String datasetId, @PathVariable String format,
         HttpServletRequest request)
     {
-        return postDataset(datasetId, "/export/" + MarketAgentGateway.encodePath(datasetId) + "/"
-            + MarketAgentGateway.encodePath(format), request.getQueryString(), "{}");
+        if (!canAccessDataset(datasetId)) return datasetForbidden();
+        String query = request.getQueryString();
+        try
+        {
+            AgentResponse exported = gateway.postJson("/export/" + MarketAgentGateway.encodePath(datasetId) + "/"
+                + MarketAgentGateway.encodePath(format), query, "{}");
+            if (exported.getStatusCode() < 200 || exported.getStatusCode() >= 300) return json(exported);
+
+            JSONObject body = JSON.parseObject(exported.getBody());
+            try
+            {
+                if (knowledgeIngestService == null) throw new IllegalStateException("知识库服务未启用");
+                String fileName = body.getString("file_name");
+                if (fileName == null || fileName.isBlank()
+                    || !Path.of(fileName).getFileName().toString().equals(fileName))
+                    throw new IOException("分析引擎返回的报告文件名无效");
+
+                // The export engine itself uses the deterministic report path.  Fetch the
+                // same rule-based report for searchable chunks, avoiding an extra LLM call.
+                AgentResponse report = gateway.get("/report/" + MarketAgentGateway.encodePath(datasetId),
+                    appendQuery(query, "use_llm=false"));
+                if (report.getStatusCode() < 200 || report.getStatusCode() >= 300)
+                    throw new IOException("读取导出报告结构失败，HTTP " + report.getStatusCode());
+                BinaryResponse binary = gateway.getBinary("/files/" + MarketAgentGateway.encodePath(fileName));
+                if (binary.getStatusCode() < 200 || binary.getStatusCode() >= 300)
+                    throw new IOException("读取导出报告文件失败，HTTP " + binary.getStatusCode());
+
+                String scope = (query == null ? "" : query) + "|app=" + body.getString("app_version")
+                    + "|export=" + body.getString("report_export_version");
+                KnowledgeIngestTask task = knowledgeIngestService.submitGeneratedMarketReport(datasetId, format,
+                    fileName, binary.getBody(), report.getBody(), scope, getUsername());
+                body.put("knowledge_ingest_status", "2".equals(task.getStatus()) ? "completed" : "submitted");
+                body.put("knowledge_task_id", task.getId()); body.put("knowledge_source_id", task.getSourceId());
+                body.put("knowledge_source_type", "REPORT");
+                body.put("knowledge_message", "报告已提交固定知识库，知识分类为生成报告");
+            }
+            catch (Exception ingestError)
+            {
+                // Export/download is the primary workflow.  A knowledge failure is returned
+                // as explicit metadata so the UI can warn and a later export can retry it.
+                log.error("整车市场报告导出成功，但自动入库失败，datasetId={}，format={}", datasetId, format, ingestError);
+                body.put("knowledge_ingest_status", "failed");
+                body.put("knowledge_source_type", "REPORT");
+                body.put("knowledge_message", "报告下载可用，但自动入库失败："
+                    + (ingestError.getMessage() == null ? "未知错误，请重新导出重试" : ingestError.getMessage()));
+            }
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body.toJSONString());
+        }
+        catch (Exception ex)
+        {
+            log.error("导出整车市场报告失败，datasetId={}，format={}", datasetId, format, ex);
+            return unavailable(ex);
+        }
     }
 
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:list')")
@@ -476,11 +644,23 @@ public class MarketAgentController extends BaseController
         return post(path, query, body);
     }
 
+    private String appendQuery(String query, String item)
+    {
+        return query == null || query.isBlank() ? item : query + "&" + item;
+    }
+
     private boolean canAccessDataset(String datasetId)
     {
         if (datasetId == null || datasetId.isBlank()) return false;
         VehicleAnalysis record = vehicleAnalysisService.selectVehicleAnalysisByDatasetId(datasetId);
         return record != null && (getLoginUser().getUser().isAdmin() || getUsername().equals(record.getCreateBy()));
+    }
+
+    private boolean canAccessExcelParseJob(String jobId)
+    {
+        if (jobId == null || jobId.isBlank()) return false;
+        String owner = excelParseJobOwners.get(jobId);
+        return owner != null && (getLoginUser().getUser().isAdmin() || getUsername().equals(owner));
     }
 
     private boolean canDownloadFile(String fileName)
@@ -500,6 +680,14 @@ public class MarketAgentController extends BaseController
         JSONObject result = new JSONObject();
         result.put("code", 403);
         result.put("msg", "数据集不存在或无权访问");
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(result.toJSONString());
+    }
+
+    private ResponseEntity<String> parseJobForbidden()
+    {
+        JSONObject result = new JSONObject();
+        result.put("code", 403);
+        result.put("msg", "解析任务不存在或无权访问，请重新上传文件");
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(result.toJSONString());
     }
 

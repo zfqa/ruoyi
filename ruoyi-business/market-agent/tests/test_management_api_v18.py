@@ -59,6 +59,47 @@ def test_context_item_delete_report_config_and_dataset_lifecycle():
         shutil.rmtree(base, ignore_errors=True)
 
 
+def test_manual_context_respects_selected_category_and_can_be_reclassified():
+    dataset_id = "pytest_manual_context_category"
+    base = processed_base(dataset_id)
+    shutil.rmtree(base, ignore_errors=True)
+    save_dataset(dataset_id, pd.DataFrame([
+        {"time_period": "2025-01", "market": "SUV", "sales": 120},
+        {"time_period": "2025-02", "market": "SUV", "sales": 150},
+    ]), {"file_name": "manual-context.xlsx", "source_files": ["manual-context.xlsx"]})
+    client = TestClient(app)
+    try:
+        created = client.post(f"/api/context/{dataset_id}/text", json={
+            "category": "macro_policy",
+            "text": "哈哈哈哈哈哈哈",
+            "source_name": "手工补充文本",
+        })
+        assert created.status_code == 200, created.text
+        assert created.json()["added"] == 1
+        item = client.get(f"/api/context/{dataset_id}").json()["items"][0]
+        assert item["category"] == "macro_policy"
+
+        report = client.get(f"/api/report/{dataset_id}", params={"use_llm": "false"})
+        assert report.status_code == 200, report.text
+        assert report.json()["macro_policy"][0]["content"] == "哈哈哈哈哈哈哈"
+
+        changed = client.put(f"/api/context/{dataset_id}/{item['id']}/category", json={"category": "other"})
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["counts"]["other"] == 1
+        assert changed.json()["items"][0]["category"] == "other"
+        other_report = client.get(f"/api/report/{dataset_id}", params={"use_llm": "false"})
+        assert other_report.status_code == 200, other_report.text
+        assert other_report.json()["other"][0]["content"] == "哈哈哈哈哈哈哈"
+
+        missing_category = client.post(f"/api/context/{dataset_id}/text", json={
+            "text": "未选择类别的资料",
+            "source_name": "手工补充文本",
+        })
+        assert missing_category.status_code == 422
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def test_async_upload_job_reaches_real_parse_result():
     client = TestClient(app)
     source = Path(__file__).parents[1] / "data" / "sample_market.csv"

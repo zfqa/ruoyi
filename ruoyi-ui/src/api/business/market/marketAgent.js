@@ -29,6 +29,26 @@ export function createMarketUploadJob(files) {
   return request({ url: `${base}/upload/jobs`, method: 'post', data, headers: { 'Content-Type': 'multipart/form-data', repeatSubmit: false }, timeout: 120000 })
 }
 
+// Excel 导入模块专用：仅解析并返回预览结果，不创建整车市场分析任务，
+// 也不会把解析结果交给整车市场分析页面。
+export function createExcelParseJob(files) {
+  const data = new FormData()
+  files.forEach(file => data.append('files', file.raw || file))
+  return request({ url: `${base}/parse/jobs`, method: 'post', data, headers: { 'Content-Type': 'multipart/form-data', repeatSubmit: false }, timeout: 120000 })
+}
+
+export function getExcelParseJob(jobId) {
+  return request({ url: `${base}/parse/jobs/${encodeURIComponent(jobId)}`, method: 'get' })
+}
+
+export function cancelExcelParseJob(jobId) {
+  return request({ url: `${base}/parse/jobs/${encodeURIComponent(jobId)}/cancel`, method: 'post', data: {} })
+}
+
+export function retryExcelParseJob(jobId) {
+  return request({ url: `${base}/parse/jobs/${encodeURIComponent(jobId)}/retry`, method: 'post', data: {} })
+}
+
 export function getMarketUploadJob(jobId) {
   return request({ url: `${base}/upload/jobs/${encodeURIComponent(jobId)}`, method: 'get' })
 }
@@ -65,6 +85,13 @@ export function getDashboardComponents(datasetId, params) {
 
 export function addContextText(datasetId, data) {
   return request({ url: `${base}/context/${encodeURIComponent(datasetId)}/text`, method: 'post', data })
+}
+
+export function updateContextCategory(datasetId, itemId, category) {
+  return request({
+    url: `${base}/context/${encodeURIComponent(datasetId)}/${encodeURIComponent(itemId)}/category`,
+    method: 'put', data: { category }
+  })
 }
 
 export function getContext(datasetId) {

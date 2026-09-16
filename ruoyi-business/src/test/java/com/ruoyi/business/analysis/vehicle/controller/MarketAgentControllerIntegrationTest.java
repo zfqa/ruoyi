@@ -110,6 +110,40 @@ class MarketAgentControllerIntegrationTest
         }
     }
 
+    @Test
+    void excelParseJobReturnsPreviewWithoutRegisteringAnalysisDataset() throws Exception
+    {
+        Path source = Path.of("market-agent", "data", "sample_timeseries_market.csv");
+        MockMultipartFile file = new MockMultipartFile("files", source.getFileName().toString(),
+            "text/csv", Files.readAllBytes(source));
+
+        ResponseEntity<String> created = controller.createExcelParseJob(new MockMultipartFile[] { file });
+        JSONObject job = JSON.parseObject(created.getBody());
+        assertNotNull(job.getString("job_id"), created.getBody());
+
+        JSONObject result = null;
+        for (int attempt = 0; attempt < 40; attempt++)
+        {
+            Thread.sleep(250L);
+            JSONObject polled = JSON.parseObject(controller.excelParseJob(job.getString("job_id")).getBody());
+            if ("failed".equals(polled.getString("status")))
+            {
+                throw new AssertionError(polled.toJSONString());
+            }
+            if ("success".equals(polled.getString("status")))
+            {
+                result = polled.getJSONObject("result");
+                break;
+            }
+        }
+
+        assertNotNull(result, "Excel 临时解析任务未在 10 秒内完成");
+        assertFalse(result.containsKey("dataset_id"), "Excel 导入预览不应暴露市场分析数据集ID");
+        assertFalse(result.getJSONArray("file_results").isEmpty(), result.toJSONString());
+        assertEquals(0, records.selectVehicleAnalysisList(new VehicleAnalysis()).size(),
+            "Excel 导入预览不应创建市场分析数据库记录");
+    }
+
     private static class InMemoryVehicleAnalysisService implements IVehicleAnalysisService
     {
         private final AtomicLong ids = new AtomicLong();

@@ -14,11 +14,12 @@ ruoyi-vue/
 ├── ruoyi-business/       # 业务模块（新增）
 │   └── src/main/java/com/ruoyi/business/
 │       ├── data/         # 数据接入与解析
-│       │   ├── excel/    # 原车载市场 Excel/CSV 解析与报告
+│       │   ├── excel/    # 通用 Excel/CSV 导入与车载原功能解析接口
 │       │   ├── pdf/      # 文本型 PDF 解析
 │       │   └── text/     # 自由文本结构化
 │       ├── analysis/     # 市场分析
-│       │   └── vehicle/  # 整车市场上传、解析、分析与 Java 安全网关
+│       │   ├── vehicle/  # 整车市场上传、解析、分析与 Java 安全网关
+│       │   └── display/  # 车载市场双页签入口及旧 CRUD 回退代码
 │       ├── news/         # 新闻中心
 │       │   └── collect/  # 白名单新闻抓取、详情与知识库入库
 │       ├── knowledge/    # 固定知识库
@@ -39,17 +40,18 @@ ruoyi-vue/
 └── doc/database-setup.md # 数据库初始化说明
 ```
 
-## 已实现的 7 大业务模块
+## 已实现的 8 大业务模块
 
 | 序号 | 菜单 | 模块 | 后端包 | 前端页面 |
 | --- | --- | --- | --- | --- |
-| 1 | PDF 解析 | business:data:pdf | com.ruoyi.business.data.pdf | views/business/data/pdf |
-| 2 | 文本结构化 | business:data:text | com.ruoyi.business.data.text | views/business/data/text |
-| 3 | 整车市场分析 | business:analysis:vehicle | com.ruoyi.business.analysis.vehicle | views/business/analysis/vehicle |
-| 4 | 车载市场分析 | business:data:excel | com.ruoyi.business.data.excel | views/business/data/excel |
-| 5 | 新闻采集 | business:news:collect | com.ruoyi.business.news.collect | views/business/news/collect |
-| 6 | 固定知识库 | business:knowledge | com.ruoyi.business.knowledge | views/business/knowledge |
-| 7 | AI 分析报告 | business:report | com.ruoyi.business.report | views/business/report |
+| 1 | Excel 导入 | business:data:excel | com.ruoyi.business.data.excel | views/business/data/excel |
+| 2 | PDF 解析 | business:data:pdf | com.ruoyi.business.data.pdf | views/business/data/pdf |
+| 3 | 文本结构化 | business:data:text | com.ruoyi.business.data.text | views/business/data/text |
+| 4 | 整车市场分析 | business:analysis:vehicle | com.ruoyi.business.analysis.vehicle | views/business/analysis/vehicle |
+| 5 | 车载市场分析 | business:data:excel | com.ruoyi.business.data.excel | views/business/analysis/display |
+| 6 | 新闻采集 | business:news:collect | com.ruoyi.business.news.collect | views/business/news/collect |
+| 7 | 固定知识库 | business:knowledge | com.ruoyi.business.knowledge | views/business/knowledge |
+| 8 | AI 分析报告 | business:report | com.ruoyi.business.report | views/business/report |
 
 整车市场分析使用 Market Agent 21.0：前端只访问受 Spring
 Security 保护的 `/business/market/**`，Java 将上传任务转发到本机 8001
@@ -57,8 +59,10 @@ Security 保护的 `/business/market/**`，Java 将上传任务转发到本机 8
 Excel/Word/PPT 导出。分析任务及数据集索引保存到 MySQL，原始文件和导出物保存到
 `MARKET_AGENT_STORAGE_DIR` 指定的持久目录。
 
-原车载市场分析继续提供 Omdia Excel/CSV 解析、确定性指标计算和竞争社洞察报告生成，
-入口与整车市场分析并列，两个模块不再互相替代。
+「数据接入与解析 → Excel导入」保留增强后的通用解析、字段识别、数据预览与质量检查。
+「市场分析 → 车载分析 → 车载市场分析」是独立双页签入口：整车市场数据页签复用增强
+导入组件，车载显示数据页签提供 Omdia 三文件上传、确定性指标计算、历史任务、首份报告
+查看以及 Word/PPT 下载。两个菜单职责独立，不再互相替代。
 
 ## 快速启动
 
@@ -120,11 +124,13 @@ npm run dev
 
 登录后分别从「市场分析 → 整车分析 → 整车市场分析」和
 「市场分析 → 车载分析 → 车载市场分析」进入两个分析页面。
+通用数据解析仍从「数据接入与解析 → Excel导入」进入。
 
 ## 验证结果
 
 - 后端 `mvn -pl ruoyi-business -am test` 测试通过
 - 前端 `npm run build:prod` 构建通过
+- Excel Agent `python -m pytest -q` 测试通过
 - Market Agent `python -m pytest -q` 测试通过
 
 ## 后续开发建议
@@ -132,4 +138,4 @@ npm run dev
 1. 车载市场文件解析及分析均通过受限后台任务执行，前端按任务状态轮询。
 2. 根据实际业务扩展实体字段和数据库表结构。
 3. 在 Controller 中增加文件上传、异步任务、回调等接口。
-4. 前端页面替换为具体的业务交互（上传组件、解析结果展示、图表等）。
+4. 旧车载 CRUD 页面保存在 `legacy-crud.vue`，仅用于必要时回退，不配置菜单入口。

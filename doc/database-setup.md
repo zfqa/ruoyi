@@ -23,6 +23,16 @@ mysql -u root -p ry-vue < sql/business_table.sql
 mysql -u root -p ry-vue < sql/business_menu.sql
 ```
 
+已有数据库不要重新执行固定 ID 的菜单初始化脚本。升级为“Excel 导入”和“车载市场分析”
+双入口时，执行可重复运行的增量迁移：
+
+```bash
+mysql -u root -p ry-vue < sql/patch_vehicle_analysis_menu.sql
+```
+
+该迁移将 `2101` 恢复到“数据接入与解析 → Excel导入”，并在“市场分析 → 车载分析”
+下新增独立的“车载市场分析”双页签入口；旧简易 CRUD 表和代码不会被删除。
+
 如果是在已有数据库上升级知识问答功能（无需重建业务表），默认会在后端启动时幂等创建问答审计表。数据库账号没有 `CREATE TABLE` 权限时，请由数据库管理员执行一次增量脚本，并把 `business.knowledge.qa-schema-auto-init` 设为 `false`：
 
 ```bash

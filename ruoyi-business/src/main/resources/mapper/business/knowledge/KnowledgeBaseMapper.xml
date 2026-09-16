@@ -99,6 +99,8 @@
     </update>
     <delete id="deleteKnowledgeBaseById">delete from business_knowledge where id=#{id}</delete>
     <delete id="deleteKnowledgeBaseByIds">delete from business_knowledge where id in <foreach collection="array" item="id" open="(" separator="," close=")">#{id}</foreach></delete>
+    <delete id="deleteIngestTasksBySourceId">delete from business_kb_ingest_task where source_id=#{sourceId}</delete>
+    <delete id="deleteVersionsBySourceId">delete from business_kb_version where source_id=#{sourceId}</delete>
 
     <select id="selectVersionById" resultMap="VersionResult">select * from business_kb_version where id=#{id}</select>
     <select id="selectVersionByHash" resultMap="VersionResult">select * from business_kb_version where source_id=#{sourceId} and content_sha256=#{contentSha256} limit 1</select>
@@ -187,6 +189,15 @@
         join business_knowledge s on s.id=c.source_id and s.enabled='1' and s.current_version_id=c.version_id
         join business_kb_version v on v.id=c.version_id and v.status='2'
         where c.version_id=#{versionId} and c.metric_id=#{metricId} and c.title_path=#{titlePath}
+        order by c.chunk_no asc
+    </select>
+
+    <select id="selectChunksByVersionId" resultMap="ChunkResult">
+        select c.*,s.source_name,s.source_type,v.version_no,v.original_name
+        from business_kb_chunk c
+        join business_knowledge s on s.id=c.source_id
+        join business_kb_version v on v.id=c.version_id
+        where c.version_id=#{versionId}
         order by c.chunk_no asc
     </select>
 

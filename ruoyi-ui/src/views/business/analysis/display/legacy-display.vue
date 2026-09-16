@@ -4,88 +4,57 @@
       <div slot="header" class="clearfix">
         <span>上传解析</span>
       </div>
-      <el-row :gutter="12">
-        <el-col :span="6">
-          <div class="upload-label">当前文件（4Q25 with 3Q25 Results）</div>
-          <file-upload
-            v-model="uploadForm.fileName"
-            action="/business/data/excel/upload"
-            :limit="1"
-            :fileSize="10"
-            :fileType="['xlsx', 'xlsm', 'csv']"
-            :drag="false"
-          />
-        </el-col>
-        <el-col :span="6">
-          <div class="upload-label">Y22基准文件（1Q25 with 4Q24 Results）</div>
-          <file-upload
-            v-model="uploadForm.baselineFileName"
-            action="/business/data/excel/upload"
-            :limit="1"
-            :fileSize="10"
-            :fileType="['xlsx', 'xlsm']"
-            :drag="false"
-          />
-        </el-col>
-        <el-col :span="6">
-          <div class="upload-label">客户/区域文件（Supply Chain 4Q25）</div>
-          <file-upload
-            v-model="uploadForm.supplyChainFileName"
-            action="/business/data/excel/upload"
-            :limit="1"
-            :fileSize="10"
-            :fileType="['xlsx', 'xlsm']"
-            :drag="false"
-          />
-        </el-col>
-        <el-col :span="6" class="upload-actions">
-          <el-button type="primary" icon="el-icon-magic-stick" :loading="parsing" :disabled="!uploadForm.fileName" @click="handleParseUploaded">解析已上传文件</el-button>
-          <div class="upload-tip">请先解压ZIP后再选择Excel；未上传Y22基准文件时，第二部分的Y22显示为缺失。</div>
-        </el-col>
-      </el-row>
+      <div class="free-upload">
+        <el-upload
+          ref="freeUpload"
+          action="#"
+          :auto-upload="false"
+          :multiple="true"
+          :limit="3"
+          :show-file-list="false"
+          :disabled="uploadingFiles || parsing"
+          :file-list="freeFileList"
+          accept=".xlsx,.xlsm,.csv"
+          :on-change="onFreeFileChange"
+          :on-remove="onFreeFileRemove"
+          :on-exceed="onFreeFileExceed"
+        >
+          <el-button size="small" type="primary" icon="el-icon-folder-opened" :loading="uploadingFiles">选取文件</el-button>
+          <div slot="tip" class="el-upload__tip">可一次选择 1～3 个 Excel/CSV（单个 ≤10MB）。系统按文件名自动识别角色，识别不准时可手动调整。</div>
+        </el-upload>
+        <el-table v-if="selectedFiles.length" :data="selectedFiles" border size="mini" class="role-table">
+          <el-table-column label="文件名" min-width="260" show-overflow-tooltip>
+            <template slot-scope="scope">{{ scope.row.originalName }}</template>
+          </el-table-column>
+          <el-table-column label="解析角色" width="220">
+            <template slot-scope="scope">
+              <el-select v-model="scope.row.role" size="mini" placeholder="请指定角色" style="width:100%" @change="onRoleChange(scope.row)">
+                <el-option label="当前文件（主数据）" value="current" />
+                <el-option label="Y22 基准文件" value="baseline" />
+                <el-option label="客户/区域（Supply Chain）" value="supply" />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="100" align="center">
+            <template slot-scope="scope">
+              <el-tag v-if="scope.row.storedName" type="success" size="mini">已上传</el-tag>
+              <el-tag v-else-if="scope.row.uploading" type="warning" size="mini">上传中</el-tag>
+              <el-tag v-else type="info" size="mini">待上传</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="90" align="center">
+            <template slot-scope="scope">
+              <el-button type="text" size="mini" :disabled="uploadingFiles || parsing" @click="removeSelectedFile(scope.$index)">移除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="upload-actions">
+          <el-button type="primary" icon="el-icon-magic-stick" :loading="parsing" :disabled="!canParseUploaded" @click="handleParseUploaded">解析已选文件</el-button>
+          <el-button icon="el-icon-delete" :disabled="!selectedFiles.length || uploadingFiles || parsing" @click="clearSelectedFiles">清空</el-button>
+          <span class="upload-tip">{{ roleHint }}</span>
+        </div>
+      </div>
     </el-card>
-
-    <el-form :inline="true" size="small" class="parse-form">
-      <el-form-item label="Excel/CSV文件">
-        <el-input
-          v-model="parseForm.filePath"
-          clearable
-          style="width: 720px"
-          placeholder="请输入导入目录内的 .xlsx/.xlsm/.csv 文件路径"
-        />
-      </el-form-item>
-      <el-form-item label="Y22基准文件">
-        <el-input
-          v-model="parseForm.baselineFilePath"
-          clearable
-          style="width: 720px"
-          placeholder="可选：1Q25 with 4Q24 Results文件路径"
-        />
-      </el-form-item>
-      <el-form-item label="Supply Chain">
-        <el-input
-          v-model="parseForm.supplyChainFilePath"
-          clearable
-          style="width: 720px"
-          placeholder="可选：Supply Chain 4Q25 with 3Q25 Results文件路径"
-        />
-      </el-form-item>
-      <el-form-item>
-        <el-button type="primary" icon="el-icon-cpu" :loading="parsing" @click="handleParse">解析</el-button>
-      </el-form-item>
-      <el-form-item label="单元格层">
-        <el-checkbox v-model="parseOptions.includeRawCells">输出</el-checkbox>
-      </el-form-item>
-      <el-form-item label="结构识别">
-        <el-checkbox v-model="parseOptions.useLlm">LLM增强</el-checkbox>
-      </el-form-item>
-      <el-form-item v-if="parseOptions.includeRawCells" label="范围">
-        <el-select v-model="parseOptions.rawCellMode" style="width: 120px">
-          <el-option label="非空" value="non-empty" />
-          <el-option label="全部" value="all" />
-        </el-select>
-      </el-form-item>
-    </el-form>
 
     <div v-if="parsing" class="parse-progress mb8">
       <el-progress :percentage="taskProgress" :status="taskProgress >= 100 ? 'success' : undefined" />
@@ -231,8 +200,21 @@
 </template>
 
 <script>
-import { listExcelImport, getExcelImport, getExcelImportResult, getExcelImportStatus, addExcelImport, updateExcelImport, delExcelImport, exportExcelImport, parseLocalExcel, parseUploadExcel } from "@/api/business/data/excel/excelImport";
+import { listExcelImport, getExcelImport, getExcelImportResult, getExcelImportStatus, addExcelImport, updateExcelImport, delExcelImport, exportExcelImport, parseUploadExcel, uploadExcelImport } from "@/api/business/data/excel/excelImport";
 import { exportAiReportOffice } from "@/api/business/report/aiReport";
+
+const ROLE_OPTIONS = [
+  { value: 'current', label: '当前文件（主数据）' },
+  { value: 'baseline', label: 'Y22 基准文件' },
+  { value: 'supply', label: '客户/区域（Supply Chain）' }
+]
+
+/** 解析默认参数：与原先表单默认值一致，页面不再暴露高级开关。 */
+const DEFAULT_PARSE_OPTIONS = {
+  includeRawCells: false,
+  rawCellMode: 'non-empty',
+  useLlm: true
+}
 
 export default {
   name: "LegacyDisplay",
@@ -248,26 +230,14 @@ export default {
       title: "",
       open: false,
       parsing: false,
+      uploadingFiles: false,
       taskProgress: 0,
       taskRemark: "",
       pollTimer: null,
       parseResult: null,
       exportingFormat: "",
-      uploadForm: {
-        fileName: "",
-        baselineFileName: "",
-        supplyChainFileName: ""
-      },
-      parseOptions: {
-        includeRawCells: false,
-        rawCellMode: "non-empty",
-        useLlm: true
-      },
-      parseForm: {
-        filePath: "",
-        baselineFilePath: "",
-        supplyChainFilePath: ""
-      },
+      freeFileList: [],
+      selectedFiles: [],
       queryParams: {
         pageNum: 1,
         pageSize: 10,
@@ -283,6 +253,30 @@ export default {
     };
   },
   computed: {
+    uploadForm() {
+      const byRole = role => {
+        const item = this.selectedFiles.find(file => file.role === role && file.storedName)
+        return item ? item.storedName : ""
+      }
+      return {
+        fileName: byRole('current'),
+        baselineFileName: byRole('baseline'),
+        supplyChainFileName: byRole('supply')
+      }
+    },
+    canParseUploaded() {
+      return !!this.uploadForm.fileName && !this.uploadingFiles && !this.selectedFiles.some(file => file.uploading)
+    },
+    roleHint() {
+      if (!this.selectedFiles.length) {
+        return "请先解压 ZIP 后再选择 Excel；未指定 Y22 基准时，报告中 Y22 会显示为缺失。"
+      }
+      const labels = this.selectedFiles.map(file => {
+        const role = ROLE_OPTIONS.find(item => item.value === file.role)
+        return `${file.originalName} → ${role ? role.label : '未指定'}`
+      })
+      return labels.join('；')
+    },
     parseSummary() {
       if (!this.parseResult) {
         return "";
@@ -329,44 +323,138 @@ export default {
       const map = { '0': '待处理', '1': '处理中', '2': '成功', '3': '失败' };
       return map[status] || status;
     },
-    handleParse() {
-      if (!this.parseForm.filePath) {
-        this.$modal.msgError("请输入Excel文件路径");
-        return;
-      }
-      this.parsing = true;
-      this.taskProgress = 0;
-      this.taskRemark = "正在提交解析任务";
-      parseLocalExcel(this.parseForm.filePath, {
-        ...this.parseOptions,
-        baselineFilePath: this.parseForm.baselineFilePath || undefined,
-        supplyChainFilePath: this.parseForm.supplyChainFilePath || undefined
-      }).then(response => {
-        this.$modal.msgSuccess("解析任务已提交");
-        this.getList();
-        return this.waitForTask(response.data.taskId);
-      }).then(payload => {
-        this.parseResult = payload;
-        this.$modal.msgSuccess("解析完成");
-        this.getList();
-      }).catch(error => {
-        if (error && error.message) {
-          this.$modal.msgError(error.message);
+    guessFileRole(fileName) {
+      const name = String(fileName || '').toLowerCase()
+      if (/supply\s*chain|供应链|customer|region|区域/.test(name)) return 'supply'
+      if (/1q25|4q24|baseline|基准|y22/.test(name)) return 'baseline'
+      if (/4q25|3q25|current|当前/.test(name)) return 'current'
+      return ''
+    },
+    assignRoles(files) {
+      const used = new Set()
+      const next = files.map(file => ({ ...file }))
+      next.forEach(file => {
+        const guessed = this.guessFileRole(file.originalName)
+        if (guessed && !used.has(guessed)) {
+          file.role = guessed
+          used.add(guessed)
+        } else {
+          file.role = ''
         }
+      })
+      const leftovers = ['current', 'baseline', 'supply'].filter(role => !used.has(role))
+      next.forEach(file => {
+        if (!file.role && leftovers.length) {
+          file.role = leftovers.shift()
+        }
+      })
+      return next
+    },
+    onFreeFileExceed() {
+      this.$modal.msgWarning('最多选择 3 个文件')
+    },
+    onFreeFileRemove(file, fileList) {
+      this.freeFileList = fileList
+      this.syncSelectedFromUploadList(fileList)
+    },
+    onFreeFileChange(file, fileList) {
+      this.freeFileList = fileList
+      this.syncSelectedFromUploadList(fileList)
+    },
+    syncSelectedFromUploadList(fileList) {
+      const allowed = ['xlsx', 'xlsm', 'csv']
+      const next = []
+      for (const item of fileList.slice(-3)) {
+        const raw = item.raw
+        const originalName = (raw && raw.name) || item.name || ''
+        const ext = originalName.split('.').pop().toLowerCase()
+        if (!allowed.includes(ext)) {
+          this.$modal.msgError(`不支持的文件格式：${originalName}`)
+          continue
+        }
+        if (raw && raw.size / 1024 / 1024 >= 10) {
+          this.$modal.msgError(`文件不能超过 10MB：${originalName}`)
+          continue
+        }
+        const existing = this.selectedFiles.find(file => file.uid === item.uid)
+        next.push(existing && existing.originalName === originalName ? existing : {
+          uid: item.uid,
+          originalName,
+          raw,
+          role: '',
+          storedName: '',
+          uploading: false
+        })
+      }
+      this.selectedFiles = this.assignRoles(next)
+      this.uploadPendingFiles()
+    },
+    uploadPendingFiles() {
+      const pending = this.selectedFiles.filter(file => file.raw && !file.storedName && !file.uploading)
+      if (!pending.length) return
+      this.uploadingFiles = true
+      const tasks = pending.map(file => {
+        file.uploading = true
+        const formData = new FormData()
+        formData.append('file', file.raw)
+        return uploadExcelImport(formData).then(res => {
+          file.storedName = res.fileName || res.url || ''
+          file.uploading = false
+          if (!file.storedName) {
+            return Promise.reject(new Error(`${file.originalName} 上传失败：未返回文件名`))
+          }
+        }).catch(error => {
+          file.uploading = false
+          throw error
+        })
+      })
+      Promise.all(tasks).catch(error => {
+        const message = (error && error.message) || '文件上传失败'
+        this.$modal.msgError(message)
       }).finally(() => {
-        this.parsing = false;
-      });
+        this.uploadingFiles = this.selectedFiles.some(file => file.uploading)
+      })
+    },
+    onRoleChange(changed) {
+      this.selectedFiles.forEach(file => {
+        if (file !== changed && file.role === changed.role) {
+          file.role = ''
+        }
+      })
+    },
+    removeSelectedFile(index) {
+      const removed = this.selectedFiles.splice(index, 1)[0]
+      this.freeFileList = this.freeFileList.filter(item => item.uid !== (removed && removed.uid))
+      if (this.$refs.freeUpload) {
+        this.$refs.freeUpload.uploadFiles = this.freeFileList
+      }
+    },
+    clearSelectedFiles() {
+      this.selectedFiles = []
+      this.freeFileList = []
+      if (this.$refs.freeUpload) {
+        this.$refs.freeUpload.clearFiles()
+      }
     },
     handleParseUploaded() {
       if (!this.uploadForm.fileName) {
-        this.$modal.msgError("请先上传Excel文件");
+        this.$modal.msgError("请至少指定一个「当前文件（主数据）」并完成上传");
+        return;
+      }
+      const missingRole = this.selectedFiles.find(file => !file.role)
+      if (missingRole) {
+        this.$modal.msgError(`请为「${missingRole.originalName}」指定解析角色`);
+        return;
+      }
+      if (this.selectedFiles.some(file => !file.storedName)) {
+        this.$modal.msgError("仍有文件未上传完成，请稍候再解析");
         return;
       }
       this.parsing = true;
       this.taskProgress = 0;
       this.taskRemark = "正在提交解析任务";
       parseUploadExcel(this.uploadForm.fileName, {
-        ...this.parseOptions,
+        ...DEFAULT_PARSE_OPTIONS,
         baselineFileName: this.uploadForm.baselineFileName || undefined,
         supplyChainFileName: this.uploadForm.supplyChainFileName || undefined
       }).then(response => {
@@ -525,9 +613,6 @@ export default {
 </script>
 
 <style scoped>
-.parse-form {
-  margin-bottom: 12px;
-}
 .parse-progress {
   padding: 12px 16px;
   background: #f5f7fa;
@@ -540,9 +625,17 @@ export default {
 }
 .upload-actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  margin-top: 12px;
+}
+.free-upload .el-upload__tip {
+  margin-top: 6px;
+  color: #909399;
+}
+.role-table {
+  margin-top: 12px;
 }
 .upload-label {
   margin-bottom: 8px;
@@ -552,6 +645,7 @@ export default {
 .upload-tip {
   color: #909399;
   font-size: 12px;
+  line-height: 1.5;
 }
 .report-actions {
   display: flex;

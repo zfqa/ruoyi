@@ -12,6 +12,7 @@ from pptx import Presentation
 from pypdf import PdfReader
 
 from app.models.schemas import ContextItem
+from app.services.context_category import normalize_context_category
 
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "macro_policy": [
@@ -110,7 +111,7 @@ def items_from_text(text: str, source_name: str, locator: str = "", category: st
         loc = locator or (f"片段{idx}" if idx > 1 else "")
         items.append(ContextItem(
             # 手工录入以用户明确选择的分类为准；文件解析未传分类时仍使用自动识别。
-            category=category or classify_text(chunk),
+            category=normalize_context_category(category or classify_text(chunk)),
             title=_title_from_text(chunk, source_name),
             content=chunk,
             source_name=source_name,

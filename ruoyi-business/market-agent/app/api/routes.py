@@ -507,7 +507,7 @@ def dashboard_components(
 def add_context_text(dataset_id: str, req: ContextTextRequest):
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="文本不能为空")
-    items = items_from_text(req.text, req.source_name, category=req.category)
+    items = items_from_text(req.text, req.source_name, locator=req.locator or "", category=req.category)
     before = len(load_context(dataset_id))
     current = append_context(dataset_id, items)
     added = len(current) - before
@@ -710,7 +710,9 @@ def export(
         path = export_report(df, fmt, get_settings().report_dir, export_id, context_items=context, meta=meta, report_config=config, analysis_period=analysis_period, report_plan=plan)
         expected_context = len([
             item for item in context
-            if item.get("category") in {"macro_policy", "personnel", "strategy", "industry_chain", "competition"}
+            if item.get("category") in {
+                "macro_policy", "personnel", "strategy", "industry_chain", "competition", "other"
+            }
         ]) if config.get("include_weekly_content") else 0
         return ExportResponse(
             dataset_id=dataset_id,

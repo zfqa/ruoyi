@@ -26,7 +26,7 @@
           <el-table-column label="启用" width="70"><template slot-scope="s">{{ s.row.enabled === '1' ? '是' : '否' }}</template></el-table-column>
           <el-table-column label="操作" width="245" fixed="right">
             <template slot-scope="s">
-              <el-button size="mini" type="text" icon="el-icon-upload2" @click="openIngest(s.row)">入库</el-button>
+              <el-button v-if="!s.row.currentVersionId" size="mini" type="text" icon="el-icon-upload2" @click="openIngest(s.row)">入库</el-button>
               <el-button size="mini" type="text" icon="el-icon-time" @click="showVersions(s.row)">版本</el-button>
               <el-button size="mini" type="text" icon="el-icon-edit" @click="handleUpdate(s.row)">编辑</el-button>
               <el-button size="mini" type="text" class="danger" @click="handleDelete(s.row)">删除</el-button>
@@ -65,7 +65,7 @@
             <el-select v-model="qaForm.sourceType" clearable placeholder="留空：综合报告、新闻、政策和PDF"><el-option v-for="t in sourceTypes" :key="t.value" :label="t.label" :value="t.value" /></el-select>
             <el-checkbox v-model="qaForm.includeNews" :disabled="!!qaForm.sourceType" style="margin-left:16px">结合新闻/政策解释</el-checkbox>
             <el-button type="primary" icon="el-icon-chat-dot-round" :loading="asking" style="margin-left:12px" @click="doAsk">提问</el-button>
-            <el-button icon="el-icon-setting" @click="openLlmConfig" v-hasPermi="['business:knowledge:edit']">LLM 配置</el-button>
+            <el-button icon="el-icon-setting" v-hasPermi="['business:ai:config:query']" @click="goAiConfig">AI 配置</el-button>
           </el-form-item>
         </el-form>
         <el-collapse class="qa-history">
@@ -272,20 +272,6 @@
         <a v-if="evidenceDetail.sourceUrl" class="external-source-link" :href="evidenceDetail.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源网站原文</a>
       </div>
     </el-dialog>
-
-    <el-dialog title="知识问答 LLM 配置" :visible.sync="llmConfigOpen" width="620px">
-      <el-alert title="此配置同时用于整车市场分析、报告生成、文本实体抽取和知识问答。保存后持久化到 MySQL，服务重启仍然生效；API Key 加密保存且永不回显。" type="success" :closable="false" class="mb16" />
-      <el-form label-width="110px" size="small">
-        <el-form-item label="请求地址"><el-input v-model="llmConfigForm.apiUrl" placeholder="https://ark.cn-beijing.volces.com/api/v3/chat/completions" /></el-form-item>
-        <el-form-item label="模型名称"><el-input v-model="llmConfigForm.model" placeholder="glm-5-2-260617" /></el-form-item>
-        <el-form-item label="API Key">
-          <el-input v-model="llmConfigForm.apiKey" type="password" show-password autocomplete="new-password" :placeholder="llmConfigForm.apiKeyConfigured ? '已配置；留空表示保持不变' : '请输入API Key'" />
-        </el-form-item>
-        <el-form-item label="当前状态"><el-tag :type="llmConfigForm.apiKeyConfigured ? 'success' : 'warning'">{{ llmConfigForm.apiKeyConfigured ? 'API Key 已配置' : 'API Key 未配置' }}</el-tag></el-form-item>
-        <el-form-item><el-checkbox v-model="llmConfigForm.clearApiKey">清除当前 API Key</el-checkbox></el-form-item>
-      </el-form>
-      <div slot="footer"><el-button @click="llmConfigOpen=false">取消</el-button><el-button :loading="llmTesting" @click="testLlm">测试连接</el-button><el-button type="primary" :loading="llmSaving" @click="saveLlmConfig">保存</el-button></div>
-    </el-dialog>
   </div>
 </template>
 
@@ -293,8 +279,7 @@
 import { listKnowledgeBase, getKnowledgeBase, addKnowledgeBase, updateKnowledgeBase, delKnowledgeBase,
   ingestPdf, ingestNews, ingestPolicy, ingestNewsJson, ingestReport, getKnowledgeTask, listKnowledgeVersions, searchKnowledge,
   submitKnowledgeQaTask, getKnowledgeQaTask, listKnowledgeQaTasks,
-  getKnowledgeEvidence, getKnowledgeEvidenceFile, getKnowledgeLlmConfig, updateKnowledgeLlmConfig,
-  testKnowledgeLlmConfig } from '@/api/business/knowledge/knowledgeBase'
+  getKnowledgeEvidence, getKnowledgeEvidenceFile } from '@/api/business/knowledge/knowledgeBase'
 import * as echarts from 'echarts'
 import { blobValidate } from '@/utils/ruoyi'
 
@@ -317,10 +302,7 @@ export default {
       qaHistory: [], qaHistoryLoading: false,
       qaGraphFilter: { period: '', dataType: '' }, qaGraphData: { nodes: [], links: [], categories: [] },
       qaGraphCenterId: null, selectedQaRelation: null, qaGraphInstance: null,
-      evidenceOpen: false, evidenceDetail: null,
-      llmConfigOpen: false,
-      llmConfigForm: { apiUrl: '', model: '', apiKey: '', apiKeyConfigured: false, clearApiKey: false },
-      llmSaving: false, llmTesting: false
+      evidenceOpen: false, evidenceDetail: null
     }
   },
   created() { this.getList() },
@@ -378,7 +360,10 @@ export default {
     handleAdd() { this.resetFormData(); this.editOpen = true },
     handleUpdate(row) { getKnowledgeBase(row.id).then(r => { this.form = r.data; this.editOpen = true }) },
     submitForm() { this.$refs.form.validate(valid => { if (!valid) return; const action = this.form.id ? updateKnowledgeBase : addKnowledgeBase; action(this.form).then(() => { this.$modal.msgSuccess('保存成功'); this.editOpen = false; this.getList() }) }) },
-    handleDelete(row) { this.$modal.confirm(`确认删除“${row.sourceName}”吗？`).then(() => delKnowledgeBase(row.id)).then(() => { this.$modal.msgSuccess('删除成功'); this.getList() }).catch(() => {}) },
+    handleDelete(row) {
+      if (row.currentVersionId && row.enabled !== '0') return this.$modal.msgError('请先编辑并将“是否启用”改为否，再删除')
+      this.$modal.confirm(`确认删除“${row.sourceName}”吗？删除后不可恢复。`).then(() => delKnowledgeBase(row.id)).then(() => { this.$modal.msgSuccess('删除成功'); this.getList() }).catch(() => {})
+    },
     openIngest(row) { this.stopPolling(); this.ingestSource = row; this.ingestForm = { versionNo: '', url: '', title: '', content: '', issuedBy: '', publishedAt: '', policyLevel: '', reportId: undefined }; this.pdfFile = null; this.newsJsonFile = null; this.currentTask = null; this.ingestOpen = true },
     closeIngest() { this.ingestOpen = false; if (!this.currentTask || !['0','1'].includes(this.currentTask.status)) this.stopPolling() },
     onPdfChange(file) { this.pdfFile = file.raw }, onPdfRemove() { this.pdfFile = null },
@@ -424,13 +409,7 @@ export default {
       tick()
     },
     stopQaPolling() { if (this.qaPoller) clearTimeout(this.qaPoller); this.qaPoller = null },
-    openLlmConfig() { getKnowledgeLlmConfig().then(r => { this.llmConfigForm = { ...r.data, apiKey: '', clearApiKey: false }; this.llmConfigOpen = true }) },
-    saveLlmConfig() {
-      if (!this.llmConfigForm.apiUrl || !this.llmConfigForm.model) return this.$modal.msgError('请求地址和模型名称不能为空')
-      this.llmSaving = true
-      updateKnowledgeLlmConfig(this.llmConfigForm).then(r => { this.llmConfigForm = { ...r.data, apiKey: '', clearApiKey: false }; this.$modal.msgSuccess('LLM配置已保存，服务重启后仍然生效') }).finally(() => { this.llmSaving = false })
-    },
-    testLlm() { this.llmTesting = true; testKnowledgeLlmConfig().then(r => this.$modal.msgSuccess(`连接成功，耗时 ${r.data.durationMs} ms`)).finally(() => { this.llmTesting = false }) },
+    goAiConfig() { this.$router.push('/business/ai') },
     onTabClick(tab) { if (tab.name === 'qa') this.loadQaHistory() },
     loadQaHistory() { this.qaHistoryLoading = true; listKnowledgeQaTasks({ limit: 30 }).then(r => { this.qaHistory = r.data || [] }).finally(() => { this.qaHistoryLoading = false }) },
     restoreQaTask(row) {

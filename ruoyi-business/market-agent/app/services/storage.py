@@ -56,6 +56,8 @@ def _write_meta(dataset_id: str, meta: dict[str, Any]) -> None:
 
 
 def load_context(dataset_id: str) -> list[dict[str, Any]]:
+    from app.services.context_category import normalize_context_category
+
     path = processed_base(dataset_id) / "context.json"
     if not path.exists():
         return []
@@ -71,6 +73,10 @@ def load_context(dataset_id: str) -> list[dict[str, Any]]:
             if not item.get("created_at"):
                 item["created_at"] = datetime.now(timezone.utc).isoformat()
                 changed = True
+            normalized = normalize_context_category(item.get("category"))
+            if item.get("category") != normalized:
+                item["category"] = normalized
+                changed = True
             content_hash = hashlib.sha256(str(item.get("content") or "").encode("utf-8")).hexdigest()
             if item.get("content_sha256") != content_hash:
                 item["content_sha256"] = content_hash
@@ -83,12 +89,15 @@ def load_context(dataset_id: str) -> list[dict[str, Any]]:
 
 
 def append_context(dataset_id: str, items: list[ContextItem | dict[str, Any]]) -> list[dict[str, Any]]:
+    from app.services.context_category import normalize_context_category
+
     base = processed_base(dataset_id)
     if not (base / "data.csv").exists():
         raise FileNotFoundError(f"dataset_id 不存在：{dataset_id}")
     current = load_context(dataset_id)
     for item in items:
         record = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+        record["category"] = normalize_context_category(record.get("category"))
         record.setdefault("id", uuid.uuid4().hex)
         record.setdefault("created_at", datetime.now(timezone.utc).isoformat())
         record["content_sha256"] = hashlib.sha256(str(record.get("content") or "").encode("utf-8")).hexdigest()
@@ -120,6 +129,8 @@ def delete_context_items(dataset_id: str, item_ids: list[str]) -> list[dict[str,
 
 def update_context_category(dataset_id: str, item_id: str, category: str) -> list[dict[str, Any]]:
     """Update one saved item without changing its source text or evidence metadata."""
+    from app.services.context_category import normalize_context_category
+
     base = processed_base(dataset_id)
     if not (base / "data.csv").exists():
         raise FileNotFoundError(f"dataset_id 不存在：{dataset_id}")
@@ -127,7 +138,7 @@ def update_context_category(dataset_id: str, item_id: str, category: str) -> lis
     matched = False
     for item in current:
         if str(item.get("id")) == str(item_id):
-            item["category"] = category
+            item["category"] = normalize_context_category(category)
             matched = True
             break
     if not matched:

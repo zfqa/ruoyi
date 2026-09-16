@@ -41,7 +41,7 @@ def generate_competitive_insight_report(
         return _finalize_narrative_traceability(_populate_rule_narratives(report))
     if client is None or not client.available:
         report["quality"].setdefault("warnings", []).append(
-            "ARK_API_KEY未配置，已使用确定性指标生成分析文案"
+            "LLM API Key未配置，已使用确定性指标生成分析文案"
         )
         return _finalize_narrative_traceability(_populate_rule_narratives(report))
 

@@ -1,5 +1,6 @@
 package com.ruoyi.business.knowledge.service.impl;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Locale;
@@ -7,8 +8,10 @@ import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.ruoyi.business.knowledge.domain.KnowledgeBase;
+import com.ruoyi.business.knowledge.domain.KnowledgeVersion;
 import com.ruoyi.business.knowledge.mapper.KnowledgeBaseMapper;
 import com.ruoyi.business.knowledge.service.IKnowledgeBaseService;
+import com.ruoyi.business.knowledge.service.KnowledgeFileStorage;
 
 /**
  * 固定文件知识库及来源展示 服务实现
@@ -20,6 +23,8 @@ public class KnowledgeBaseServiceImpl implements IKnowledgeBaseService
 {
     @Autowired
     private KnowledgeBaseMapper knowledgeBaseMapper;
+    @Autowired(required = false)
+    private KnowledgeFileStorage knowledgeFileStorage;
 
     @Override
     public List<KnowledgeBase> selectKnowledgeBaseList(KnowledgeBase knowledgeBase)
@@ -66,13 +71,44 @@ public class KnowledgeBaseServiceImpl implements IKnowledgeBaseService
     @Override
     public int deleteKnowledgeBaseById(Long id)
     {
-        return knowledgeBaseMapper.deleteKnowledgeBaseById(id);
+        return deleteOne(id);
     }
 
     @Override
     public int deleteKnowledgeBaseByIds(Long[] ids)
     {
-        return knowledgeBaseMapper.deleteKnowledgeBaseByIds(ids);
+        if (ids == null || ids.length == 0) return 0;
+        int count = 0;
+        for (Long id : ids) count += deleteOne(id);
+        return count;
+    }
+
+    private int deleteOne(Long id)
+    {
+        KnowledgeBase source = knowledgeBaseMapper.selectKnowledgeBaseById(id);
+        if (source == null) return 0;
+        if (source.getCurrentVersionId() != null && !"0".equals(source.getEnabled()))
+            throw new IllegalArgumentException("资料已入库，请先在编辑中将“是否启用”改为否，再删除");
+        List<KnowledgeVersion> versions = knowledgeBaseMapper.selectVersionsBySourceId(id);
+        if (versions != null)
+        {
+            for (KnowledgeVersion version : versions)
+            {
+                knowledgeBaseMapper.deleteGraphRelationsByVersionId(version.getId());
+                knowledgeBaseMapper.deleteChunksByVersionId(version.getId());
+                deleteStoredFile(version.getStoredPath());
+            }
+        }
+        knowledgeBaseMapper.deleteIngestTasksBySourceId(id);
+        knowledgeBaseMapper.deleteVersionsBySourceId(id);
+        return knowledgeBaseMapper.deleteKnowledgeBaseById(id);
+    }
+
+    private void deleteStoredFile(String storedPath)
+    {
+        if (knowledgeFileStorage == null || storedPath == null || storedPath.isBlank()) return;
+        try { knowledgeFileStorage.delete(Path.of(storedPath)); }
+        catch (RuntimeException ignored) { }
     }
 
     private void normalizeAndValidate(KnowledgeBase value, KnowledgeBase existing)

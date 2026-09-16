@@ -125,13 +125,8 @@ public class KnowledgeBaseController extends BaseController
     @DeleteMapping("/{ids}")
     public AjaxResult remove(@PathVariable Long[] ids)
     {
-        for (Long id : ids)
-        {
-            KnowledgeBase source = knowledgeBaseService.selectKnowledgeBaseById(id);
-            if (source != null && source.getCurrentVersionId() != null)
-                return AjaxResult.error("资料已有入库版本，为保留来源链不允许删除；如不再使用，请将资料设为停用");
-        }
-        return toAjax(knowledgeBaseService.deleteKnowledgeBaseByIds(ids));
+        try { return toAjax(knowledgeBaseService.deleteKnowledgeBaseByIds(ids)); }
+        catch (IllegalArgumentException exception) { return error(exception.getMessage()); }
     }
 
     @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
@@ -391,6 +386,31 @@ public class KnowledgeBaseController extends BaseController
         response.setHeader("Content-Disposition", "inline; filename*=UTF-8''" + encoded);
         response.setContentLengthLong(Files.size(sourceFile.path()));
         Files.copy(sourceFile.path(), response.getOutputStream());
+    }
+
+    /** 按版本权限流式返回知识库持久化原件（含整车分析自动入库的 Office 报告）。 */
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/versions/{versionId}/file")
+    public void versionFile(@PathVariable Long versionId, HttpServletResponse response) throws java.io.IOException
+    {
+        KnowledgeGraphService.SourceFile sourceFile = knowledgeGraphService.versionSourceFile(versionId, roleIds(),
+            getLoginUser().getUser().isAdmin());
+        String encoded = URLEncoder.encode(sourceFile.originalName(), StandardCharsets.UTF_8).replace("+", "%20");
+        response.setContentType(contentTypeForName(sourceFile.originalName()));
+        response.setHeader("Cache-Control", "no-store");
+        response.setHeader("Content-Disposition", "inline; filename*=UTF-8''" + encoded);
+        response.setContentLengthLong(Files.size(sourceFile.path()));
+        Files.copy(sourceFile.path(), response.getOutputStream());
+    }
+
+    private String contentTypeForName(String originalName)
+    {
+        String lower = originalName == null ? "" : originalName.toLowerCase(java.util.Locale.ROOT);
+        if (lower.endsWith(".pdf")) return "application/pdf";
+        if (lower.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (lower.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        return "application/octet-stream";
     }
 
     private List<Long> roleIds()

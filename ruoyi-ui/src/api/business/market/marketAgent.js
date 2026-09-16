@@ -87,6 +87,21 @@ export function addContextText(datasetId, data) {
   return request({ url: `${base}/context/${encodeURIComponent(datasetId)}/text`, method: 'post', data })
 }
 
+/** 从固定知识库选择资料写入行业资料（category 须与知识库 sourceType 一致） */
+export function addContextFromKnowledge(datasetId, data) {
+  return request({
+    url: `${base}/context/${encodeURIComponent(datasetId)}/from-knowledge`,
+    method: 'post',
+    data,
+    timeout: 180000
+  })
+}
+
+/** 行业资料页：列出可添加的固定知识库资料（已启用且已入库） */
+export function listContextKnowledgeSources(params) {
+  return request({ url: `${base}/context/knowledge-sources`, method: 'get', params })
+}
+
 export function updateContextCategory(datasetId, itemId, category) {
   return request({
     url: `${base}/context/${encodeURIComponent(datasetId)}/${encodeURIComponent(itemId)}/category`,
@@ -121,6 +136,11 @@ export function askMarketAgent(data) {
 
 export function getMarketReport(datasetId, params) {
   return request({ url: `${base}/report/${encodeURIComponent(datasetId)}`, method: 'get', params, timeout: 180000 })
+}
+
+/** 将当前周报写入 AI 分析报告并同步固定知识库（对齐车载分析） */
+export function publishMarketReport(datasetId, params) {
+  return request({ url: `${base}/report/${encodeURIComponent(datasetId)}/publish`, method: 'post', params, data: {}, timeout: 180000 })
 }
 
 export function exportMarketReport(datasetId, format, params) {

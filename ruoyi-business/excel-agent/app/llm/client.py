@@ -1,4 +1,4 @@
-"""Minimal OpenAI-compatible client for Volcengine Ark Chat Completions."""
+"""Minimal OpenAI-compatible Chat Completions client (DeepSeek / Ark / etc.)."""
 from __future__ import annotations
 
 import json
@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_API_URL = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
-DEFAULT_MODEL = "glm-5-2-260617"
+DEFAULT_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEFAULT_MODEL = "deepseek-chat"
 _LOCAL_ENV: dict[str, str] | None = None
 
 
@@ -33,7 +33,7 @@ class ArkChatClient:
         max_retries: int | None = None,
     ):
         self.api_key = api_key or _setting("ARK_API_KEY", "")
-        self.api_url = api_url or _setting("ARK_API_URL", DEFAULT_API_URL)
+        self.api_url = _normalize_completions_url(api_url or _setting("ARK_API_URL", DEFAULT_API_URL))
         self.model = model or _setting("ARK_MODEL", DEFAULT_MODEL)
         self.timeout_seconds = timeout_seconds or float(_setting("ARK_TIMEOUT_SECONDS", "30"))
         configured_retries = int(_setting("ARK_MAX_RETRIES", "0")) if max_retries is None else max_retries
@@ -45,20 +45,26 @@ class ArkChatClient:
 
     def complete_json(self, system_prompt: str, user_prompt: str, max_tokens: int = 3000) -> dict[str, Any]:
         if not self.available:
-            raise LlmUnavailableError("ARK_API_KEY未配置")
+            raise LlmUnavailableError("LLM API Key未配置")
         payload = {
             "model": self.model,
             "stream": False,
             "temperature": 0,
             "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
-            "thinking": {"type": "disabled"},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
         }
-        response = self._post(payload)
+        try:
+            response = self._post(payload)
+        except LlmError as exc:
+            # 部分兼容网关不支持 response_format，降级为纯提示词约束。
+            if "response_format" not in payload or "400" not in str(exc):
+                raise
+            payload.pop("response_format", None)
+            response = self._post(payload)
         try:
             content = response["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -77,7 +83,6 @@ class ArkChatClient:
                 "temperature": 0,
                 "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
-                "thinking": {"type": "disabled"},
                 "messages": [
                     {
                         "role": "system",
@@ -120,14 +125,27 @@ class ArkChatClient:
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 detail = exc.read(1000).decode("utf-8", errors="replace")
-                last_error = LlmError(f"Ark API HTTP {exc.code}: {detail}")
+                last_error = LlmError(f"LLM API HTTP {exc.code}: {detail}")
                 if exc.code not in {408, 429, 500, 502, 503, 504}:
                     break
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                last_error = LlmError(f"Ark API请求失败: {exc}")
+                last_error = LlmError(f"LLM API请求失败: {exc}")
             if attempt < self.max_retries:
                 time.sleep(min(2 ** attempt, 4))
-        raise last_error or LlmError("Ark API请求失败")
+        raise last_error or LlmError("LLM API请求失败")
+
+
+def _normalize_completions_url(url: str) -> str:
+    value = (url or "").strip().rstrip("/")
+    if not value:
+        return DEFAULT_API_URL
+    if value.endswith("/chat/completions"):
+        return value
+    if value.rsplit("/", 1)[-1].startswith("v") or value.endswith("/v1") or "/api/v" in value:
+        return value + "/chat/completions"
+    if "://" in value and value.count("/") <= 2:
+        return value + "/v1/chat/completions"
+    return value + "/chat/completions"
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:

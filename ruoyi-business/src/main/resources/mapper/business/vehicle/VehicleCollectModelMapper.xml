@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.business.vehicle.mapper.VehicleCollectModelMapper">
+ <insert id="upsert">insert into business_vehicle_collect_model(collect_task_id,model_id,operation,create_time) values(#{taskId},#{modelId},#{operation},sysdate()) on duplicate key update operation=values(operation)</insert>
+ <select id="selectTaskModels" resultType="java.util.HashMap">
+  select v.id modelId,v.series_name seriesName,v.model_name modelName,v.manufacturer,v.official_guide_price officialGuidePrice,
+         v.level,v.energy_type energyType,v.instrument_screen_size_inch instrumentScreenSizeInch,
+         v.center_screen_size_inch centerScreenSizeInch,v.center_screen_material centerScreenMaterial,
+         v.passenger_screen_size_inch passengerScreenSizeInch,v.rear_screen_size_inch rearScreenSizeInch,
+         v.last_crawled_time crawledAt,r.operation,
+         case when k.id is null then false else true end knowledgeStored
+  from business_vehicle_collect_model r
+  join business_vehicle_model v on v.id=r.model_id
+  left join business_knowledge k on k.source_type='REPORT' and k.source_code=concat('VEHICLE-MODEL-', v.id)
+  where r.collect_task_id=#{taskId} order by r.id
+ </select>
+ <select id="selectTaskModelIds" resultType="java.lang.Long">
+  select model_id from business_vehicle_collect_model where collect_task_id=#{taskId} order by id
+ </select>
+ <select id="countTaskModel" resultType="int">
+  select count(1) from business_vehicle_collect_model where collect_task_id=#{taskId} and model_id=#{modelId}
+ </select>
+ <select id="countKnowledgeStored" resultType="int">
+  select count(1) from business_knowledge where source_type='REPORT' and source_code=concat('VEHICLE-MODEL-', #{modelId})
+ </select>
+ <delete id="deleteSelected">delete from business_vehicle_collect_model where collect_task_id=#{taskId} and model_id in <foreach collection="modelIds" item="id" open="(" separator="," close=")">#{id}</foreach></delete>
+</mapper>

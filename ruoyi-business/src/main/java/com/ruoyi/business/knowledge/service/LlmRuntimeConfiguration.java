@@ -21,8 +21,8 @@ import com.ruoyi.system.domain.SysConfig;
 import com.ruoyi.system.service.ISysConfigService;
 
 /**
- * 整车市场分析、报告生成、文本结构化和知识问答共用的LLM配置。
- * 前端保存后持久化到sys_config，API Key加密保存且读取接口永不返回密钥内容。
+ * 整车市场分析、报告生成、文本结构化、知识问答与文档侧车共用的LLM配置。
+ * 统一由「业务模块 > AI配置」页面维护；前端保存后持久化到sys_config，API Key加密保存且读取接口永不返回密钥内容。
  */
 @Service
 public class LlmRuntimeConfiguration
@@ -42,8 +42,8 @@ public class LlmRuntimeConfiguration
 
     @Autowired
     public LlmRuntimeConfiguration(
-        @Value("${business.llm.api-url:https://ark.cn-beijing.volces.com/api/v3/chat/completions}") String apiUrl,
-        @Value("${business.llm.model:glm-5-2-260617}") String model,
+        @Value("${business.llm.api-url:https://api.deepseek.com/v1/chat/completions}") String apiUrl,
+        @Value("${business.llm.model:deepseek-chat}") String model,
         @Value("${business.llm.api-key:}") String apiKey,
         @Value("${business.llm.persistence-secret:${token.secret:}}") String persistenceSecret,
         ISysConfigService configService)
@@ -78,7 +78,12 @@ public class LlmRuntimeConfiguration
         else if (!savedKey.isBlank()) apiKey = decryptApiKey(savedKey);
     }
 
+    /** Chat Completions 完整地址，供 Java HTTP / excel-agent / market-agent 直接调用。 */
     public String getApiUrl() { return apiUrl; }
+
+    /** OpenAI SDK / LangChain base_url（不含 /chat/completions）。 */
+    public String getOpenAiBaseUrl() { return LlmEndpointNormalizer.openAiBaseUrl(apiUrl); }
+
     public String getModel() { return model; }
     public String getApiKey() { return apiKey; }
 
@@ -86,10 +91,12 @@ public class LlmRuntimeConfiguration
     {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("apiUrl", apiUrl);
+        value.put("openAiBaseUrl", getOpenAiBaseUrl());
         value.put("model", model);
         value.put("apiKeyConfigured", apiKey != null && !apiKey.isBlank());
         value.put("appliesTo", "VEHICLE_MARKET_REPORT_TEXT_EXTRACTION_AND_KNOWLEDGE_QA");
         value.put("apiKeyStorage", "MYSQL_ENCRYPTED");
+        value.put("protocol", "OpenAI Chat Completions 兼容");
         value.put("restartBehavior", "服务重启后优先加载MySQL持久化配置；未保存时才回退环境变量");
         return value;
     }
@@ -190,8 +197,9 @@ public class LlmRuntimeConfiguration
 
     private String validateApiUrl(String value)
     {
+        String normalized = LlmEndpointNormalizer.completionsUrl(value);
         URI uri;
-        try { uri = URI.create(value); }
+        try { uri = URI.create(normalized); }
         catch (Exception e) { throw new IllegalArgumentException("请求地址格式不正确"); }
         String scheme = uri.getScheme();
         String host = uri.getHost();

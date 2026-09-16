@@ -37,6 +37,12 @@ public class AiReportServiceImpl implements IAiReportService
     }
 
     @Override
+    public AiReport selectLatestAiReportByTaskName(String taskName)
+    {
+        return aiReportMapper.selectLatestAiReportByTaskName(taskName);
+    }
+
+    @Override
     public int insertAiReport(AiReport aiReport)
     {
         return aiReportMapper.insertAiReport(aiReport);

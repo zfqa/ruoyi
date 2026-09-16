@@ -27,7 +27,10 @@ class ChatEngine:
         self.llm = LLMClient()
 
     def _context_by_category(self, category: str) -> list[dict]:
-        return [x for x in self.context_items if x.get("category") == category]
+        from app.services.context_category import normalize_context_category
+
+        target = normalize_context_category(category)
+        return [x for x in self.context_items if normalize_context_category(x.get("category")) == target]
 
     def answer(
         self,

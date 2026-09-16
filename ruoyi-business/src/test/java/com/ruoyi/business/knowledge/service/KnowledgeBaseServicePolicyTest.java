@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.ruoyi.business.knowledge.domain.KnowledgeBase;
+import com.ruoyi.business.knowledge.domain.KnowledgeVersion;
 import com.ruoyi.business.knowledge.mapper.KnowledgeBaseMapper;
 import com.ruoyi.business.knowledge.service.impl.KnowledgeBaseServiceImpl;
 import java.lang.reflect.Field;
@@ -73,6 +75,38 @@ class KnowledgeBaseServicePolicyTest
 
         assertEquals(List.of(allowed), service.selectAuthorizedKnowledgeBaseList(filter, List.of(2L), false));
         assertEquals(allowed, service.selectAuthorizedKnowledgeBaseById(7L, List.of(2L), false));
+    }
+
+    @Test
+    void rejectsDeletingIngestedSourceWhileEnabled()
+    {
+        KnowledgeBase existing = source();
+        existing.setId(9L); existing.setCurrentVersionId(88L); existing.setEnabled("1");
+        when(mapper.selectKnowledgeBaseById(9L)).thenReturn(existing);
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+            () -> service.deleteKnowledgeBaseByIds(new Long[] { 9L }));
+        assertEquals("资料已入库，请先在编辑中将“是否启用”改为否，再删除", error.getMessage());
+        verify(mapper, never()).deleteKnowledgeBaseById(9L);
+    }
+
+    @Test
+    void deletesDisabledIngestedSourceAndRelatedRows()
+    {
+        KnowledgeBase existing = source();
+        existing.setId(9L); existing.setCurrentVersionId(88L); existing.setEnabled("0");
+        KnowledgeVersion version = new KnowledgeVersion();
+        version.setId(88L);
+        when(mapper.selectKnowledgeBaseById(9L)).thenReturn(existing);
+        when(mapper.selectVersionsBySourceId(9L)).thenReturn(List.of(version));
+        when(mapper.deleteKnowledgeBaseById(9L)).thenReturn(1);
+
+        assertEquals(1, service.deleteKnowledgeBaseByIds(new Long[] { 9L }));
+        verify(mapper).deleteGraphRelationsByVersionId(88L);
+        verify(mapper).deleteChunksByVersionId(88L);
+        verify(mapper).deleteIngestTasksBySourceId(9L);
+        verify(mapper).deleteVersionsBySourceId(9L);
+        verify(mapper).deleteKnowledgeBaseById(9L);
     }
 
     private KnowledgeBase source()

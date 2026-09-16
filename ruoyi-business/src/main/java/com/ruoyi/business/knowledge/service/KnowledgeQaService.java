@@ -112,7 +112,7 @@ public class KnowledgeQaService
             answer = buildExtractiveFallback(actualQuestion, chunks);
             validation = citationValidator.validate(answer, chunks);
             answerMode = "EXTRACTIVE_FALLBACK";
-            warnings.add("未配置ARK_API_KEY，已返回经过引用校验的原文摘录");
+            warnings.add("未配置大模型 API Key，已返回经过引用校验的原文摘录");
             logs.add(log("GENERATE", "LLM生成", llmConfiguration.getModel(), "未配置密钥，使用原文降级", 0, "FALLBACK"));
             notifyProgress(progressListener, 80, "已生成原文降级回答", logs);
         }
@@ -497,12 +497,12 @@ public class KnowledgeQaService
             .POST(HttpRequest.BodyPublishers.ofString(payload.toJSONString(), StandardCharsets.UTF_8)).build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() < 200 || response.statusCode() >= 300)
-            throw new IllegalStateException("Ark API HTTP " + response.statusCode() + "：" + abbreviate(response.body(), 300));
+            throw new IllegalStateException("LLM API HTTP " + response.statusCode() + "：" + abbreviate(response.body(), 300));
         JSONObject root = JSONObject.parseObject(response.body());
         JSONArray choices = root.getJSONArray("choices");
-        if (choices == null || choices.isEmpty()) throw new IllegalStateException("Ark API未返回回答");
+        if (choices == null || choices.isEmpty()) throw new IllegalStateException("LLM API未返回回答");
         String content = choices.getJSONObject(0).getJSONObject("message").getString("content");
-        if (content == null || content.isBlank()) throw new IllegalStateException("Ark API返回空回答");
+        if (content == null || content.isBlank()) throw new IllegalStateException("LLM API返回空回答");
         return content.trim();
     }
 

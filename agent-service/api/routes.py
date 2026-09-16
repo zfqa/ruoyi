@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from io import BytesIO
 import logging
 from contextlib import asynccontextmanager
 import os
@@ -9,6 +10,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from news_service.config import load_sources
 from news_service.crawler.browser_manager import BrowserManager
 from news_service.models import NewsBatchDeleteRequest, NewsCrawlRequest, NewsDeleteBySourceRequest
@@ -16,11 +18,17 @@ from news_service.scheduler import get_news_scheduler
 from news_service.service import NewsService
 from data_service.service.ingestion_service import ingest_document
 from llm.client import LlmRuntimeConfig
+from api.schemas import VehicleExportFromDataRequest
+from dongchedi_service.vehicle.service import VehicleSelectionService, VehicleServiceError
+from dongchedi_service.vehicle.excel_export_service import VehicleExcelExportService
+from dongchedi_service.vehicle.result_repository import SavedVehicleResultRepository
+from api.vehicle_export import build_vehicle_export_response, require_export_records
 
 logger = logging.getLogger(__name__)
 
 OPENAPI_TAGS = [
     {"name": "系统", "description": "服务健康状态与运行基础信息。"},
+    {"name": "懂车帝车辆", "description": "懂车帝车辆品牌、车系、详情与已保存结果导出。"},
     {"name": "新闻资讯", "description": "新闻采集、查询、任务报告和新闻源管理。"},
     {"name": "文档解析", "description": "PDF、TXT、PPTX 文件上传及结构化解析。"},
 ]
@@ -51,11 +59,141 @@ app = FastAPI(
     lifespan=lifespan,
     openapi_tags=OPENAPI_TAGS,
 )
+vehicle_selection_service = VehicleSelectionService()
+saved_vehicle_result_repository = SavedVehicleResultRepository()
+vehicle_excel_export_service = VehicleExcelExportService()
 
 
 @app.get("/health", summary="健康检查", description="检查后端服务是否正常运行，供部署、运维和前端联调使用。", tags=["系统"])
 async def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _vehicle_error_response(exc: VehicleServiceError) -> HTTPException:
+    status_code = {
+        "unsupported_brand": 400,
+        "series_not_found": 404,
+        "auth_required": 401,
+        "page_load_failed": 502,
+        "parse_failed": 422,
+        "upstream_error": 502,
+    }.get(exc.code, 502)
+    detail = {"code": exc.code, "message": str(exc)}
+    if exc.diagnostic_id:
+        detail["diagnostic_id"] = exc.diagnostic_id
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+@app.get(
+    "/api/vehicles/brands",
+    summary="获取车辆品牌列表",
+    description="返回当前支持查询的懂车帝车辆品牌白名单，用于后续按品牌查询车系。该接口不访问懂车帝上游服务。",
+    tags=["懂车帝车辆"],
+)
+async def list_vehicle_brands(authorization: str | None = Header(default=None)) -> dict:
+    """Return the fixed business whitelist; this action never accesses Dongchedi."""
+    _require_internal_token(authorization)
+    return {"items": vehicle_selection_service.list_brands()}
+
+
+@app.get(
+    "/api/vehicles/series",
+    summary="获取车系列表",
+    description="根据品牌查询可选择的懂车帝车系列表，返回车系标识、名称和状态。该接口会访问懂车帝上游服务，访问失败时可能返回 502。",
+    tags=["懂车帝车辆"],
+)
+async def list_vehicle_series(
+    brand: str = Query(..., min_length=1, max_length=50),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Dynamically discover selectable series for one user-selected brand."""
+    _require_internal_token(authorization)
+    try:
+        result = await run_in_threadpool(vehicle_selection_service.list_series, brand)
+    except VehicleServiceError as exc:
+        raise _vehicle_error_response(exc) from exc
+    return {
+        "brand": result.brand,
+        "items": [
+            {
+                "series_id": item.series_id,
+                "series_name": item.series_name,
+                "series_status": item.series_status,
+            }
+            for item in result.series
+        ],
+    }
+
+
+@app.get(
+    "/api/vehicles/series/{series_id}/details",
+    summary="获取车系详细信息",
+    description="根据车系标识获取车型与详细配置数据。可结合品牌或车系名称进行校验；该接口会访问懂车帝上游服务。",
+    tags=["懂车帝车辆"],
+)
+async def get_vehicle_series_details(
+    series_id: str,
+    brand: str | None = Query(default=None, min_length=1, max_length=50),
+    series_name: str | None = Query(default=None, min_length=1, max_length=100),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Parse only the series explicitly selected by the user."""
+    _require_internal_token(authorization)
+    try:
+        return await run_in_threadpool(
+            vehicle_selection_service.get_series_details,
+            series_id,
+            brand=brand,
+            series_name=series_name,
+        )
+    except VehicleServiceError as exc:
+        raise _vehicle_error_response(exc) from exc
+
+
+@app.get(
+    "/api/vehicles/export",
+    summary="导出车辆数据",
+    description="将已保存的懂车帝车辆结果导出为 Excel 文件，可按品牌或车系标识筛选。不触发新的上游车辆采集。",
+    tags=["懂车帝车辆"],
+)
+async def export_saved_vehicles(
+    brand: str | None = Query(default=None, min_length=1, max_length=100),
+    series_id: str | None = Query(default=None, min_length=1, max_length=100),
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
+    """Download an xlsx built only from previously saved Dongchedi JSON results."""
+    _require_internal_token(authorization)
+    query_result = saved_vehicle_result_repository.list_saved_vehicles(
+        brand=brand,
+        series_id=series_id,
+    )
+    return build_vehicle_export_response(
+        require_export_records(query_result, brand=brand, series_id=series_id),
+        exporter=vehicle_excel_export_service,
+    )
+
+
+@app.post(
+    "/api/vehicles/export/from-data",
+    summary="按任务车型数据导出 Excel",
+    description="仅接收 RuoYi 已保存的车型字段并生成 Excel；不读取本地 staging、不访问上游、不调用模型。",
+    tags=["懂车帝车辆"],
+)
+async def export_vehicles_from_data(
+    request: VehicleExportFromDataRequest,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
+    """Export the exact task models supplied by the trusted Java bridge."""
+    _require_internal_token(authorization)
+    content = vehicle_excel_export_service.build_task_workbook_bytes(request.models)
+    filename = f"懂车帝_{request.brand}_{request.series_name}.xlsx"
+    from urllib.parse import quote
+
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @app.post(

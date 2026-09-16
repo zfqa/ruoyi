@@ -49,6 +49,13 @@
         limit 1
     </select>
 
+    <select id="selectLatestAiReportByTaskName" parameterType="String" resultMap="AiReportResult">
+        <include refid="selectAiReportDetailVo"/>
+        where task_name = #{taskName}
+        order by id desc
+        limit 1
+    </select>
+
     <select id="selectAiReportById" parameterType="Long" resultMap="AiReportResult">
         <include refid="selectAiReportDetailVo"/>
         where id = #{id}

@@ -16,6 +16,9 @@ public interface AiReportMapper
 
     public AiReport selectLatestAiReportByImportTaskId(Long importTaskId);
 
+    /** 按完整任务名取最新一条，供整车周报按 dataset 幂等更新。 */
+    public AiReport selectLatestAiReportByTaskName(String taskName);
+
     public int insertAiReport(AiReport aiReport);
 
     public int updateAiReport(AiReport aiReport);

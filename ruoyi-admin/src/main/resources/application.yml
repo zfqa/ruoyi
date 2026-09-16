@@ -162,12 +162,12 @@ business:
   news:
     # POC直接使用RuoYi原有MySQL数据源，启动时幂等补齐新闻采集扩展表
     schema-auto-init: true
-  llm:
+    llm:
     # 用于加密持久化前端保存的API Key；生产环境请通过LLM_CONFIG_SECRET设置独立且稳定的随机密钥
     persistence-secret: ${LLM_CONFIG_SECRET:${token.secret}}
-    api-url: ${ARK_API_URL:https://ark.cn-beijing.volces.com/api/v3/chat/completions}
-    model: ${ARK_MODEL:glm-5-2-260617}
-    api-key: ${ARK_API_KEY:}
+    api-url: ${LLM_API_URL:${ARK_API_URL:https://api.deepseek.com/v1/chat/completions}}
+    model: ${LLM_MODEL:${ARK_MODEL:deepseek-chat}}
+    api-key: ${LLM_API_KEY:${ARK_API_KEY:}}
   text:
     llm:
       # 推理型模型可能超过90秒，文本抽取独立设置较长超时
@@ -192,10 +192,7 @@ business:
     # 支持正文直传；未传正文时仅抓取域名白名单内的URL
     news-ingest-enabled: true
     llm:
-      api-url: ${ARK_API_URL:https://ark.cn-beijing.volces.com/api/v3/chat/completions}
-      model: ${ARK_MODEL:glm-5-2-260617}
-      api-key: ${ARK_API_KEY:}
-      # 知识问答需要同时综合报告与新闻，推理模型可能超过90秒
+      # 知识问答超时；接口/模型/Key 一律走 business.llm 统一配置
       timeout-seconds: ${KNOWLEDGE_LLM_TIMEOUT_SECONDS:300}
   excel:
     # 车载市场分析沿用受限后台任务，避免解析占用Tomcat请求线程

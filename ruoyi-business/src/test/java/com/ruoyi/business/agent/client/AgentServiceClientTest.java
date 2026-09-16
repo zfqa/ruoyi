@@ -45,6 +45,8 @@ class AgentServiceClientTest
         assertTrue(body.get().contains("name=\"index_to_kb\"\r\n\r\nfalse"));
         assertTrue(body.get().contains("name=\"persist_review\"\r\n\r\nfalse"));
         assertTrue(body.get().contains("name=\"llm_managed\"\r\n\r\ntrue"));
+        assertTrue(body.get().contains("name=\"llm_api_url\"\r\n\r\nhttps://ark.example.com/v3"));
+        assertFalse(body.get().contains("chat/completions"));
         assertTrue(body.get().contains("unified-model"));
         assertTrue(body.get().contains("secret-key"));
     }

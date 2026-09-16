@@ -57,7 +57,7 @@ def parse_workbook(
         max_llm_tables = int(os.getenv("ARK_MAX_TABLE_CALLS", "4"))
     max_llm_tables = max(0, max_llm_tables)
     if use_llm and client is not None and not client.available:
-        llm_errors.append("ARK_API_KEY未配置，已使用规则解析")
+        llm_errors.append("LLM API Key未配置，已使用规则解析")
 
     result = {
         "workbook_id": f"sha256:{workbook_id}",

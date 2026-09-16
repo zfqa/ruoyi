@@ -1,6 +1,8 @@
 package com.ruoyi.business.analysis.vehicle.controller;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,6 +17,7 @@ import com.ruoyi.business.analysis.vehicle.domain.VehicleAnalysis;
 import com.ruoyi.business.analysis.vehicle.service.IVehicleAnalysisService;
 import com.ruoyi.business.knowledge.domain.KnowledgeIngestTask;
 import com.ruoyi.business.knowledge.service.KnowledgeIngestService;
+import com.ruoyi.common.config.RuoYiConfig;
 import com.ruoyi.common.core.controller.BaseController;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
@@ -50,7 +53,7 @@ public class MarketAgentController extends BaseController
     private final KnowledgeIngestService knowledgeIngestService;
     /**
      * Excel 导入页的临时解析任务只用于返回解析预览，不能升级为整车分析数据集。
-     * 所有权只保存到任务结束，页面刷新也不会恢复该任务。
+     * 所有者同时写入内存与 profile/excel-parse-owners，便于服务重启后恢复访问控制。
      */
     private final ConcurrentMap<String, String> excelParseJobOwners = new ConcurrentHashMap<>();
 
@@ -98,7 +101,7 @@ public class MarketAgentController extends BaseController
             if (response.getStatusCode() >= 200 && response.getStatusCode() < 300)
             {
                 String jobId = JSON.parseObject(response.getBody()).getString("job_id");
-                if (jobId != null && !jobId.isBlank()) excelParseJobOwners.put(jobId, getUsername());
+                if (jobId != null && !jobId.isBlank()) rememberExcelParseOwner(jobId, getUsername());
             }
             return json(response);
         }
@@ -124,8 +127,21 @@ public class MarketAgentController extends BaseController
                 if ("success".equals(status))
                 {
                     JSONObject result = body.getJSONObject("result");
-                    if (result != null) result.remove("dataset_id");
-                    excelParseJobOwners.remove(jobId);
+                    if (result != null)
+                    {
+                        String datasetId = result.getString("dataset_id");
+                        if (datasetId != null && !datasetId.isBlank())
+                        {
+                            // Excel 导入只需要预览结果，不保留 Market Agent 数据集，避免孤儿落盘。
+                            try { gateway.delete("/dataset/" + MarketAgentGateway.encodePath(datasetId)); }
+                            catch (Exception cleanupEx)
+                            {
+                                log.warn("清理 Excel 临时解析数据集失败: {}", datasetId, cleanupEx);
+                            }
+                            result.remove("dataset_id");
+                        }
+                    }
+                    forgetExcelParseOwner(jobId);
                     return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body.toJSONString());
                 }
             }
@@ -153,7 +169,7 @@ public class MarketAgentController extends BaseController
             if (response.getStatusCode() >= 200 && response.getStatusCode() < 300)
             {
                 String newJobId = JSON.parseObject(response.getBody()).getString("job_id");
-                if (newJobId != null && !newJobId.isBlank()) excelParseJobOwners.put(newJobId, getUsername());
+                if (newJobId != null && !newJobId.isBlank()) rememberExcelParseOwner(newJobId, getUsername());
             }
             return json(response);
         }
@@ -358,11 +374,113 @@ public class MarketAgentController extends BaseController
         return getDataset(datasetId, "/context/" + MarketAgentGateway.encodePath(datasetId), null);
     }
 
+    /**
+     * 行业资料页：按知识分类列出已启用且已入库的固定知识库资料（供选择添加）。
+     */
+    @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:list')")
+    @GetMapping("/context/knowledge-sources")
+    public ResponseEntity<String> listKnowledgeSourcesForContext(
+        @RequestParam(value = "sourceType", required = false) String sourceType,
+        @RequestParam(value = "sourceName", required = false) String sourceName)
+    {
+        if (knowledgeIngestService == null) return gatewayError("知识库服务未启用", 503);
+        String type = sourceType == null ? "" : sourceType.trim().toUpperCase();
+        if (!type.isEmpty() && !java.util.Set.of("PDF", "NEWS", "POLICY", "REPORT").contains(type))
+            return gatewayError("资料类别须为 PDF / NEWS / POLICY / REPORT", 400);
+        try
+        {
+            boolean admin = getLoginUser().getUser().isAdmin();
+            java.util.List<Long> roleIds = getLoginUser().getUser().getRoles() == null ? java.util.List.of()
+                : getLoginUser().getUser().getRoles().stream().map(role -> role.getRoleId()).collect(java.util.stream.Collectors.toList());
+            java.util.List<Map<String, Object>> rows = knowledgeIngestService.listEnabledSourcesForContext(
+                type.isEmpty() ? null : type, sourceName, roleIds, admin);
+            JSONObject body = new JSONObject();
+            body.put("total", rows.size());
+            body.put("rows", rows);
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body.toJSONString());
+        }
+        catch (IllegalArgumentException ex)
+        {
+            return gatewayError(ex.getMessage(), 400);
+        }
+        catch (Exception ex)
+        {
+            return unavailable(ex);
+        }
+    }
+
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:edit')")
     @PostMapping("/context/{datasetId}/text")
     public ResponseEntity<String> addContextText(@PathVariable String datasetId, @RequestBody Map<String, Object> body)
     {
         return postDataset(datasetId, "/context/" + MarketAgentGateway.encodePath(datasetId) + "/text", null, JSON.toJSONString(body));
+    }
+
+    /**
+     * 从固定知识库选择已入库资料，写入行业资料 context。
+     * body: { category: macro_policy|personnel|strategy|industry_chain|competition|other, sourceIds: [1,2,...] }
+     * category 为周报章节分类；知识库条目类型不强制一致。
+     */
+    @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:edit')")
+    @PostMapping("/context/{datasetId}/from-knowledge")
+    public ResponseEntity<String> addContextFromKnowledge(@PathVariable String datasetId,
+        @RequestBody Map<String, Object> body)
+    {
+        if (!canAccessDataset(datasetId)) return datasetForbidden();
+        if (knowledgeIngestService == null) return gatewayError("知识库服务未启用", 503);
+        if (body == null) return gatewayError("请求体不能为空", 400);
+        String category = String.valueOf(body.getOrDefault("category", "")).trim().toLowerCase();
+        if (!java.util.Set.of("macro_policy", "personnel", "strategy", "industry_chain", "competition", "other").contains(category))
+            return gatewayError("资料类别须为宏观政策/人事/战略/产业链/竞争/其他", 400);
+        Object rawIds = body.get("sourceIds");
+        if (!(rawIds instanceof java.util.List<?> list) || list.isEmpty())
+            return gatewayError("请至少选择一条固定知识库资料", 400);
+        java.util.List<Long> sourceIds = new java.util.ArrayList<>();
+        for (Object item : list)
+        {
+            if (item == null) continue;
+            try { sourceIds.add(Long.valueOf(String.valueOf(item))); }
+            catch (NumberFormatException ex) { return gatewayError("sourceIds 必须为数字", 400); }
+        }
+        if (sourceIds.isEmpty()) return gatewayError("请至少选择一条固定知识库资料", 400);
+        try
+        {
+            boolean admin = getLoginUser().getUser().isAdmin();
+            java.util.List<Long> roleIds = getLoginUser().getUser().getRoles() == null ? java.util.List.of()
+                : getLoginUser().getUser().getRoles().stream().map(role -> role.getRoleId()).collect(java.util.stream.Collectors.toList());
+            int totalAdded = 0;
+            JSONObject last = null;
+            for (Long sourceId : sourceIds)
+            {
+                Map<String, Object> exported = knowledgeIngestService.exportSourceTextForContext(
+                    sourceId, null, roleIds, admin);
+                Map<String, Object> payload = new java.util.LinkedHashMap<>();
+                payload.put("text", exported.get("content"));
+                payload.put("category", category);
+                payload.put("source_name", exported.get("sourceName"));
+                payload.put("locator", exported.get("locator"));
+                AgentResponse response = gateway.postJson(
+                    "/context/" + MarketAgentGateway.encodePath(datasetId) + "/text",
+                    null, JSON.toJSONString(payload));
+                if (response.getStatusCode() >= 400)
+                    return gatewayError("写入行业资料失败：" + response.getBody(), response.getStatusCode());
+                last = JSON.parseObject(response.getBody());
+                if (last != null) totalAdded += last.getIntValue("added");
+            }
+            if (last == null) return gatewayError("未写入任何资料", 500);
+            last.put("added", totalAdded);
+            last.put("from_knowledge", true);
+            last.put("source_count", sourceIds.size());
+            return json(new AgentResponse(200, last.toJSONString()));
+        }
+        catch (IllegalArgumentException ex)
+        {
+            return gatewayError(ex.getMessage(), 400);
+        }
+        catch (Exception ex)
+        {
+            return unavailable(ex);
+        }
     }
 
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:edit')")
@@ -438,6 +556,45 @@ public class MarketAgentController extends BaseController
         return getDataset(datasetId, "/report/" + MarketAgentGateway.encodePath(datasetId), request.getQueryString());
     }
 
+    /**
+     * 将当前周报写入 AI 分析报告，并同步入固定知识库（与车载分析生成报告后的行为对齐）。
+     */
+    @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:list')")
+    @PostMapping("/report/{datasetId}/publish")
+    public ResponseEntity<String> publishReport(@PathVariable String datasetId, HttpServletRequest request)
+    {
+        if (!canAccessDataset(datasetId)) return datasetForbidden();
+        String query = request.getQueryString();
+        try
+        {
+            if (knowledgeIngestService == null) return gatewayError("知识库服务未启用", 503);
+            AgentResponse report = gateway.get("/report/" + MarketAgentGateway.encodePath(datasetId),
+                appendQuery(query, "use_llm=false"));
+            if (report.getStatusCode() < 200 || report.getStatusCode() >= 300)
+                return gatewayError("读取整车市场报告失败，HTTP " + report.getStatusCode(), report.getStatusCode());
+
+            String scope = query == null ? "publish" : query;
+            KnowledgeIngestService.VehicleMarketPublishResult published = knowledgeIngestService
+                .publishVehicleMarketReport(datasetId, report.getBody(), getUsername(), null, null, null, scope);
+            JSONObject body = JSON.parseObject(report.getBody());
+            if (body == null) body = new JSONObject();
+            body.put("report_id", published.report().getId());
+            body.put("knowledge_ingest_status", "2".equals(published.knowledgeTask().getStatus()) ? "completed" : "submitted");
+            body.put("knowledge_task_id", published.knowledgeTask().getId());
+            body.put("knowledge_source_id", published.knowledgeTask().getSourceId());
+            body.put("knowledge_source_type", "REPORT");
+            body.put("knowledge_message", published.created()
+                ? "周报已写入AI分析报告，并已提交固定知识库"
+                : "周报已更新到AI分析报告，并已同步固定知识库");
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body.toJSONString());
+        }
+        catch (Exception ex)
+        {
+            log.error("发布整车市场周报失败，datasetId={}", datasetId, ex);
+            return gatewayError(ex.getMessage() == null ? "发布整车市场周报失败" : ex.getMessage(), 500);
+        }
+    }
+
     @PreAuthorize("@ss.hasPermi('business:analysis:vehicle:export')")
     @PostMapping("/export/{datasetId}/{format}")
     public ResponseEntity<String> export(@PathVariable String datasetId, @PathVariable String format,
@@ -472,12 +629,15 @@ public class MarketAgentController extends BaseController
 
                 String scope = (query == null ? "" : query) + "|app=" + body.getString("app_version")
                     + "|export=" + body.getString("report_export_version");
-                KnowledgeIngestTask task = knowledgeIngestService.submitGeneratedMarketReport(datasetId, format,
-                    fileName, binary.getBody(), report.getBody(), scope, getUsername());
+                KnowledgeIngestService.VehicleMarketPublishResult published = knowledgeIngestService
+                    .publishVehicleMarketReport(datasetId, report.getBody(), getUsername(), fileName,
+                        binary.getBody(), format, scope);
+                KnowledgeIngestTask task = published.knowledgeTask();
+                body.put("report_id", published.report().getId());
                 body.put("knowledge_ingest_status", "2".equals(task.getStatus()) ? "completed" : "submitted");
                 body.put("knowledge_task_id", task.getId()); body.put("knowledge_source_id", task.getSourceId());
                 body.put("knowledge_source_type", "REPORT");
-                body.put("knowledge_message", "报告已提交固定知识库，知识分类为生成报告");
+                body.put("knowledge_message", "报告已写入AI分析报告，并已提交固定知识库（生成报告）");
             }
             catch (Exception ingestError)
             {
@@ -659,8 +819,60 @@ public class MarketAgentController extends BaseController
     private boolean canAccessExcelParseJob(String jobId)
     {
         if (jobId == null || jobId.isBlank()) return false;
+        if (getLoginUser().getUser().isAdmin()) return true;
+        String owner = resolveExcelParseOwner(jobId);
+        return owner != null && getUsername().equals(owner);
+    }
+
+    private void rememberExcelParseOwner(String jobId, String username)
+    {
+        if (jobId == null || jobId.isBlank() || username == null || username.isBlank()) return;
+        excelParseJobOwners.put(jobId, username);
+        try
+        {
+            Path file = excelParseOwnerFile(jobId);
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, username, StandardCharsets.UTF_8);
+        }
+        catch (Exception ex)
+        {
+            log.warn("持久化 Excel 解析任务所有者失败: {}", jobId, ex);
+        }
+    }
+
+    private void forgetExcelParseOwner(String jobId)
+    {
+        if (jobId == null || jobId.isBlank()) return;
+        excelParseJobOwners.remove(jobId);
+        try { Files.deleteIfExists(excelParseOwnerFile(jobId)); }
+        catch (Exception ex) { log.warn("清理 Excel 解析任务所有者失败: {}", jobId, ex); }
+    }
+
+    private String resolveExcelParseOwner(String jobId)
+    {
         String owner = excelParseJobOwners.get(jobId);
-        return owner != null && (getLoginUser().getUser().isAdmin() || getUsername().equals(owner));
+        if (owner != null && !owner.isBlank()) return owner;
+        try
+        {
+            Path file = excelParseOwnerFile(jobId);
+            if (!Files.isRegularFile(file)) return null;
+            String persisted = Files.readString(file, StandardCharsets.UTF_8).trim();
+            if (persisted.isEmpty()) return null;
+            excelParseJobOwners.put(jobId, persisted);
+            return persisted;
+        }
+        catch (Exception ex)
+        {
+            log.warn("读取 Excel 解析任务所有者失败: {}", jobId, ex);
+            return null;
+        }
+    }
+
+    private Path excelParseOwnerFile(String jobId)
+    {
+        String profile = RuoYiConfig.getProfile();
+        if (profile == null || profile.isBlank()) profile = "runtime-uploadPath";
+        return Path.of(profile, "excel-parse-owners", jobId + ".owner");
     }
 
     private boolean canDownloadFile(String fileName)

@@ -67,7 +67,7 @@
       </el-row>
 
       <el-card shadow="never">
-        <el-tabs v-model="activeTab">
+        <el-tabs v-model="activeTab" :before-leave="beforeTabLeave">
           <el-tab-pane label="市场概览" name="overview">
             <el-button size="mini" icon="el-icon-chat-dot-round" class="component-button" @click="selectComponent('market_summary', '市场核心指标表')">选中用于问答/报告</el-button>
             <dynamic-table :rows="analysis.overview_table || []" />
@@ -218,6 +218,7 @@
             </div>
           </el-tab-pane>
           <el-tab-pane label="行业资料" name="context">
+            <el-alert title="可手动输入、上传文件或从固定知识库补充资料。补充完成后须点击「已完成行业资料添加」才会生成周报并入库，之后才能进入「周报与导出」。" type="info" :closable="false" show-icon class="warning" />
             <div class="context-entry-meta">
               <span class="context-entry-label">资料类别</span>
               <el-select v-model="contextInputCategory" size="small" placeholder="请先选择资料类别" style="width:180px">
@@ -226,11 +227,19 @@
               <el-input v-model="contextSource" size="small" placeholder="资料来源名称（选填）" class="context-source" />
             </div>
             <el-input v-model="contextText" type="textarea" :rows="6" placeholder="粘贴宏观政策、人事、战略、产业链或竞争动态等事实资料" />
-            <el-button type="primary" size="small" :disabled="!contextInputCategory || !contextText.trim()" @click="saveContext">添加资料</el-button>
+            <div class="context-entry-actions">
+              <el-button type="primary" size="small" :disabled="!contextInputCategory || !contextText.trim() || !datasetId" @click="saveContext">添加资料</el-button>
+              <el-button type="success" size="small" plain :disabled="!contextInputCategory || !datasetId" :loading="kbPickerLoading" @click="openKnowledgePicker">从固定知识库添加</el-button>
+            </div>
             <el-upload action="#" multiple :auto-upload="false" :on-change="onContextChange" :on-remove="onContextRemove" :file-list="contextFiles" accept=".txt,.md,.docx,.pptx,.pdf,.xlsx,.xlsm,.csv" class="context-upload">
               <el-button size="small" icon="el-icon-folder-opened">选择资料文件</el-button>
             </el-upload>
-            <el-button size="small" :disabled="!contextFiles.length" :loading="contextUploading" @click="submitContextFiles">上传并解析资料</el-button>
+            <el-button size="small" :disabled="!contextFiles.length || !datasetId" :loading="contextUploading" @click="submitContextFiles">上传并解析资料</el-button>
+            <el-divider />
+            <div class="context-finalize">
+              <el-button type="success" icon="el-icon-check" :loading="contextFinalizeLoading" :disabled="!datasetId || !analysis" @click="completeContextMaterials">已完成行业资料添加</el-button>
+              <span class="context-finalize-tip">{{ contextCompleted ? '已确认并入库，可进入「周报与导出」' : '确认后才会生成周报并入库；未确认前无法进入「周报与导出」' }}</span>
+            </div>
             <el-divider />
             <div class="context-toolbar">
               <span>已入库 <strong>{{ contextResult.total || 0 }}</strong> 条</span>
@@ -248,8 +257,31 @@
               <el-table-column prop="source_name" label="来源" width="160" show-overflow-tooltip />
               <el-table-column prop="locator" label="位置" width="130" show-overflow-tooltip />
             </el-table>
+
+            <el-dialog title="从固定知识库选择资料" :visible.sync="kbPickerVisible" width="820px" append-to-body @open="loadKnowledgePicker">
+              <div class="context-entry-meta" style="margin-bottom:12px">
+                <span>将写入周报分类：<strong>{{ categoryLabel(contextInputCategory) }}</strong></span>
+                <el-select v-model="kbPickerSourceType" clearable size="mini" placeholder="知识库类型筛选" style="width:140px;margin-left:12px" @change="loadKnowledgePicker">
+                  <el-option label="新闻" value="NEWS" /><el-option label="生成报告" value="REPORT" /><el-option label="PDF文档" value="PDF" /><el-option label="政策" value="POLICY" />
+                </el-select>
+                <el-input v-model="kbPickerKeyword" size="mini" clearable placeholder="按资料名称筛选" style="width:200px;margin-left:8px" @keyup.enter.native="loadKnowledgePicker" />
+                <el-button size="mini" icon="el-icon-refresh" :loading="kbPickerLoading" @click="loadKnowledgePicker">刷新</el-button>
+              </div>
+              <el-table v-loading="kbPickerLoading" :data="kbPickerRows" border stripe size="mini" max-height="420" @selection-change="onKbPickerSelection">
+                <el-table-column type="selection" width="45" :selectable="row => !!row.currentVersionId" />
+                <el-table-column prop="sourceName" label="资料名称" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="sourceType" label="知识库类型" width="110" />
+                <el-table-column prop="sourceCode" label="编码" width="140" show-overflow-tooltip />
+                <el-table-column label="当前版本" width="100" align="center"><template slot-scope="s">{{ s.row.currentVersionId || '未入库' }}</template></el-table-column>
+              </el-table>
+              <el-empty v-if="!kbPickerLoading && !kbPickerRows.length" description="暂无已启用且已入库的固定知识库资料" />
+              <div slot="footer">
+                <el-button @click="kbPickerVisible = false">取消</el-button>
+                <el-button type="primary" :disabled="!kbPickerSelectedIds.length" :loading="kbPickerSubmitting" @click="confirmKnowledgePicker">添加选中（{{ kbPickerSelectedIds.length }}）</el-button>
+              </div>
+            </el-dialog>
           </el-tab-pane>
-          <el-tab-pane label="周报与导出" name="report">
+          <el-tab-pane label="周报与导出" name="report" :disabled="!contextCompleted">
             <div class="report-actions">
               <el-button type="primary" :loading="reportLoading" @click="generateReport">生成/刷新周报</el-button>
               <el-button icon="el-icon-setting" @click="openReportConfig">可视化编排</el-button>
@@ -451,7 +483,7 @@
 import { saveAs } from 'file-saver'
 import DynamicTable from './components/DynamicTable'
 import MarketChart from './components/MarketChart'
-import { marketHealth, llmStatus, testLlmConnection, createMarketUploadJob, getMarketUploadJob, cancelMarketUploadJob, retryMarketUploadJob, getSheets, getPeriodOptions, getMarketAnalysis, getDashboardComponents, addContextText, updateContextCategory, getContext, deleteContextItems, clearContext, uploadContextFiles, askMarketAgent, getMarketReport, exportMarketReport, downloadMarketReport, getReportPlan, updateReportPlan, saveVisualReportPlan, resetReportPlan, getReportConfig } from '@/api/business/market/marketAgent'
+import { marketHealth, llmStatus, testLlmConnection, createMarketUploadJob, getMarketUploadJob, cancelMarketUploadJob, retryMarketUploadJob, getSheets, getPeriodOptions, getMarketAnalysis, getDashboardComponents, addContextText, addContextFromKnowledge, listContextKnowledgeSources, updateContextCategory, getContext, deleteContextItems, clearContext, uploadContextFiles, askMarketAgent, getMarketReport, publishMarketReport, exportMarketReport, downloadMarketReport, getReportPlan, updateReportPlan, saveVisualReportPlan, resetReportPlan, getReportConfig } from '@/api/business/market/marketAgent'
 
 const metricLabels = { production: '产量', sales: '销量', retail_sales: '零售销量', wholesale: '批发销量', domestic_sales: '国内销量', domestic_wholesale: '国内批发销量', export: '出口', inventory: '库存量' }
 const trustMetricKeys = ['production', 'sales', 'retail_sales', 'wholesale', 'domestic_sales', 'domestic_wholesale', 'export', 'inventory']
@@ -491,6 +523,8 @@ export default {
       analysis: null, activeTab: 'overview', rankDimension: 'market', rankLimit: 20, chartIndex: 0, powerTrendMode: 'both', powerTrendModes,
       trustMetricFilter: 'all', trustOpenPanels: ['sources', 'dimensions', 'issues'],
       contextText: '', contextSource: '手工补充文本', contextInputCategory: '', contextFiles: [], contextUploading: false, contextResult: { total: 0, counts: {}, items: [] }, contextCategory: '', selectedContextIds: [], contextCategories,
+      contextCompleted: false, contextFinalizeLoading: false,
+      kbPickerVisible: false, kbPickerLoading: false, kbPickerSubmitting: false, kbPickerRows: [], kbPickerSelectedIds: [], kbPickerKeyword: '', kbPickerSourceType: '',
       question: '', useLlm: true, chatLoading: false, chatMessages: [],
       report: null, reportLoading: false, exporting: '', planInstruction: '', planLoading: false, reportPlan: { market_observations: [], revision: 0 },
       dashboardComponents: [], dashboardDimensions: {}, indicatorCapabilities: { metrics: [], dimensions: [], aggregations: [], comparisons: [], suggested_indicators: [], matrix_row_templates: [], matrix_column_templates: [], segment_capabilities: [], segment_mapping_items: [], schema_hash: '' }, powerGroupCapabilities: { groups: [], mapping_options: [], mappings: [] }, selectedComponentId: '', selectedComponentTitle: '',
@@ -527,7 +561,7 @@ export default {
       return `大模型：${this.llmState.model || '已配置'}（未验证）`
     },
     llmStatusTip() {
-      if (!this.llmState.enabled) return '未配置 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL；确定性解析、统计和规则问答仍可正常使用。'
+      if (!this.llmState.enabled) return '未在「业务模块 > AI配置」中配置模型凭证；确定性解析、统计和规则问答仍可正常使用。'
       const base = `接口：${this.llmState.base_url || '-'}；模型：${this.llmState.model || '-'}；网络：${this.llmState.proxy_configured ? '已配置授权代理' : '直连'}`
       return this.llmConnectionState === 'failed' ? `${base}；最近失败原因：${this.llmLastError || '请点击“测试模型连接”查看详情'}` : base
     },
@@ -806,6 +840,7 @@ export default {
       this.analysis = null
       this.trustMetricFilter = 'all'
       this.report = null
+      this.contextCompleted = false
       this.dashboardComponents = []
       this.dashboardDimensions = {}
       this.dashboardComponentScope = ''
@@ -816,6 +851,7 @@ export default {
       this.question = ''
       this.contextResult = { total: 0, counts: {}, items: [] }
       this.selectedContextIds = []
+      if (this.activeTab === 'report') this.activeTab = 'overview'
     },
     resetForNewFile() {
       this.datasetId = ''
@@ -950,6 +986,9 @@ export default {
         this.powerGroupCapabilities = data.power_group_capabilities || this.powerGroupCapabilities
         // 兼容尚未重启的旧版 Python 服务：旧响应没有目录时，打开窗口会回退请求专用接口。
         this.dashboardComponentScope = hasEmbeddedCatalog ? JSON.stringify({ datasetId: this.datasetId, ...this.queryParams }) : ''
+        // 分析完成后不自动生成/入库周报：须先在行业资料中确认「已完成行业资料添加」。
+        this.loadContextItems()
+        this.$modal.msgSuccess('分析完成，请补充行业资料后点击「已完成行业资料添加」再进入周报与导出')
       }).catch(error => {
         if (requestScope === JSON.stringify({ datasetId: this.datasetId, ...this.queryParams })) this.analysisPhase = 'failed'
         console.error('生成市场分析结果失败', error)
@@ -957,50 +996,139 @@ export default {
         if (requestScope === JSON.stringify({ datasetId: this.datasetId, ...this.queryParams })) this.loading = false
       })
     },
+    beforeTabLeave(activeName) {
+      if (activeName === 'report' && !this.contextCompleted) {
+        this.$modal.msgWarning('请先在「行业资料」中点击「已完成行业资料添加」')
+        return false
+      }
+      return true
+    },
+    markContextDirty() {
+      if (!this.contextCompleted) return
+      this.contextCompleted = false
+      if (this.activeTab === 'report') this.activeTab = 'context'
+    },
+    completeContextMaterials() {
+      if (!this.datasetId || !this.analysis) return this.$modal.msgWarning('请先完成数据分析')
+      this.contextFinalizeLoading = true
+      return this.loadContextItems().then(() => this.generateReport()).then(() => {
+        this.contextCompleted = true
+        this.activeTab = 'report'
+        this.$modal.msgSuccess('行业资料已确认，周报已生成并入库，可继续导出 Word / PPT')
+      }).catch(error => {
+        console.error('确认行业资料并入库失败', error)
+        this.$modal.msgError('周报生成或入库失败，请重试')
+      }).finally(() => {
+        this.contextFinalizeLoading = false
+      })
+    },
     saveContext() {
+      if (!this.datasetId) return this.$modal.msgWarning('请先完成数据分析')
       if (!this.contextInputCategory) return this.$modal.msgWarning('请先选择资料类别')
+      if (!this.contextText.trim()) return this.$modal.msgWarning('请先粘贴要添加的资料正文')
       const category = this.contextInputCategory
       const label = this.categoryLabel(category)
-      addContextText(this.datasetId, { text: this.contextText, category, source_name: this.contextSource || '手工补充文本' }).then(data => {
+      addContextText(this.datasetId, {
+        text: this.contextText,
+        category,
+        source_name: this.contextSource || '手工补充文本'
+      }).then(data => {
         this.contextText = ''
         this.contextCategory = category
         this.contextResult = data
+        this.markContextDirty()
         return this.loadContextItems().then(() => {
           if (!data.added) return this.$modal.msgWarning('该资料已经存在，未重复添加')
-          return this.generateReport().then(() => this.$modal.msgSuccess(`资料已添加至${label}，周报已同步更新`)).catch(() => this.$modal.msgWarning(`资料已添加至${label}，周报自动刷新失败，请点击“生成/刷新周报”重试`))
+          this.$modal.msgSuccess(`资料已添加至${label}，确认完成后请点击「已完成行业资料添加」`)
         })
+      })
+    },
+    openKnowledgePicker() {
+      if (!this.datasetId) return this.$modal.msgWarning('请先完成数据分析')
+      if (!this.contextInputCategory) return this.$modal.msgWarning('请先选择资料类别')
+      this.kbPickerSelectedIds = []
+      this.kbPickerVisible = true
+    },
+    loadKnowledgePicker() {
+      if (!this.contextInputCategory) return
+      this.kbPickerLoading = true
+      return listContextKnowledgeSources({
+        sourceType: this.kbPickerSourceType || undefined,
+        sourceName: this.kbPickerKeyword || undefined
+      }).then(res => {
+        this.kbPickerRows = (res && res.rows) || []
+      }).catch(() => {
+        this.kbPickerRows = []
+      }).finally(() => {
+        this.kbPickerLoading = false
+      })
+    },
+    onKbPickerSelection(selection) {
+      this.kbPickerSelectedIds = (selection || []).map(item => item.id).filter(Boolean)
+    },
+    confirmKnowledgePicker() {
+      if (!this.kbPickerSelectedIds.length) return this.$modal.msgWarning('请勾选至少一条已入库资料')
+      this.kbPickerSubmitting = true
+      const category = this.contextInputCategory
+      const label = this.categoryLabel(category)
+      addContextFromKnowledge(this.datasetId, {
+        category,
+        sourceIds: this.kbPickerSelectedIds
+      }).then(data => {
+        this.kbPickerVisible = false
+        this.contextCategory = category
+        this.contextResult = data
+        this.markContextDirty()
+        return this.loadContextItems().then(() => {
+          if (!data.added) return this.$modal.msgWarning('所选资料已经存在，未重复添加')
+          this.$modal.msgSuccess(`已从知识库添加至${label}，确认完成后请点击「已完成行业资料添加」`)
+        })
+      }).finally(() => {
+        this.kbPickerSubmitting = false
       })
     },
     changeContextCategory(row, category) {
       const previous = row.category
       updateContextCategory(this.datasetId, row.id, category).then(data => {
         this.contextResult = data
-        return this.loadContextItems().then(() => this.generateReport())
-      }).then(() => this.$modal.msgSuccess(`分类已调整为${this.categoryLabel(category)}，周报已同步更新`)).catch(() => {
+        this.markContextDirty()
+        return this.loadContextItems()
+      }).then(() => this.$modal.msgSuccess(`分类已调整为${this.categoryLabel(category)}`)).catch(() => {
         row.category = previous
       })
     },
     onContextChange(file, files) { this.contextFiles = files }, onContextRemove(file, files) { this.contextFiles = files },
     submitContextFiles() {
+      if (!this.datasetId) return this.$modal.msgWarning('请先完成数据分析')
       this.contextUploading = true
       uploadContextFiles(this.datasetId, this.contextFiles).then(data => {
         this.contextFiles = []
         this.contextResult = data
-        this.loadContextItems()
-        if (data.added > 0) {
-          this.$modal.msgSuccess(`解析完成，新增 ${data.added} 条资料，当前共 ${data.total} 条`)
-        } else {
-          this.$modal.msgSuccess(`解析完成：所选资料已存在，未重复入库，当前共 ${data.total} 条`)
-        }
+        this.markContextDirty()
+        return this.loadContextItems().then(() => {
+          if (data.added > 0) {
+            this.$modal.msgSuccess(`解析完成，新增 ${data.added} 条资料，确认完成后请点击「已完成行业资料添加」`)
+          } else {
+            this.$modal.msgSuccess(`解析完成：所选资料已存在，未重复入库，当前共 ${data.total} 条`)
+          }
+        })
       }).finally(() => { this.contextUploading = false })
     },
-    loadContextItems() { if (!this.datasetId) return; return getContext(this.datasetId).then(data => { this.contextResult = data; this.selectedContextIds = [] }) },
+    loadContextItems() { if (!this.datasetId) return Promise.resolve(); return getContext(this.datasetId).then(data => { this.contextResult = data; this.selectedContextIds = [] }) },
     onContextSelection(rows) { this.selectedContextIds = rows.map(row => row.id) },
     removeSelectedContext() {
-      this.$confirm(`确定删除选中的 ${this.selectedContextIds.length} 条行业资料吗？`, '删除确认', { type: 'warning' }).then(() => deleteContextItems(this.datasetId, this.selectedContextIds)).then(() => { this.$modal.msgSuccess('已删除选中资料'); this.loadContextItems() }).catch(() => {})
+      this.$confirm(`确定删除选中的 ${this.selectedContextIds.length} 条行业资料吗？`, '删除确认', { type: 'warning' }).then(() => deleteContextItems(this.datasetId, this.selectedContextIds)).then(() => {
+        this.markContextDirty()
+        this.$modal.msgSuccess('已删除选中资料')
+        this.loadContextItems()
+      }).catch(() => {})
     },
     removeAllContext() {
-      this.$confirm('确定清空当前数据集的全部行业资料吗？该操作不可恢复。', '清空确认', { type: 'warning' }).then(() => clearContext(this.datasetId)).then(() => { this.$modal.msgSuccess('行业资料已清空'); this.loadContextItems() }).catch(() => {})
+      this.$confirm('确定清空当前数据集的全部行业资料吗？该操作不可恢复。', '清空确认', { type: 'warning' }).then(() => clearContext(this.datasetId)).then(() => {
+        this.markContextDirty()
+        this.$modal.msgSuccess('行业资料已清空')
+        this.loadContextItems()
+      }).catch(() => {})
     },
     categoryLabel(value) { const item = this.contextCategories.find(x => x.value === value); return item ? item.label : value },
     loadDashboardComponents(force = false) {
@@ -1048,8 +1176,22 @@ export default {
       }).finally(() => { this.chatLoading = false })
     },
     generateReport() {
+      if (!this.contextCompleted && !this.contextFinalizeLoading) {
+        this.$modal.msgWarning('请先在「行业资料」中点击「已完成行业资料添加」')
+        return Promise.reject(new Error('context not completed'))
+      }
       this.reportLoading = true
-      return getMarketReport(this.datasetId, { ...this.queryParams, use_llm: this.useLlm }).then(data => { this.report = data }).finally(() => { this.reportLoading = false })
+      const params = { ...this.queryParams, use_llm: this.useLlm }
+      return getMarketReport(this.datasetId, params).then(data => {
+        this.report = data
+        return publishMarketReport(this.datasetId, params).then(published => {
+          if (published && published.report_id) this.report = { ...this.report, ...published, report_id: published.report_id }
+          return published
+        }).catch(error => {
+          console.error('发布整车周报到AI分析报告/知识库失败', error)
+          throw error
+        })
+      }).finally(() => { this.reportLoading = false })
     },
     applyPlan() {
       this.planLoading = true
@@ -1057,6 +1199,10 @@ export default {
     },
     resetPlan() { resetReportPlan(this.datasetId).then(data => { this.reportPlan = data; this.$modal.msgSuccess('已清空 1.1 市场观察编排'); this.generateReport() }) },
     exportReport(format) {
+      if (!this.contextCompleted) {
+        this.$modal.msgWarning('请先在「行业资料」中点击「已完成行业资料添加」')
+        return
+      }
       const observations = (this.reportPlan && this.reportPlan.market_observations) || []
       if (!observations.length || observations.some(item => !(item.components || []).length)) {
         this.$modal.msgWarning('请先完成 1.1 市场观察编排，并至少选择一个表格或图表组件')
@@ -1070,7 +1216,7 @@ export default {
           if (result.knowledge_ingest_status === 'failed') {
             this.$modal.msgWarning(result.knowledge_message || '报告已下载，但自动入库失败；可重新导出重试')
           } else if (['submitted', 'completed'].includes(result.knowledge_ingest_status)) {
-            this.$modal.msgSuccess('报告已下载，并已自动提交到固定知识库（生成报告）')
+            this.$modal.msgSuccess(result.knowledge_message || '报告已下载，并已写入AI分析报告与固定知识库')
           } else {
             this.$modal.msgSuccess('报告已下载')
           }
@@ -1417,7 +1563,7 @@ export default {
 .tab-tools { margin:0 8px 14px 0; }.rank-limit { margin:0 0 14px; }.warning { margin-bottom:8px; }.context-source { width:300px;margin:12px 8px 12px 0; }.context-upload { display:inline-block;margin:12px 8px 0 0; }
 .report-actions,.plan-actions,.chat-actions { display:flex;gap:8px;align-items:center;margin-bottom:14px; }.plan-actions { margin-top:10px; }.muted { color:#909399; }
 .chat-card { margin-top:14px; }.message { margin-bottom:10px;padding:10px 12px;border-radius:5px;line-height:1.65; }.message.user { background:#ecf5ff; }.message.assistant { background:#f4f4f5; }.chat-actions { justify-content:space-between;margin-top:10px;margin-bottom:0; }
-.component-button { margin:0 0 14px 8px; }.context-entry-meta { display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px; }.context-entry-meta .context-source { margin:0; }.context-entry-label { color:#606266;font-weight:600; }.context-toolbar { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px; }.selected-component { display:flex;gap:10px;align-items:center;margin-bottom:12px;color:#606266; }
+.component-button { margin:0 0 14px 8px; }.context-entry-meta { display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px; }.context-entry-meta .context-source { margin:0; }.context-entry-label { color:#606266;font-weight:600; }.context-entry-actions { display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px; }.context-finalize { display:flex;align-items:center;gap:12px;flex-wrap:wrap; }.context-finalize-tip { color:#909399;font-size:13px; }.context-toolbar { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px; }.selected-component { display:flex;gap:10px;align-items:center;margin-bottom:12px;color:#606266; }
 .report-section { margin-top:20px;padding-top:4px;border-top:1px solid #ebeef5; }.report-component { padding:10px 0; }.event-card { margin-bottom:8px; }.event-card p { margin:8px 0;line-height:1.65;white-space:pre-wrap; }.event-card small { color:#909399; }
 .danger-text { color:#f56c6c; }
 .plan-overview { margin-bottom:14px; }.plan-overview p { margin:6px 0;line-height:1.6; }

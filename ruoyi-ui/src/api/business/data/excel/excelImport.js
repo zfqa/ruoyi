@@ -77,7 +77,8 @@ export function uploadExcelImport(file) {
     headers: {
       'Content-Type': 'multipart/form-data'
     },
-    data: file
+    data: file,
+    timeout: 120000
   })
 }
 

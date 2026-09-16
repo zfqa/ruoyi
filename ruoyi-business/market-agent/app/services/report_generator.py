@@ -103,9 +103,11 @@ def _latest_period_display(period: str | None) -> str:
 
 
 def _category_groups(context_items: list[dict[str, Any]] | None) -> dict[str, list[dict[str, Any]]]:
+    from app.services.context_category import normalize_context_category
+
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in context_items or []:
-        category = item.get("category", "other")
+        category = normalize_context_category(item.get("category"))
         if category in SECTION_LABELS:
             groups[category].append(item)
     return groups

@@ -137,6 +137,7 @@ class ContextTextRequest(BaseModel):
     text: str
     category: Literal["macro_policy", "personnel", "strategy", "industry_chain", "competition", "other"]
     source_name: str = "手工补充文本"
+    locator: str = ""
 
 
 class ContextItem(BaseModel):

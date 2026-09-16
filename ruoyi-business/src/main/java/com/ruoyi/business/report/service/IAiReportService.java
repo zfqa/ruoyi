@@ -16,6 +16,8 @@ public interface IAiReportService
 
     public AiReport selectLatestAiReportByImportTaskId(Long importTaskId);
 
+    public AiReport selectLatestAiReportByTaskName(String taskName);
+
     public int insertAiReport(AiReport aiReport);
 
     public int updateAiReport(AiReport aiReport);

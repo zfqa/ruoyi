@@ -153,7 +153,7 @@ public class AgentServiceClient
         byte[] prefix = (formField(boundary, "index_to_kb", "false")
             + formField(boundary, "persist_review", "false")
             + formField(boundary, "llm_managed", "true")
-            + formField(boundary, "llm_api_url", llm.getApiUrl())
+            + formField(boundary, "llm_api_url", llm.getOpenAiBaseUrl())
             + formField(boundary, "llm_model", llm.getModel())
             + formField(boundary, "llm_api_key", llmApiKey)
             + "--" + boundary + "\r\n"

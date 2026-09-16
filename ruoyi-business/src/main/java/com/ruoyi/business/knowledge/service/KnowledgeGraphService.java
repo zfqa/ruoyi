@@ -159,6 +159,27 @@ public class KnowledgeGraphService
         }
     }
 
+    /** Stream the durable stored binary for any authorized knowledge version (PDF/Office). */
+    public SourceFile versionSourceFile(Long versionId, List<Long> roleIds, boolean admin)
+    {
+        if (fileStorage == null) throw new IllegalStateException("知识库文件存储服务不可用");
+        if (versionId == null) throw new IllegalArgumentException("版本不存在或无权访问");
+        KnowledgeVersion version = mapper.selectVersionById(versionId);
+        if (version == null) throw new IllegalArgumentException("版本不存在或无权访问");
+        KnowledgeBase source = mapper.selectAuthorizedKnowledgeBaseById(version.getSourceId(),
+            safeRoles(roleIds), admin);
+        if (source == null) throw new IllegalArgumentException("版本不存在或无权访问");
+        try
+        {
+            Path path = fileStorage.resolveForRead(version.getStoredPath());
+            return new SourceFile(path, safeFileName(version.getOriginalName()));
+        }
+        catch (java.io.IOException e)
+        {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
+    }
+
     private boolean isPdfFileAvailable(KnowledgeChunk chunk)
     {
         if (fileStorage == null || chunk == null || !"PDF".equalsIgnoreCase(chunk.getSourceType())) return false;

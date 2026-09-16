@@ -40,6 +40,10 @@ public interface KnowledgeBaseMapper
 
     public int deleteKnowledgeBaseByIds(Long[] ids);
 
+    int deleteIngestTasksBySourceId(Long sourceId);
+
+    int deleteVersionsBySourceId(Long sourceId);
+
     KnowledgeVersion selectVersionById(Long id);
 
     KnowledgeVersion selectVersionByHash(@Param("sourceId") Long sourceId, @Param("contentSha256") String contentSha256);
@@ -74,6 +78,8 @@ public interface KnowledgeBaseMapper
 
     List<KnowledgeChunk> selectMetricFragments(@Param("versionId") Long versionId,
         @Param("metricId") String metricId, @Param("titlePath") String titlePath);
+
+    List<KnowledgeChunk> selectChunksByVersionId(@Param("versionId") Long versionId);
 
     KnowledgeChunk selectAuthorizedChunkById(@Param("id") Long id,
         @Param("roleIds") List<Long> roleIds, @Param("admin") boolean admin);

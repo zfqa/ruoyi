@@ -22,10 +22,20 @@ def get_chat_model(runtime: LlmRuntimeConfig | None = None) -> ChatOpenAI:
     if not api_key or api_key == "your-api-key":
         raise ValueError("未配置 OPENAI_API_KEY，请复制 .env.example 为 .env 后填写模型配置")
 
+    raw_base = runtime.api_url if runtime is not None else os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
     return ChatOpenAI(
-        model=runtime.model if runtime is not None else os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=runtime.model if runtime is not None else os.getenv("OPENAI_MODEL", "deepseek-chat"),
         api_key=api_key,
-        base_url=runtime.api_url if runtime is not None else os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        base_url=_normalize_openai_base_url(raw_base or ""),
         temperature=0.2,
     )
+
+
+def _normalize_openai_base_url(url: str) -> str:
+    """Accept either .../v1 or .../v1/chat/completions from RuoYi."""
+    value = (url or "").strip().rstrip("/")
+    suffix = "/chat/completions"
+    if value.endswith(suffix):
+        value = value[: -len(suffix)].rstrip("/")
+    return value or "https://api.deepseek.com/v1"
 

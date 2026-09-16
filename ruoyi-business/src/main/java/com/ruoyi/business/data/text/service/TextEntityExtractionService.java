@@ -47,7 +47,7 @@ public class TextEntityExtractionService
         String text = sourceText == null ? "" : sourceText.trim();
         if (text.length() < 2) throw new IllegalArgumentException("待解析文本至少2个字符");
         if (text.length() > MAX_TEXT_LENGTH) throw new IllegalArgumentException("单次文本不能超过" + MAX_TEXT_LENGTH + "个字符");
-        if (llm.getApiKey().isBlank()) throw new IllegalStateException("LLM API Key未配置，请先在知识问答页面配置");
+        if (llm.getApiKey().isBlank()) throw new IllegalStateException("LLM API Key未配置，请先在「业务模块 > AI配置」中填写");
 
         JSONObject response = callLlm(text);
         JSONArray rawEntities = response.getJSONArray("entities");

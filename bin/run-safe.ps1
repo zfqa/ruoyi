@@ -115,8 +115,9 @@ if ([string]::IsNullOrWhiteSpace($env:PYTHON) -or -not (Test-Path -LiteralPath $
     $pythonCandidates = @(
         (Join-Path $environmentRoot "python-market-agent\Scripts\python.exe"),
         (Join-Path $environmentRoot "python\python312\python.exe"),
-        (Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"),
-        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe")
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+        (Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe")
     )
     $pathPython = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($null -ne $pathPython) {
@@ -132,21 +133,39 @@ Write-Host ("Python check passed: {0}" -f $env:PYTHON)
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 
-# Start the bundled Redis used by the original RuoYi project when port 6379
-# is not already served. This keeps the one-command startup self-contained.
+# Start bundled Redis when port 6379 is not already served. Prefer the legacy
+# native runtime layout when present; otherwise use the project tools\redis
+# package so machines without D:\ruoyi-master2-runtime can still self-start.
 $redisReady = Test-LocalTcpPort 6379
 if (-not $redisReady) {
-    $redisRoot = Join-Path $nativeRuntimeRoot "redis\Redis-8.10.1-Windows-x64-msys2"
-    $redisExe = Join-Path $redisRoot "redis-server.exe"
-    $redisConfig = Join-Path $nativeRuntimeRoot "redis.conf"
-    $redisConfigArgument = "..\..\redis.conf"
-    if (-not (Test-Path -LiteralPath $redisExe -PathType Leaf) -or -not (Test-Path -LiteralPath $redisConfig -PathType Leaf)) {
-        throw "Bundled Redis is missing under $redisRoot"
+    $redisCandidates = @(
+        @{
+            Exe = (Join-Path $nativeRuntimeRoot "redis\Redis-8.10.1-Windows-x64-msys2\redis-server.exe")
+            Config = (Join-Path $nativeRuntimeRoot "redis.conf")
+            WorkingDirectory = (Join-Path $nativeRuntimeRoot "redis\Redis-8.10.1-Windows-x64-msys2")
+            ConfigArgument = "..\..\redis.conf"
+        },
+        @{
+            Exe = (Join-Path $projectRoot "tools\redis\redis-server.exe")
+            Config = (Join-Path $projectRoot "tools\redis\redis.windows.conf")
+            WorkingDirectory = (Join-Path $projectRoot "tools\redis")
+            ConfigArgument = "redis.windows.conf"
+        }
+    )
+    $selectedRedis = $null
+    foreach ($candidate in $redisCandidates) {
+        if ((Test-Path -LiteralPath $candidate.Exe -PathType Leaf) -and (Test-Path -LiteralPath $candidate.Config -PathType Leaf)) {
+            $selectedRedis = $candidate
+            break
+        }
+    }
+    if ($null -eq $selectedRedis) {
+        throw "Bundled Redis is missing. Checked legacy runtime under $nativeRuntimeRoot and project tools under $(Join-Path $projectRoot 'tools\redis')"
     }
     $redisOut = Join-Path $environmentRoot "data\logs\redis.out.log"
     $redisErr = Join-Path $environmentRoot "data\logs\redis.err.log"
     New-Item -ItemType Directory -Path (Split-Path -Parent $redisOut) -Force | Out-Null
-    Start-Process -FilePath $redisExe -ArgumentList $redisConfigArgument -WorkingDirectory $redisRoot -WindowStyle Hidden -RedirectStandardOutput $redisOut -RedirectStandardError $redisErr | Out-Null
+    Start-Process -FilePath $selectedRedis.Exe -ArgumentList $selectedRedis.ConfigArgument -WorkingDirectory $selectedRedis.WorkingDirectory -WindowStyle Hidden -RedirectStandardOutput $redisOut -RedirectStandardError $redisErr | Out-Null
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
         Start-Sleep -Milliseconds 250
         $redisReady = Test-LocalTcpPort 6379

@@ -13,6 +13,13 @@ $nativeRuntimeRoot = if ([string]::IsNullOrWhiteSpace($env:RUOYI_NATIVE_ROOT)) {
 } else {
     $env:RUOYI_NATIVE_ROOT
 }
+# The native runtime is only needed when Redis is not already running. Keep
+# startup self-contained on machines that do not have the historical runtime
+# directory by falling back to the project workspace instead of failing during
+# Resolve-Path before the Redis health check.
+if (-not (Test-Path -LiteralPath $nativeRuntimeRoot -PathType Container)) {
+    $nativeRuntimeRoot = $workspaceRoot
+}
 $nativeRuntimeRoot = (Resolve-Path -LiteralPath $nativeRuntimeRoot).Path
 Set-Location -LiteralPath $projectRoot
 

@@ -29,26 +29,40 @@ def _frequency_delta(value: str) -> timedelta:
 
 
 def _with_listing_published_at(parsed, listing_published_at: str | None, *, prefer_listing_date: bool = False):
-    """Retain an official list-card date when the detail page has none.
+    """Retain an official list-card date when the detail page has none/unusable.
 
     Some public newsrooms expose a publisher date on the listing card but do
-    not repeat it in their article HTML.  This is a general provenance-preserving
-    fallback: detail-page dates always win, and no date is inferred.
+    not repeat it in their article HTML, or the detail CSS selector lands on a
+    non-date label.  Detail-page dates win when parseable; otherwise a
+    parseable listing date is kept.  No date is inferred from crawl time.
     """
-    if parsed.article is None or not listing_published_at:
+    from news_service.utils.date_utils import first_parseable_publish_value
+
+    if parsed.article is None:
         return parsed
-    # Keep a valid detail date by default.  If the detail parser found only
-    # unrelated/unparseable prose while the official listing supplied a valid
-    # date, retain the latter for correct range filtering and provenance.
-    listing_date = parse_publish_date(listing_published_at)
-    detail_date = parse_publish_date(parsed.article.published_at)
-    if parsed.article.published_at and detail_date is not None and not prefer_listing_date:
+    listing_value = first_parseable_publish_value(listing_published_at)
+    detail_value = first_parseable_publish_value(parsed.article.published_at)
+    if detail_value is not None and not prefer_listing_date:
+        if detail_value != parsed.article.published_at:
+            return parsed.__class__(
+                status=parsed.status,
+                article=parsed.article.model_copy(update={"published_at": detail_value}),
+                warning=parsed.warning,
+            )
         return parsed
-    if listing_date is None:
+    if listing_value is None:
+        # Drop unparseable detail prose so range filtering can report a clear
+        # missing date instead of treating labels as timestamps.
+        if parsed.article.published_at and detail_value is None:
+            return parsed.__class__(
+                status=parsed.status,
+                article=parsed.article.model_copy(update={"published_at": None}),
+                warning=parsed.warning or "未提取到可解析的发布时间",
+            )
         return parsed
     return parsed.__class__(
         status=parsed.status,
-        article=parsed.article.model_copy(update={"published_at": listing_published_at}),
+        article=parsed.article.model_copy(update={"published_at": listing_value}),
         warning=None,
     )
 
@@ -127,19 +141,32 @@ class NewsService:
                 # discovery before requested-time filtering.
                 result.discovered += 1
                 if time_range_mode and is_outside_listing_range(listing_published_at):
-                    result.publish_time_filtered += 1
-                    result.listing_publish_time_filtered += 1
-                    self._log(
-                        source,
-                        column_url=root_column_url,
-                        page_url=page_url,
-                        article_url=canonical_url,
-                        published_at=listing_published_at,
-                        status="publish_time_filtered",
-                        error_type="listing_published_at_out_of_range",
-                        error_message="列表发布时间不在指定 publish_time 范围内",
+                    # Only trust listing dates that came from an explicit card
+                    # time selector / structured field.  Heuristic listing dates
+                    # must not discard candidates before detail parsing.
+                    listing_date_is_configured = bool(
+                        source.selectors.article_time_selector
+                        or (
+                            source.structured_discovery
+                            and source.structured_discovery.prefer
+                            and source.structured_discovery.article_time_field
+                        )
                     )
-                    continue
+                    if listing_date_is_configured:
+                        result.publish_time_filtered += 1
+                        result.listing_publish_time_filtered += 1
+                        self._log(
+                            source,
+                            column_url=root_column_url,
+                            page_url=page_url,
+                            article_url=canonical_url,
+                            published_at=listing_published_at,
+                            status="publish_time_filtered",
+                            error_type="listing_published_at_out_of_range",
+                            error_message="列表发布时间不在指定 publish_time 范围内",
+                        )
+                        continue
+                    listing_published_at = None
                 output.append((root_column_url, page_url, original_url, canonical_url, title, listing_published_at))
 
         for configured_url in source.column_urls:

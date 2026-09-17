@@ -40,7 +40,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-/** 真实MySQL：PDF上传、切分、索引、检索和页码溯源全链路。 */
+/** 真实MySQL：PDF上传、切分、索引、检索和页码溯源全链路�?*/
 @EnabledIfEnvironmentVariable(named = "KB_TEST_MYSQL_URL", matches = ".+")
 class KnowledgeMysqlEndToEndTest
 {
@@ -76,7 +76,7 @@ class KnowledgeMysqlEndToEndTest
                 doAnswer(invocation -> { ((Runnable) invocation.getArgument(0)).run(); return null; })
                     .when(executor).execute(any(Runnable.class));
                 KnowledgeIngestService service = new KnowledgeIngestService(mapper,
-                    new KnowledgeFileStorage("target/knowledge-mysql-e2e"), mock(IAiReportService.class), executor, "");
+                    KnowledgeFileStorage.forTests("target/knowledge-mysql-e2e"), mock(IAiReportService.class), executor, "");
                 KnowledgeGraphService graphService = new KnowledgeGraphService(mapper);
                 service.setGraphService(graphService);
 
@@ -116,7 +116,7 @@ class KnowledgeMysqlEndToEndTest
         }
         finally
         {
-            if (!schema.matches("kb_e2e_[0-9a-f]{32}")) throw new IllegalStateException("拒绝删除非测试数据库：" + schema);
+            if (!schema.matches("kb_e2e_[0-9a-f]{32}")) throw new IllegalStateException("拒绝删除非测试数据库�? + schema);
             try (Connection admin = DriverManager.getConnection(adminUrl, username, password);
                  Statement statement = admin.createStatement())
             {

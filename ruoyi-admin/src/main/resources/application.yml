@@ -8,6 +8,9 @@ ruoyi:
   copyrightYear: 2026
   # 文件路径 示例（ Windows配置D:/ruoyi/uploadPath，Linux配置 /home/ruoyi/uploadPath）
   profile: ${RUOYI_PROFILE:D:/ruoyi/uploadPath}
+  # 历史上传根目录（逗号分隔）。知识库“查看原文”可读这些目录下的旧 PDF，写入仍只进 profile。
+  knowledge:
+    legacy-profiles: ${RUOYI_KNOWLEDGE_LEGACY_PROFILES:D:/ruoyi/uploadPath}
   # 获取ip地址开关
   addressEnabled: false
   # 验证码类型 math 数字计算 char 字符验证

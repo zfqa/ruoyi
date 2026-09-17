@@ -242,3 +242,22 @@ def parse_requested_date(value: str | None, *, field_name: str) -> date | None:
     return parsed
 
 
+def first_parseable_publish_value(value: object | None, *, format_hint: str | None = None) -> str | None:
+    """Return a storage-ready publish value only when an absolute date is present.
+
+    Used by detail/list extractors so a mis-targeted CSS node (source name,
+    media label, share button text, etc.) never becomes ``published_at``.
+    Relative phrases still return ``None``.
+    """
+    if value is None:
+        return None
+    text = re.sub(r"\s+", " ", str(value).strip())
+    if not text:
+        return None
+    normalized = normalize_published_at(text, format_hint=format_hint)
+    if normalized is not None:
+        return normalized
+    parsed = parse_publish_date(text)
+    return parsed.isoformat() if parsed is not None else None
+
+

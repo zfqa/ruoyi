@@ -126,6 +126,20 @@ export function getKnowledgeEvidence(chunkId, params) {
   return request({ url: `/business/knowledge/evidence/${chunkId}`, method: 'get', params })
 }
 
+export function getKnowledgeLocatePreview(chunkId, params) {
+  return request({
+    url: `/business/knowledge/evidence/${chunkId}/locate-preview`,
+    method: 'get',
+    params,
+    timeout: 60000
+  })
+}
+
 export function getKnowledgeEvidenceFile(chunkId) {
-  return request({ url: `/business/knowledge/evidence/${chunkId}/file`, method: 'get', responseType: 'blob' })
+  return request({
+    url: `/business/knowledge/evidence/${chunkId}/file`,
+    method: 'get',
+    responseType: 'blob',
+    timeout: 120000
+  })
 }

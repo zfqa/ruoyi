@@ -9,8 +9,12 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
@@ -19,10 +23,31 @@ import org.springframework.web.multipart.MultipartFile;
 public class KnowledgeFileStorage
 {
     private final Path root;
+    private final List<Path> readableRoots;
 
-    public KnowledgeFileStorage(@Value("${ruoyi.profile}") String profile)
+    @Autowired
+    public KnowledgeFileStorage(@Value("${ruoyi.profile}") String profile,
+        @Value("${ruoyi.knowledge.legacy-profiles:D:/ruoyi/uploadPath}") String legacyProfiles)
     {
         this.root = Path.of(profile).toAbsolutePath().normalize().resolve("knowledge");
+        Set<Path> roots = new LinkedHashSet<>();
+        roots.add(this.root);
+        if (legacyProfiles != null)
+        {
+            for (String item : legacyProfiles.split("[,;]"))
+            {
+                String trimmed = item == null ? "" : item.trim();
+                if (trimmed.isEmpty()) continue;
+                roots.add(Path.of(trimmed).toAbsolutePath().normalize().resolve("knowledge"));
+            }
+        }
+        this.readableRoots = List.copyOf(roots);
+    }
+
+    /** Test helper: only the active profile is writable/readable. */
+    public static KnowledgeFileStorage forTests(String profile)
+    {
+        return new KnowledgeFileStorage(profile, "");
     }
 
     public StoredFile savePdf(MultipartFile file) throws IOException
@@ -45,7 +70,7 @@ public class KnowledgeFileStorage
             .resolve(String.format("%02d", today.getMonthValue())).normalize();
         Files.createDirectories(dir);
         Path target = dir.resolve(UUID.randomUUID().toString().replace("-", "") + ".pdf").normalize();
-        ensureControlled(target);
+        ensureWritable(target);
         try (InputStream input = file.getInputStream())
         {
             Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
@@ -77,7 +102,7 @@ public class KnowledgeFileStorage
             .resolve(String.format("%02d", today.getMonthValue())).normalize();
         Files.createDirectories(dir);
         Path target = dir.resolve(UUID.randomUUID().toString().replace("-", "") + extension).normalize();
-        ensureControlled(target);
+        ensureWritable(target);
         try (InputStream input = file.getInputStream())
         {
             Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
@@ -100,7 +125,7 @@ public class KnowledgeFileStorage
             .resolve(String.format("%02d", today.getMonthValue())).normalize();
         Files.createDirectories(dir);
         Path target = dir.resolve(UUID.randomUUID().toString().replace("-", "") + extension).normalize();
-        ensureControlled(target);
+        ensureWritable(target);
         Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
         return new StoredFile(target, sha256(target), safeName);
     }
@@ -127,7 +152,7 @@ public class KnowledgeFileStorage
             .resolve(String.format("%02d", today.getMonthValue())).normalize();
         Files.createDirectories(dir);
         Path target = dir.resolve(UUID.randomUUID().toString().replace("-", "") + extension).normalize();
-        ensureControlled(target);
+        ensureWritable(target);
         Files.write(target, content);
         return new StoredFile(target, sha256(target), safeName);
     }
@@ -147,7 +172,7 @@ public class KnowledgeFileStorage
         Path dir = root.resolve(category).resolve(hash.substring(0, 2)).normalize();
         Files.createDirectories(dir);
         Path target = dir.resolve(hash + ".txt").normalize();
-        ensureControlled(target);
+        ensureWritable(target);
         Files.writeString(target, content, java.nio.charset.StandardCharsets.UTF_8);
         return target;
     }
@@ -157,7 +182,7 @@ public class KnowledgeFileStorage
         if (path == null) return;
         try
         {
-            ensureControlled(path);
+            ensureReadable(path);
             Files.deleteIfExists(path);
         }
         catch (IOException ignored)
@@ -166,12 +191,12 @@ public class KnowledgeFileStorage
         }
     }
 
-    /** 仅允许读取知识库受控目录内已经存在的普通文件。 */
+    /** 仅允许读取当前或历史知识库受控目录内已经存在的普通文件。 */
     public Path resolveForRead(String storedPath) throws IOException
     {
         if (storedPath == null || storedPath.isBlank()) throw new IOException("知识源未保存原始文件");
         Path path = Path.of(storedPath).toAbsolutePath().normalize();
-        ensureControlled(path);
+        ensureReadable(path);
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) throw new IOException("知识源原始文件不存在或不可读");
         return path;
     }
@@ -205,9 +230,24 @@ public class KnowledgeFileStorage
         }
     }
 
-    private void ensureControlled(Path path) throws IOException
+    private void ensureWritable(Path path) throws IOException
     {
         if (!path.toAbsolutePath().normalize().startsWith(root)) throw new IOException("知识库文件路径越界");
+    }
+
+    private void ensureReadable(Path path) throws IOException
+    {
+        Path normalized = path.toAbsolutePath().normalize();
+        for (Path allowed : readableRoots)
+        {
+            if (normalized.startsWith(allowed)) return;
+        }
+        throw new IOException("知识库文件路径越界（上传目录已变更，历史文件不在当前受控目录）");
+    }
+
+    List<Path> readableRoots()
+    {
+        return readableRoots;
     }
 
     public record StoredFile(Path path, String sha256, String originalName) {}

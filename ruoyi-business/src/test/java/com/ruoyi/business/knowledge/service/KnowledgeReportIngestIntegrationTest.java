@@ -21,7 +21,7 @@ import com.ruoyi.business.report.service.IAiReportService;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-/** 验证结构化报告的指标证据真正写入知识切片并切换为当前版本。 */
+/** 验证结构化报告的指标证据真正写入知识切片并切换为当前版本�?*/
 class KnowledgeReportIngestIntegrationTest
 {
     @Test
@@ -30,13 +30,13 @@ class KnowledgeReportIngestIntegrationTest
         KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
         IAiReportService reportService = mock(IAiReportService.class);
         ThreadPoolTaskExecutor executor = mock(ThreadPoolTaskExecutor.class);
-        KnowledgeFileStorage storage = new KnowledgeFileStorage("target/knowledge-report-test");
+        KnowledgeFileStorage storage = KnowledgeFileStorage.forTests("target/knowledge-report-test");
 
         KnowledgeBase source = new KnowledgeBase();
         source.setId(7L); source.setSourceName("竞争社洞察结构化结果"); source.setSourceType("REPORT");
         source.setEnabled("1"); source.setStatus("0");
         AiReport report = new AiReport();
-        report.setId(88L); report.setTaskName("竞争社洞察报告");
+        report.setId(88L); report.setTaskName("竞争社洞察报�?);
         report.setStatus("2");
         report.setReportContent("{\"computed_metrics\":{\"market\":{\"metric_id\":\"market.shipment.y25q1_q3\","
             + "\"values\":{\"2024\":100,\"2025\":120}}},\"evidence\":[{\"metric_id\":\"market.shipment.y25q1_q3\","

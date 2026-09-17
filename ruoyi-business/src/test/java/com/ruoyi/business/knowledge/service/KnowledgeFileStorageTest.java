@@ -39,7 +39,7 @@ class KnowledgeFileStorageTest
     @Test
     void savesPdfInsideControlledKnowledgeDirectory() throws Exception
     {
-        KnowledgeFileStorage storage = new KnowledgeFileStorage(tempDir.toString());
+        KnowledgeFileStorage storage = KnowledgeFileStorage.forTests(tempDir.toString());
         MockMultipartFile file = new MockMultipartFile("file", "report.pdf", "application/pdf",
             "%PDF-1.7\nminimal".getBytes(StandardCharsets.US_ASCII));
 
@@ -54,7 +54,7 @@ class KnowledgeFileStorageTest
     @Test
     void rejectsRenamedNonPdfContent()
     {
-        KnowledgeFileStorage storage = new KnowledgeFileStorage(tempDir.toString());
+        KnowledgeFileStorage storage = KnowledgeFileStorage.forTests(tempDir.toString());
         MockMultipartFile file = new MockMultipartFile("file", "fake.pdf", "application/pdf",
             "not a pdf".getBytes(StandardCharsets.UTF_8));
 
@@ -65,7 +65,7 @@ class KnowledgeFileStorageTest
     @Test
     void newsSnapshotUsesContentHashAsStableName() throws Exception
     {
-        KnowledgeFileStorage storage = new KnowledgeFileStorage(tempDir.toString());
+        KnowledgeFileStorage storage = KnowledgeFileStorage.forTests(tempDir.toString());
         String text = "固定新闻正文";
         String hash = storage.sha256(text);
 

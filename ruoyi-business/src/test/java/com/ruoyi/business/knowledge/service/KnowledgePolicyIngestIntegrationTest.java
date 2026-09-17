@@ -42,11 +42,11 @@ class KnowledgePolicyIngestIntegrationTest
         doAnswer(invocation -> { ((Runnable)invocation.getArgument(0)).run(); return null; }).when(executor).execute(any(Runnable.class));
 
         KnowledgeIngestService service = new KnowledgeIngestService(mapper,
-            new KnowledgeFileStorage("target/knowledge-policy-ingest"), mock(IAiReportService.class), executor, "");
+            KnowledgeFileStorage.forTests("target/knowledge-policy-ingest"), mock(IAiReportService.class), executor, "");
         KnowledgeIngestTask task = service.submitPolicy(9L, "policy-v1",
             "https://www.gov.cn/zhengce/example.html", "关于促进汽车消费和制造业高质量发展的通知",
-            "国家支持汽车以旧换新，鼓励新能源汽车消费，并支持汽车制造企业技术改造和扩大有效供给。",
-            "国务院", "2025-01-15", "国家", "tester");
+            "国家支持汽车以旧换新，鼓励新能源汽车消费，并支持汽车制造企业技术改造和扩大有效供给�?,
+            "国务�?, "2025-01-15", "国家", "tester");
 
         assertEquals("2", task.getStatus());
         assertEquals("https://www.gov.cn/zhengce/example.html", versionRef.get().getSourceUrl());

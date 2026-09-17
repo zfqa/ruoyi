@@ -183,7 +183,10 @@ sources:
       article_link_selector: "a.f-w-b.c-222.h-t-d-u[href^='/detail/']"
       title_selector: null
       content_selector: ".detail-content"
-      publish_time_selector: "div.c-b.m-b-20.f-s-14.l-h-2.c-999 > div.f-l.m-r-10:nth-of-type(3)"
+      # 元信息栏多个 sibling；通用解析会在同级节点中挑选可解析绝对日期，
+      # 不再依赖脆弱的 nth-of-type(3)（该位置常为“财联社”来源名）。
+      publish_time_selector: "div.c-b.m-b-20.f-s-14.l-h-2.c-999 > div.f-l.m-r-10"
+      publish_time_regex: "(\\d{4}-\\d{2}-\\d{2}(?:\\s+\\d{1,2}:\\d{2}(?::\\d{2})?)?)"
       # 栏目页的“加载更多”为无 href 的 div；点击后追加下一批 /detail/ 链接。
       next_page_selector: "div.f-s-14.t-a-c.m-a.m-t-24.m-b-24.c-p"
 

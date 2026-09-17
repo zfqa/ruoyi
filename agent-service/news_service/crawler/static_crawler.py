@@ -260,31 +260,72 @@ class StaticNewsCrawler:
 
     @classmethod
     def _published_at(cls, soup: BeautifulSoup, selector: str | None, *, value_regex: str | None = None) -> str | None:
-        if value := cls._by_selector(soup, selector):
-            if value_regex:
-                match = re.search(value_regex, value)
+        """Extract a publisher absolute date; never keep unparseable selector prose.
+
+        Mis-targeted CSS nodes (source labels, media names) previously short-
+        circuited extraction and caused in-range articles to be dropped as
+        ``publish_time_unknown``.  Candidates are validated with
+        ``first_parseable_publish_value`` before acceptance.
+        """
+        from news_service.utils.date_utils import first_parseable_publish_value
+
+        def _from_raw(raw: str | None, *, apply_regex: bool) -> str | None:
+            text = _clean_text(raw or "")
+            if not text:
+                return None
+            if apply_regex and value_regex:
+                match = re.search(value_regex, text)
                 if not match:
                     return None
-                return match.group(1) if match.groups() else match.group(0)
-            return value
+                text = match.group(1) if match.groups() else match.group(0)
+            return first_parseable_publish_value(text)
+
+        candidates: list[tuple[str, bool]] = []
+        if selector:
+            nodes = soup.select(selector)
+            for node in nodes:
+                raw = str(node.get("content") or node.get_text(" ", strip=True))
+                candidates.append((raw, True))
+            # Fragile nth-of-type selectors often hit a sibling label.  When the
+            # configured match is unparseable, also try every direct sibling
+            # under the same parent (still scoped to the meta bar, not the page).
+            if nodes:
+                parents = []
+                for node in nodes[:3]:
+                    if node.parent is not None and node.parent not in parents:
+                        parents.append(node.parent)
+                for parent in parents:
+                    for child in parent.find_all(recursive=False):
+                        raw = str(child.get("content") or child.get_text(" ", strip=True))
+                        candidates.append((raw, True))
+
         for css, attr in (
             ("meta[property='article:published_time']", "content"),
             ("meta[property='og:published_time']", "content"),
             ("meta[name='publishdate']", "content"),
+            ("meta[name='pubdate']", "content"),
+            ("meta[name='publish_date']", "content"),
             ("meta[name='date']", "content"),
             ("meta[itemprop='datePublished']", "content"),
+            ("time[datetime]", "datetime"),
             ("time", "datetime"),
         ):
             node = soup.select_one(css)
-            if node and (value := _clean_text(str(node.get(attr) or node.get_text(" ", strip=True)))):
-                return value
+            if node:
+                candidates.append((str(node.get(attr) or node.get_text(" ", strip=True)), False))
+
+        for raw, apply_regex in candidates:
+            if usable := _from_raw(raw, apply_regex=apply_regex):
+                return usable
+
         # Some official press rooms put the dateline at the beginning of the
         # article copy or description but expose no semantic date element.
         # Keep that publisher-provided absolute date so range filtering can
         # still operate; relative dates are deliberately not inferred.
         text = _clean_text(soup.get_text(" ", strip=True))
-        if match := _ABSOLUTE_DATE_TEXT.search(text[:5000]):
-            return match.group(0)
+        if match := _ABSOLUTE_DATE_TEXT.search(text[:8000]):
+            if usable := first_parseable_publish_value(match.group(0)):
+                return usable
         return None
 
     @staticmethod

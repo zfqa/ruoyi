@@ -40,8 +40,8 @@ class KnowledgeGraphServiceTest
         KnowledgeChunk chunk = new KnowledgeChunk();
         chunk.setId(88L); chunk.setSourceName("终稿报告"); chunk.setOriginalName("终稿.pdf");
         chunk.setVersionNo("v1"); chunk.setPageStart(14); chunk.setPageEnd(14);
-        String paragraph = "Tianma 2025年前三季度LTPS出货量为10,323 Kpcs，同比增长68.0%。";
-        chunk.setContent("上一段背景。\n" + paragraph + "\n下一段说明。");
+        String paragraph = "Tianma 2025年前三季度LTPS出货量为10,323 Kpcs，同比增�?8.0%�?;
+        chunk.setContent("上一段背景。\n" + paragraph + "\n下一段说明�?);
         when(mapper.selectAuthorizedChunkById(eq(88L), anyList(), eq(false))).thenReturn(chunk);
         int start = chunk.getContent().indexOf(paragraph);
 
@@ -71,7 +71,7 @@ class KnowledgeGraphServiceTest
         KnowledgeVersion version = new KnowledgeVersion();
         version.setId(20L); version.setOriginalName("2023Q3车市快讯");
         KnowledgeChunk chunk = new KnowledgeChunk();
-        chunk.setId(30L); chunk.setContent("2023年Q3新闻：企业：比亚迪，车型：海豚，销量：12万辆；一季度财报显示增长，相关依据为《新能源汽车产业发展政策》。");
+        chunk.setId(30L); chunk.setContent("2023年Q3新闻：企业：比亚迪，车型：海豚，销量：12万辆；一季度财报显示增长，相关依据为《新能源汽车产业发展政策》�?);
 
         new KnowledgeGraphService(mapper).indexChunk(source, version, chunk);
 
@@ -119,7 +119,7 @@ class KnowledgeGraphServiceTest
         version.setId(21L); version.setOriginalName("政策原文");
         KnowledgeChunk chunk = new KnowledgeChunk();
         chunk.setId(31L);
-        chunk.setContent("2025年《汽车以旧换新政策通知》支持比亚迪等汽车企业扩大新能源汽车消费和有效供给。");
+        chunk.setContent("2025年《汽车以旧换新政策通知》支持比亚迪等汽车企业扩大新能源汽车消费和有效供给�?);
 
         new KnowledgeGraphService(mapper).indexChunk(source, version, chunk);
 
@@ -136,7 +136,7 @@ class KnowledgeGraphServiceTest
     {
         KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
         Path profile = Path.of("target", "knowledge-graph-file-test").toAbsolutePath().normalize();
-        KnowledgeFileStorage storage = new KnowledgeFileStorage(profile.toString());
+        KnowledgeFileStorage storage = KnowledgeFileStorage.forTests(profile.toString());
         Path controlled = profile.resolve("knowledge/pdf/source.pdf");
         Files.createDirectories(controlled.getParent());
         Files.writeString(controlled, "%PDF-test");
@@ -152,6 +152,7 @@ class KnowledgeGraphServiceTest
 
         assertEquals(controlled, result.path());
         assertEquals("终稿.pdf", result.originalName());
+        assertEquals("pdf", result.kind());
         version.setStoredPath(profile.resolve("outside.pdf").toString());
         assertThrows(IllegalArgumentException.class,
             () -> new KnowledgeGraphService(mapper, storage).sourceFile(88L, List.of(2L), false));
@@ -166,7 +167,7 @@ class KnowledgeGraphServiceTest
     {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("relationId", relationId); row.put("relationType", type); row.put("sourceId", sourceId);
-        row.put("fromId", 1L); row.put("fromName", "源文档"); row.put("fromType", "REPORT");
+        row.put("fromId", 1L); row.put("fromName", "源文�?); row.put("fromType", "REPORT");
         row.put("toId", toId); row.put("toName", "Tianma"); row.put("toType", "COMPANY");
         row.put("chunkId", chunkId); row.put("sourceName", sourceName); row.put("evidenceSnippet", "Tianma");
         return row;

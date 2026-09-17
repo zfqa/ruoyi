@@ -28,10 +28,10 @@ class KnowledgeGeneratedReportAutoIngestTest
         KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
         IAiReportService reportService = mock(IAiReportService.class);
         ThreadPoolTaskExecutor executor = mock(ThreadPoolTaskExecutor.class);
-        KnowledgeFileStorage storage = new KnowledgeFileStorage("target/knowledge-auto-report-test");
+        KnowledgeFileStorage storage = KnowledgeFileStorage.forTests("target/knowledge-auto-report-test");
 
         AiReport report = new AiReport();
-        report.setId(91L); report.setImportTaskId(45L); report.setTaskName("竞争社洞察自动报告");
+        report.setId(91L); report.setImportTaskId(45L); report.setTaskName("竞争社洞察自动报�?);
         report.setReportType("competitive_insight_v1"); report.setStatus("2");
         report.setReportContent("{\"computed_metrics\":{\"shipment\":{\"metric_id\":\"shipment.total\"," +
             "\"value\":321}},\"executive_summary\":\"Tianma出货保持增长。\"}");

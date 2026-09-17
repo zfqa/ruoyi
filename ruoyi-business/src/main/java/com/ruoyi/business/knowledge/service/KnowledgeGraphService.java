@@ -136,7 +136,8 @@ public class KnowledgeGraphService
         result.put("metricId", chunk.getMetricId()); result.put("content", content);
         result.put("startOffset", start); result.put("endOffset", end);
         result.put("highlightedText", content.substring(start, end));
-        result.put("fileAvailable", isPdfFileAvailable(chunk));
+        result.put("fileAvailable", isOriginalFileAvailable(chunk));
+        result.put("fileKind", resolveFileKind(chunk));
         return result;
     }
 
@@ -146,12 +147,14 @@ public class KnowledgeGraphService
         KnowledgeChunk chunk = mapper.selectAuthorizedChunkById(chunkId, safeRoles(roleIds), admin);
         if (chunk == null) throw new IllegalArgumentException("原始文件不存在或无权访问");
         KnowledgeVersion version = mapper.selectVersionById(chunk.getVersionId());
-        if (version == null || !"PDF".equalsIgnoreCase(chunk.getSourceType()))
-            throw new IllegalArgumentException("该引用没有可预览的PDF原件");
+        if (version == null) throw new IllegalArgumentException("该引用没有可预览的原件");
+        String kind = fileKindOf(version.getOriginalName(), version.getStoredPath());
+        if (!"pdf".equals(kind) && !"pptx".equals(kind))
+            throw new IllegalArgumentException("该引用没有可预览的 PDF/PPTX 原件");
         try
         {
             Path path = fileStorage.resolveForRead(version.getStoredPath());
-            return new SourceFile(path, safeFileName(version.getOriginalName()));
+            return new SourceFile(path, safeFileName(version.getOriginalName()), kind);
         }
         catch (java.io.IOException e)
         {
@@ -172,7 +175,8 @@ public class KnowledgeGraphService
         try
         {
             Path path = fileStorage.resolveForRead(version.getStoredPath());
-            return new SourceFile(path, safeFileName(version.getOriginalName()));
+            String kind = fileKindOf(version.getOriginalName(), version.getStoredPath());
+            return new SourceFile(path, safeFileName(version.getOriginalName()), kind);
         }
         catch (java.io.IOException e)
         {
@@ -180,22 +184,150 @@ public class KnowledgeGraphService
         }
     }
 
-    private boolean isPdfFileAvailable(KnowledgeChunk chunk)
+    /**
+     * 在线定位预览：PDF 返回页码与高亮文本（前端 PDF.js 渲染）；
+     * PPTX 用 POI 抽出指定幻灯片正文，供前端内嵌高亮，避免下载。
+     */
+    public Map<String, Object> locatePreview(Long chunkId, Integer startOffset, Integer endOffset,
+        Integer slideNo, List<Long> roleIds, boolean admin)
     {
-        if (fileStorage == null || chunk == null || !"PDF".equalsIgnoreCase(chunk.getSourceType())) return false;
+        Map<String, Object> evidence = evidence(chunkId, startOffset, endOffset, roleIds, admin);
+        String kind = evidence.get("fileKind") == null ? null : String.valueOf(evidence.get("fileKind"));
+        Map<String, Object> result = new LinkedHashMap<>(evidence);
+        result.put("kind", kind);
+        if (!Boolean.TRUE.equals(evidence.get("fileAvailable")))
+            throw new IllegalArgumentException("当前知识源没有可打开的 PDF/PPTX 原件（文件缺失或上传目录已变更）");
+        if ("pptx".equals(kind))
+        {
+            int targetSlide = slideNo != null && slideNo > 0
+                ? slideNo
+                : (evidence.get("pageStart") instanceof Number n ? Math.max(1, n.intValue()) : 1);
+            Map<String, Object> slide = extractPptxSlide(chunkId, targetSlide, roleIds, admin);
+            result.putAll(slide);
+        }
+        else if ("pdf".equals(kind))
+        {
+            result.put("pageNumber", evidence.get("pageStart") == null ? 1 : evidence.get("pageStart"));
+        }
+        else
+        {
+            throw new IllegalArgumentException("暂不支持该原件格式的在线定位预览");
+        }
+        return result;
+    }
+
+    private Map<String, Object> extractPptxSlide(Long chunkId, int slideNumber, List<Long> roleIds, boolean admin)
+    {
+        SourceFile sourceFile = sourceFile(chunkId, roleIds, admin);
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(sourceFile.path());
+             org.apache.poi.xslf.usermodel.XMLSlideShow show = new org.apache.poi.xslf.usermodel.XMLSlideShow(in))
+        {
+            List<org.apache.poi.xslf.usermodel.XSLFSlide> slides = show.getSlides();
+            if (slides.isEmpty()) throw new IllegalArgumentException("PPTX 中没有可预览的幻灯片");
+            int index = Math.min(Math.max(slideNumber, 1), slides.size()) - 1;
+            org.apache.poi.xslf.usermodel.XSLFSlide slide = slides.get(index);
+            List<String> paragraphs = new ArrayList<>();
+            String title = "";
+            for (org.apache.poi.xslf.usermodel.XSLFShape shape : slide.getShapes())
+            {
+                collectPptxShapeText(shape, paragraphs);
+            }
+            if (!paragraphs.isEmpty()) title = paragraphs.get(0);
+            Map<String, Object> slideView = new LinkedHashMap<>();
+            slideView.put("slideNumber", index + 1);
+            slideView.put("slideCount", slides.size());
+            slideView.put("slideTitle", title);
+            slideView.put("paragraphs", paragraphs);
+            slideView.put("fullText", String.join("\n", paragraphs));
+            return slideView;
+        }
+        catch (java.io.IOException e)
+        {
+            throw new IllegalArgumentException("读取 PPTX 幻灯片失败：" + e.getMessage(), e);
+        }
+    }
+
+    private void collectPptxShapeText(org.apache.poi.xslf.usermodel.XSLFShape shape, List<String> paragraphs)
+    {
+        if (shape instanceof org.apache.poi.xslf.usermodel.XSLFGroupShape group)
+        {
+            for (org.apache.poi.xslf.usermodel.XSLFShape child : group.getShapes())
+                collectPptxShapeText(child, paragraphs);
+            return;
+        }
+        if (shape instanceof org.apache.poi.xslf.usermodel.XSLFTable table)
+        {
+            for (org.apache.poi.xslf.usermodel.XSLFTableRow row : table.getRows())
+            {
+                List<String> cells = new ArrayList<>();
+                for (org.apache.poi.xslf.usermodel.XSLFTableCell cell : row.getCells())
+                {
+                    String cellText = cell == null || cell.getText() == null ? "" : cell.getText().trim();
+                    if (!cellText.isBlank()) cells.add(cellText);
+                }
+                if (!cells.isEmpty()) paragraphs.add(String.join(" | ", cells));
+            }
+            return;
+        }
+        if (shape instanceof org.apache.poi.xslf.usermodel.XSLFTextShape textShape)
+        {
+            String text = textShape.getText() == null ? "" : textShape.getText().trim();
+            if (text.isBlank() || text.matches("\\d{1,3}")) return;
+            for (String line : text.split("\\R"))
+            {
+                String trimmed = line == null ? "" : line.trim();
+                if (!trimmed.isBlank()) paragraphs.add(trimmed);
+            }
+        }
+    }
+
+    private boolean isOriginalFileAvailable(KnowledgeChunk chunk)
+    {
+        if (fileStorage == null || chunk == null) return false;
         KnowledgeVersion version = mapper.selectVersionById(chunk.getVersionId());
         if (version == null) return false;
+        String kind = fileKindOf(version.getOriginalName(), version.getStoredPath());
+        if (!"pdf".equals(kind) && !"pptx".equals(kind)) return false;
         try { fileStorage.resolveForRead(version.getStoredPath()); return true; }
         catch (java.io.IOException ignored) { return false; }
     }
 
+    private String resolveFileKind(KnowledgeChunk chunk)
+    {
+        if (chunk == null) return null;
+        KnowledgeVersion version = mapper.selectVersionById(chunk.getVersionId());
+        if (version == null) return null;
+        return fileKindOf(version.getOriginalName(), version.getStoredPath());
+    }
+
+    private String fileKindOf(String originalName, String storedPath)
+    {
+        String probe = firstNonBlank(originalName, storedPath, "");
+        String lower = probe.toLowerCase(java.util.Locale.ROOT);
+        if (lower.endsWith(".pdf")) return "pdf";
+        if (lower.endsWith(".pptx")) return "pptx";
+        if (lower.endsWith(".docx")) return "docx";
+        if (lower.endsWith(".xlsx")) return "xlsx";
+        return "other";
+    }
+
+    private String firstNonBlank(String... values)
+    {
+        if (values == null) return null;
+        for (String value : values)
+        {
+            if (value != null && !value.isBlank()) return value;
+        }
+        return null;
+    }
+
     private String safeFileName(String value)
     {
-        String name = value == null || value.isBlank() ? "knowledge-source.pdf" : value;
+        String name = value == null || value.isBlank() ? "knowledge-source.bin" : value;
         return name.replace("\r", "").replace("\n", "").replace("\"", "'");
     }
 
-    public record SourceFile(Path path, String originalName) { }
+    public record SourceFile(Path path, String originalName, String kind) { }
 
     private void insertRelation(KnowledgeGraphNode from, KnowledgeGraphNode to, String type,
         KnowledgeBase source, KnowledgeVersion version, KnowledgeChunk chunk, String period)

@@ -44,10 +44,10 @@ class KnowledgeNewsIngestIntegrationTest
         doAnswer(invocation -> { ((Runnable)invocation.getArgument(0)).run(); return null; }).when(executor).execute(any(Runnable.class));
 
         KnowledgeIngestService service = new KnowledgeIngestService(mapper,
-            new KnowledgeFileStorage("target/knowledge-news-ingest"), mock(IAiReportService.class), executor, "");
+            KnowledgeFileStorage.forTests("target/knowledge-news-ingest"), mock(IAiReportService.class), executor, "");
         service.setNewsIngestEnabled(true);
         KnowledgeIngestTask task = service.submitNews(7L, "news-v1", "https://example.com/article/1", "行业快讯",
-            "2023年Q3企业：比亚迪，车型：海豚，销量达到12万辆。", "tester");
+            "2023年Q3企业：比亚迪，车型：海豚，销量达�?2万辆�?, "tester");
 
         assertEquals("2", task.getStatus());
         assertEquals("https://example.com/article/1", versionRef.get().getSourceUrl());
@@ -77,7 +77,7 @@ class KnowledgeNewsIngestIntegrationTest
 
         String json = "{\"total\":2,\"items\":["
             + "{\"id\":801,\"source_name\":\"小鹏汽车\",\"source_site\":\"xiaopeng.com\","
-            + "\"title\":\"小鹏G6上市\",\"content\":\"小鹏G6超级增程车型正式上市，官方指导价为18.68万元。\","
+            + "\"title\":\"小鹏G6上市\",\"content\":\"小鹏G6超级增程车型正式上市，官方指导价�?8.68万元。\","
             + "\"published_at\":\"2026/03/06\",\"canonical_url\":\"https://www.xiaopeng.com/news/801.html\","
             + "\"content_hash\":\"hash-801\"},"
             + "{\"id\":802,\"source_name\":\"比亚迪\",\"source_site\":\"byd.com\","
@@ -87,7 +87,7 @@ class KnowledgeNewsIngestIntegrationTest
         MockMultipartFile file = new MockMultipartFile("file", "crawler.json", "application/json",
             json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         KnowledgeIngestService service = new KnowledgeIngestService(mapper,
-            new KnowledgeFileStorage("target/knowledge-news-json"), mock(IAiReportService.class), executor, "");
+            KnowledgeFileStorage.forTests("target/knowledge-news-json"), mock(IAiReportService.class), executor, "");
         service.setNewsIngestEnabled(true);
 
         KnowledgeIngestTask task = service.submitNewsJson(8L, "crawler-v1", file, "tester");

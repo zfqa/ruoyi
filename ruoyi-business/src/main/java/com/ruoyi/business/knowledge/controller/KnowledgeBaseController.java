@@ -373,19 +373,50 @@ public class KnowledgeBaseController extends BaseController
         }
     }
 
-    /** 通过切片权限校验后流式返回PDF原件；服务器物理路径不会暴露给浏览器。 */
+    /** 在线定位预览元数据：PDF 返回页码/高亮词；PPTX 返回指定幻灯片正文供内嵌高亮。 */
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/evidence/{chunkId}/locate-preview")
+    public AjaxResult locatePreview(@PathVariable Long chunkId,
+        @RequestParam(value = "startOffset", required = false) Integer startOffset,
+        @RequestParam(value = "endOffset", required = false) Integer endOffset,
+        @RequestParam(value = "slide", required = false) Integer slide)
+    {
+        try
+        {
+            return success(knowledgeGraphService.locatePreview(chunkId, startOffset, endOffset, slide, roleIds(),
+                getLoginUser().getUser().isAdmin()));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    /** 通过切片权限校验后流式返回 PDF/PPTX 原件；服务器物理路径不会暴露给浏览器。 */
     @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
     @GetMapping("/evidence/{chunkId}/file")
     public void evidenceFile(@PathVariable Long chunkId, HttpServletResponse response) throws java.io.IOException
     {
-        KnowledgeGraphService.SourceFile sourceFile = knowledgeGraphService.sourceFile(chunkId, roleIds(),
-            getLoginUser().getUser().isAdmin());
-        String encoded = URLEncoder.encode(sourceFile.originalName(), StandardCharsets.UTF_8).replace("+", "%20");
-        response.setContentType("application/pdf");
-        response.setHeader("Cache-Control", "no-store");
-        response.setHeader("Content-Disposition", "inline; filename*=UTF-8''" + encoded);
-        response.setContentLengthLong(Files.size(sourceFile.path()));
-        Files.copy(sourceFile.path(), response.getOutputStream());
+        try
+        {
+            KnowledgeGraphService.SourceFile sourceFile = knowledgeGraphService.sourceFile(chunkId, roleIds(),
+                getLoginUser().getUser().isAdmin());
+            String encoded = URLEncoder.encode(sourceFile.originalName(), StandardCharsets.UTF_8).replace("+", "%20");
+            String contentType = contentTypeForName(sourceFile.originalName());
+            response.setContentType(contentType);
+            response.setHeader("Cache-Control", "no-store");
+            // 一律 inline：前端用 PDF.js / 幻灯片面板在线定位高亮，不再走下载
+            response.setHeader("Content-Disposition", "inline; filename*=UTF-8''" + encoded);
+            response.setContentLengthLong(Files.size(sourceFile.path()));
+            Files.copy(sourceFile.path(), response.getOutputStream());
+        }
+        catch (IllegalArgumentException | IllegalStateException ex)
+        {
+            response.resetBuffer();
+            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            response.setContentType("application/json;charset=UTF-8");
+            response.getWriter().write(com.alibaba.fastjson2.JSON.toJSONString(AjaxResult.error(ex.getMessage())));
+        }
     }
 
     /** 按版本权限流式返回知识库持久化原件（含整车分析自动入库的 Office 报告）。 */

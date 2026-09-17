@@ -21,21 +21,44 @@ class LinkDiscoveryResult:
 
 
 def _listing_publish_time(anchor, selector: str | None) -> str | None:
-    """Read a configured listing-card date without assuming a fixed DOM."""
-    if selector:
-        current = anchor
-        # A selector is often a sibling of the link inside a card.  Search the
-        # anchor and a few enclosing card-like elements, but never the whole
-        # page (which could bind the first card's date to every article).
-        for _ in range(5):
-            if current is None:
-                break
-            node = current.select_one(selector)
-            if node and (value := " ".join(node.get_text(" ", strip=True).split())):
-                return value
-            current = current.parent
-    value = " ".join(anchor.get_text(" ", strip=True).split())
-    return value or None
+    """Read a configured listing-card date only.
+
+    Without an explicit ``article_time_selector``, return ``None``.  Heuristic
+    parent/sibling scanning previously invented unrelated dates (e.g. a nearby
+    card or chrome date) and caused in-range articles to be dropped by the
+    listing pre-filter before detail parsing could recover the real date.
+    """
+    from news_service.utils.date_utils import first_parseable_publish_value
+
+    if not selector:
+        return None
+
+    def _usable(raw: str | None) -> str | None:
+        text = " ".join(str(raw or "").split())
+        if not text:
+            return None
+        if usable := first_parseable_publish_value(text):
+            return usable
+        # Allow a short absolute date embedded in a slightly longer label.
+        if len(text) <= 80:
+            from news_service.utils.date_utils import parse_publish_date
+
+            if parse_publish_date(text) is not None:
+                return first_parseable_publish_value(text)
+        return None
+
+    current = anchor
+    # A selector is often a sibling of the link inside a card.  Search the
+    # anchor and a few enclosing card-like elements, but never the whole
+    # page (which could bind the first card's date to every article).
+    for _ in range(5):
+        if current is None:
+            break
+        for node in current.select(selector):
+            if usable := _usable(node.get_text(" ", strip=True)):
+                return usable
+        current = current.parent
+    return None
 
 
 def normalize_article_url(source: NewsSourceConfig, value: str, base_url: str) -> str | None:

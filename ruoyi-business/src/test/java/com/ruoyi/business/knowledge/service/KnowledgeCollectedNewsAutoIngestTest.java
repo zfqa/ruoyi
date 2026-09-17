@@ -28,7 +28,7 @@ class KnowledgeCollectedNewsAutoIngestTest
     {
         KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
         ThreadPoolTaskExecutor executor = mock(ThreadPoolTaskExecutor.class);
-        KnowledgeFileStorage storage = new KnowledgeFileStorage("target/knowledge-collected-news-test");
+        KnowledgeFileStorage storage = KnowledgeFileStorage.forTests("target/knowledge-collected-news-test");
         AtomicReference<KnowledgeBase> sourceRef = new AtomicReference<>();
         AtomicReference<KnowledgeVersion> versionRef = new AtomicReference<>();
         AtomicReference<KnowledgeIngestTask> taskRef = new AtomicReference<>();
@@ -73,13 +73,13 @@ class KnowledgeCollectedNewsAutoIngestTest
         KnowledgeIngestService service = new KnowledgeIngestService(mapper, storage,
             mock(IAiReportService.class), executor, "");
         KnowledgeIngestTask task = service.submitCollectedNews(27L, "示例站点", "example.com",
-            "新能源汽车政策推动市场增长", "政策提出扩大新能源汽车消费，并支持产业链技术升级和产能建设。",
+            "新能源汽车政策推动市场增�?, "政策提出扩大新能源汽车消费，并支持产业链技术升级和产能建设�?,
             "https://example.com/news/27", "2026-09-12T08:30:00", "2026-09-13T09:00:00",
-            storage.sha256("政策提出扩大新能源汽车消费，并支持产业链技术升级和产能建设。"), "crawler");
+            storage.sha256("政策提出扩大新能源汽车消费，并支持产业链技术升级和产能建设�?), "crawler");
 
         assertEquals("2", task.getStatus());
         assertEquals("NEWS-ARTICLE-27", sourceRef.get().getSourceCode());
-        assertEquals("新能源汽车政策推动市场增长", sourceRef.get().getSourceName());
+        assertEquals("新能源汽车政策推动市场增�?, sourceRef.get().getSourceName());
         assertEquals("NEWS", sourceRef.get().getSourceType());
         assertEquals("https://example.com/news/27", versionRef.get().getSourceUrl());
         assertEquals(22L, sourceRef.get().getCurrentVersionId());

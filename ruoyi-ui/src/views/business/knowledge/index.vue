@@ -58,7 +58,7 @@
           <div slot="header" class="result-head"><span><b>[S{{ index+1 }}]</b> {{ item.sourceName }}</span><el-tag :type="sourceTypeTag(item.sourceType)" size="mini">{{ sourceTypeLabel(item.sourceType) }}</el-tag></div>
           <p class="snippet">{{ item.sourceSnippet || item.content }}</p>
           <div class="source-meta">
-            <span>版本：{{ item.versionNo }}</span><span v-if="item.originalName">原始文件：{{ item.originalName }}</span><span v-if="item.pageStart">PDF 第 {{ item.pageStart }} 页</span>
+            <span>版本：{{ item.versionNo }}</span><span v-if="item.originalName">原始文件：{{ item.originalName }}</span><span v-if="item.pageStart">第 {{ item.pageStart }} 页</span>
             <span v-if="item.metricId">指标：{{ item.metricId }}</span>
             <el-button v-if="['PDF', 'NEWS'].includes(item.sourceType)" class="source-link-button" type="text" size="mini" :icon="item.sourceType === 'PDF' ? 'el-icon-document' : 'el-icon-news'" @click="openEvidence(item)">查看原文</el-button>
             <a v-else-if="item.sourceUrl" :href="item.sourceUrl" target="_blank" rel="noopener noreferrer">查看原文</a>
@@ -280,11 +280,66 @@
 
     <el-dialog title="源文档精确定位" :visible.sync="evidenceOpen" width="760px">
       <div v-if="evidenceDetail">
-        <div class="source-meta"><span>{{ evidenceDetail.sourceName }}</span><span>{{ evidenceDetail.originalName }}</span><span>版本 {{ evidenceDetail.versionNo }}</span><span v-if="evidenceDetail.pageStart">PDF 第 {{ evidenceDetail.pageStart }} 页</span></div>
+        <div class="source-meta">
+          <span>{{ evidenceDetail.sourceName }}</span>
+          <span>{{ evidenceDetail.originalName }}</span>
+          <span>版本 {{ evidenceDetail.versionNo }}</span>
+          <span v-if="evidenceDetail.pageStart">{{ pageLabel(evidenceDetail) }}</span>
+          <el-tag v-if="evidenceDetail.fileKind" size="mini" type="info">{{ fileKindLabel(evidenceDetail.fileKind) }}</el-tag>
+        </div>
         <pre class="evidence-content"><span>{{ evidenceBefore }}</span><mark>{{ evidenceDetail.highlightedText }}</mark><span>{{ evidenceAfter }}</span></pre>
-        <el-button v-if="evidenceDetail.fileAvailable" type="primary" size="small" icon="el-icon-document" @click="openSourcePdf">在原 PDF 对应页查看</el-button>
+        <el-button v-if="evidenceDetail.fileAvailable" type="primary" size="small" icon="el-icon-aim" :loading="pdfPreviewLoading" @click="openSourceFile">{{ openOriginalButtonText }}</el-button>
         <a v-if="evidenceDetail.sourceUrl" class="external-source-link" :href="evidenceDetail.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源网站原文</a>
       </div>
+    </el-dialog>
+
+    <el-dialog
+      :title="previewDialogTitle"
+      :visible.sync="pdfPreviewOpen"
+      width="92%"
+      top="3vh"
+      append-to-body
+      custom-class="pdf-preview-dialog"
+      @closed="revokePdfPreview"
+    >
+      <div class="pdf-preview-toolbar">
+        <span>文件：{{ pdfPreviewName || '原件' }}</span>
+        <span v-if="pdfPreviewPage">{{ pdfPreviewKind === 'pptx' ? '定位幻灯片' : '定位页' }}：第 {{ pdfPreviewPage }} 页</span>
+        <span v-if="pdfPreviewKind === 'pptx' && pptxSlideCount">共 {{ pptxSlideCount }} 页</span>
+        <el-tag v-if="highlightMatched === true" size="mini" type="success">已高亮定位</el-tag>
+        <el-tag v-else-if="highlightMatched === false" size="mini" type="warning">已跳转页面，未精确匹配到原文（可对照下方高亮文本）</el-tag>
+        <template v-if="pdfPreviewKind === 'pptx' && pptxSlideCount > 1">
+          <el-button type="text" size="mini" :disabled="pdfPreviewPage <= 1 || pdfPreviewLoading" @click="shiftPptxSlide(-1)">上一页</el-button>
+          <el-button type="text" size="mini" :disabled="pdfPreviewPage >= pptxSlideCount || pdfPreviewLoading" @click="shiftPptxSlide(1)">下一页</el-button>
+        </template>
+      </div>
+
+      <div v-if="pdfPreviewKind === 'pdf'" class="pdf-locate-stage" v-loading="pdfPreviewLoading">
+        <div class="pdf-locate-scroll">
+          <div class="pdf-locate-canvas-wrap">
+            <canvas ref="pdfCanvas" class="pdf-locate-canvas" />
+            <canvas ref="pdfOverlay" class="pdf-locate-overlay" />
+          </div>
+        </div>
+        <div v-if="pdfPreviewHighlight" class="locate-snippet">
+          <div class="locate-snippet-label">定位摘录</div>
+          <mark>{{ pdfPreviewHighlight }}</mark>
+        </div>
+      </div>
+
+      <div v-else-if="pdfPreviewKind === 'pptx'" class="pptx-preview-panel" v-loading="pdfPreviewLoading">
+        <div class="pptx-slide-card">
+          <div class="pptx-slide-badge">幻灯片 {{ pdfPreviewPage }} / {{ pptxSlideCount || '?' }}</div>
+          <h3 v-if="pptxSlideTitle" class="pptx-slide-title">{{ pptxSlideTitle }}</h3>
+          <div class="pptx-slide-body" v-html="pptxHighlightedHtml" />
+        </div>
+        <div v-if="pdfPreviewHighlight" class="locate-snippet">
+          <div class="locate-snippet-label">定位摘录</div>
+          <mark>{{ pdfPreviewHighlight }}</mark>
+        </div>
+      </div>
+
+      <div v-else class="empty-tip">正在加载原件…</div>
     </el-dialog>
   </div>
 </template>
@@ -293,9 +348,10 @@
 import { listKnowledgeBase, getKnowledgeBase, addKnowledgeBase, updateKnowledgeBase, delKnowledgeBase,
   ingestPdf, ingestNews, ingestPolicy, ingestNewsJson, ingestReport, getKnowledgeTask, listKnowledgeVersions, searchKnowledge,
   submitKnowledgeQaTask, getKnowledgeQaTask, listKnowledgeQaTasks,
-  getKnowledgeEvidence, getKnowledgeEvidenceFile } from '@/api/business/knowledge/knowledgeBase'
+  getKnowledgeEvidence, getKnowledgeEvidenceFile, getKnowledgeLocatePreview } from '@/api/business/knowledge/knowledgeBase'
 import * as echarts from 'echarts'
 import { blobValidate } from '@/utils/ruoyi'
+import { renderPdfPageWithHighlight } from '@/utils/pdfLocate'
 
 export default {
   name: 'KnowledgeBase',
@@ -316,12 +372,28 @@ export default {
       qaHistory: [], qaHistoryLoading: false,
       qaGraphFilter: { period: '', dataType: '' }, qaGraphData: { nodes: [], links: [], categories: [] },
       qaGraphCenterId: null, selectedQaRelation: null, qaGraphInstance: null,
-      evidenceOpen: false, evidenceDetail: null
+      evidenceOpen: false, evidenceDetail: null,
+      pdfPreviewOpen: false, pdfPreviewLoading: false, pdfPreviewUrl: '', pdfPreviewObjectUrl: '',
+      pdfPreviewPage: 1, pdfPreviewName: '', pdfPreviewKind: 'pdf', pdfPreviewBlob: null,
+      pdfPreviewHighlight: '', pdfPreviewBytes: null, highlightMatched: null,
+      pptxSlideCount: 0, pptxSlideTitle: '', pptxParagraphs: [], pptxFullText: ''
     }
   },
   created() { this.getList() },
-  beforeDestroy() { this.stopPolling(); this.stopQaPolling(); if (this.qaGraphInstance) this.qaGraphInstance.dispose() },
+  beforeDestroy() { this.stopPolling(); this.stopQaPolling(); this.revokePdfPreview(); if (this.qaGraphInstance) this.qaGraphInstance.dispose() },
   computed: {
+    openOriginalButtonText() {
+      const kind = this.evidenceDetail && this.evidenceDetail.fileKind
+      if (kind === 'pptx') return '跳转到原 PPTX 定位并高亮'
+      if (kind === 'pdf') return '跳转到原 PDF 定位并高亮'
+      return '跳转到原文档定位并高亮'
+    },
+    previewDialogTitle() {
+      return this.pdfPreviewKind === 'pptx' ? '原 PPTX 定位预览' : '原 PDF 定位预览'
+    },
+    pptxHighlightedHtml() {
+      return this.buildHighlightedHtml(this.pptxParagraphs, this.pdfPreviewHighlight || (this.evidenceDetail && this.evidenceDetail.highlightedText))
+    },
     evidenceBefore() { if (!this.evidenceDetail) return ''; return this.evidenceDetail.content.slice(0, this.evidenceDetail.startOffset) },
     evidenceAfter() { if (!this.evidenceDetail) return ''; return this.evidenceDetail.content.slice(this.evidenceDetail.endOffset) },
     qaGraphCenterName() {
@@ -491,27 +563,188 @@ export default {
     },
     openEvidence(item) { const chunkId = item.chunkId || item.id; if (!chunkId) return this.$modal.msgError('该来源缺少切片定位信息'); getKnowledgeEvidence(chunkId, { startOffset: item.startOffset, endOffset: item.endOffset }).then(r => { this.evidenceDetail = r.data; this.evidenceOpen = true }) },
     openCitation(item) { const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : item; this.openEvidence({ id: item.id, chunkId: evidence.chunkId || item.chunkId || item.id, startOffset: evidence.startOffset, endOffset: evidence.endOffset }) },
-    openSourcePdf() {
+    pageLabel(item) {
+      if (!item || !item.pageStart) return ''
+      return (item.fileKind === 'pptx' ? '幻灯片第 ' : '第 ') + item.pageStart + ' 页'
+    },
+    fileKindLabel(kind) {
+      return ({ pdf: 'PDF', pptx: 'PPTX', docx: 'DOCX', xlsx: 'XLSX' })[kind] || (kind || '').toUpperCase()
+    },
+    openSourceFile() {
       if (!this.evidenceDetail || !this.evidenceDetail.chunkId) return
-      const viewer = window.open('about:blank', '_blank')
-      if (viewer) viewer.opener = null
-      getKnowledgeEvidenceFile(this.evidenceDetail.chunkId).then(blob => {
-        if (!blobValidate(blob) || ((blob.type || '').toLowerCase().includes('json'))) {
-          return blob.text().then(text => {
-            let message = 'PDF原件打开失败'
-            try { message = JSON.parse(text).msg || message } catch (e) { /* 保留通用提示 */ }
-            if (viewer) viewer.close()
-            this.$modal.msgError(message)
-          })
+      if (!this.evidenceDetail.fileAvailable) {
+        this.$modal.msgError('当前知识源没有可打开的 PDF/PPTX 原件（文件缺失或上传目录已变更）')
+        return
+      }
+      const kind = this.evidenceDetail.fileKind || this.detectFileKind(this.evidenceDetail.originalName)
+      this.pdfPreviewLoading = true
+      this.highlightMatched = null
+      getKnowledgeLocatePreview(this.evidenceDetail.chunkId, {
+        startOffset: this.evidenceDetail.startOffset,
+        endOffset: this.evidenceDetail.endOffset,
+        slide: this.evidenceDetail.pageStart || undefined
+      }).then(async locateRes => {
+        const locate = locateRes.data || {}
+        this.revokePdfPreview()
+        this.pdfPreviewKind = locate.kind || kind
+        this.pdfPreviewName = locate.originalName || this.evidenceDetail.originalName || ''
+        this.pdfPreviewHighlight = locate.highlightedText || this.evidenceDetail.highlightedText || ''
+        this.pdfPreviewPage = Number(locate.pageNumber || locate.slideNumber || locate.pageStart || this.evidenceDetail.pageStart || 1)
+        this.pdfPreviewOpen = true
+
+        if (this.pdfPreviewKind === 'pptx') {
+          this.applyPptxLocate(locate)
+          return
         }
-        const url = URL.createObjectURL(blob)
-        const page = this.evidenceDetail.pageStart || 1
-        const search = encodeURIComponent((this.evidenceDetail.highlightedText || '').replace(/\s+/g, ' ').slice(0, 120))
-        const target = `${url}#page=${page}${search ? `&search=${search}` : ''}`
-        if (viewer) viewer.location.href = target
-        else window.open(target, '_blank', 'noopener')
-        setTimeout(() => URL.revokeObjectURL(url), 60000)
-      }).catch(() => { if (viewer) viewer.close() })
+
+        if (this.pdfPreviewKind === 'pdf') {
+          await this.renderPdfLocate()
+          return
+        }
+        this.$modal.msgError('暂不支持该原件格式的在线定位预览')
+      }).catch(error => {
+        this.$modal.msgError((error && (error.msg || error.message)) || '原件定位打开失败')
+      }).finally(() => { this.pdfPreviewLoading = false })
+    },
+    applyPptxLocate(locate) {
+      this.pptxSlideCount = Number(locate.slideCount || 0)
+      this.pptxSlideTitle = locate.slideTitle || ''
+      this.pptxParagraphs = Array.isArray(locate.paragraphs) ? locate.paragraphs : []
+      this.pptxFullText = locate.fullText || this.pptxParagraphs.join('\n')
+      this.pdfPreviewPage = Number(locate.slideNumber || this.pdfPreviewPage || 1)
+      this.highlightMatched = this.textContainsNormalized(this.pptxFullText, this.pdfPreviewHighlight)
+      this.$nextTick(() => this.scrollHighlightIntoView())
+    },
+    async renderPdfLocate() {
+      const blob = await getKnowledgeEvidenceFile(this.evidenceDetail.chunkId)
+      if (!blobValidate(blob) || ((blob.type || '').toLowerCase().includes('json'))) {
+        const text = await blob.text()
+        let message = 'PDF 原件打开失败'
+        try { message = JSON.parse(text).msg || message } catch (e) { /* keep */ }
+        throw new Error(message)
+      }
+      const bytes = await blob.arrayBuffer()
+      if (!bytes || bytes.byteLength < 5) throw new Error('PDF 原件内容为空')
+      const head = String.fromCharCode(...new Uint8Array(bytes.slice(0, 5)))
+      if (head !== '%PDF-') throw new Error('返回内容不是有效PDF文件')
+      this.pdfPreviewBytes = bytes
+      await this.$nextTick()
+      let canvas = this.$refs.pdfCanvas
+      let overlay = this.$refs.pdfOverlay
+      for (let i = 0; i < 20 && (!canvas || !overlay); i++) {
+        await new Promise(resolve => setTimeout(resolve, 50))
+        canvas = this.$refs.pdfCanvas
+        overlay = this.$refs.pdfOverlay
+      }
+      if (!canvas || !overlay) throw new Error('PDF 预览画布未就绪')
+      const result = await renderPdfPageWithHighlight({
+        data: bytes,
+        pageNumber: this.pdfPreviewPage,
+        highlightText: this.pdfPreviewHighlight,
+        canvas,
+        overlay
+      })
+      this.highlightMatched = !!result.matched
+      if (result.pageCount) this.pptxSlideCount = result.pageCount
+    },
+    shiftPptxSlide(delta) {
+      if (this.pdfPreviewKind !== 'pptx' || !this.evidenceDetail) return
+      const next = Math.min(Math.max(1, this.pdfPreviewPage + delta), this.pptxSlideCount || this.pdfPreviewPage)
+      if (next === this.pdfPreviewPage) return
+      this.pdfPreviewLoading = true
+      getKnowledgeLocatePreview(this.evidenceDetail.chunkId, {
+        startOffset: this.evidenceDetail.startOffset,
+        endOffset: this.evidenceDetail.endOffset,
+        slide: next
+      }).then(r => {
+        this.applyPptxLocate(r.data || {})
+      }).catch(error => {
+        this.$modal.msgError((error && (error.msg || error.message)) || '切换幻灯片失败')
+      }).finally(() => { this.pdfPreviewLoading = false })
+    },
+    buildHighlightedHtml(paragraphs, highlightText) {
+      const lines = Array.isArray(paragraphs) ? paragraphs : []
+      if (!lines.length) return '<div class="empty-tip">该幻灯片没有可提取的文本</div>'
+      const needle = this.normalizeLocateText(highlightText)
+      let remaining = needle
+      return lines.map(line => {
+        const safe = this.escapeHtml(line)
+        if (!remaining) return `<p>${safe}</p>`
+        const normalizedLine = this.normalizeLocateText(line)
+        let idx = normalizedLine.indexOf(remaining)
+        let matchLen = remaining.length
+        if (idx < 0 && remaining.length > 20) {
+          const partial = remaining.slice(0, 20)
+          idx = normalizedLine.indexOf(partial)
+          matchLen = partial.length
+        }
+        if (idx < 0) return `<p>${safe}</p>`
+        remaining = ''
+        return `<p>${this.wrapNormalizedHighlight(line, idx, Math.min(matchLen, normalizedLine.length - idx))}</p>`
+      }).join('')
+    },
+    wrapNormalizedHighlight(rawLine, normStart, normLen) {
+      // Map normalized index back onto original string by walking non-whitespace chars.
+      let seen = 0
+      let start = -1
+      let end = -1
+      for (let i = 0; i < rawLine.length; i++) {
+        if (/\s/.test(rawLine[i])) continue
+        if (seen === normStart) start = i
+        seen += 1
+        if (seen === normStart + normLen) {
+          end = i + 1
+          break
+        }
+      }
+      if (start < 0) return this.escapeHtml(rawLine)
+      if (end < 0) end = rawLine.length
+      return `${this.escapeHtml(rawLine.slice(0, start))}<mark>${this.escapeHtml(rawLine.slice(start, end))}</mark>${this.escapeHtml(rawLine.slice(end))}`
+    },
+    normalizeLocateText(value) {
+      return String(value || '').replace(/\s+/g, '').toLowerCase()
+    },
+    textContainsNormalized(haystack, needle) {
+      const n = this.normalizeLocateText(needle)
+      if (!n) return false
+      const h = this.normalizeLocateText(haystack)
+      return h.includes(n) || (n.length > 20 && h.includes(n.slice(0, 20)))
+    },
+    escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+    },
+    scrollHighlightIntoView() {
+      const root = this.$el && this.$el.querySelector && this.$el.querySelector('.pptx-slide-body mark')
+      if (root && root.scrollIntoView) root.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    },
+    detectFileKind(name) {
+      const lower = (name || '').toLowerCase()
+      if (lower.endsWith('.pdf')) return 'pdf'
+      if (lower.endsWith('.pptx')) return 'pptx'
+      return 'other'
+    },
+    revokePdfPreview() {
+      if (this.pdfPreviewObjectUrl) {
+        URL.revokeObjectURL(this.pdfPreviewObjectUrl)
+      }
+      this.pdfPreviewObjectUrl = ''
+      this.pdfPreviewUrl = ''
+      this.pdfPreviewName = ''
+      this.pdfPreviewPage = 1
+      this.pdfPreviewKind = 'pdf'
+      this.pdfPreviewBlob = null
+      this.pdfPreviewBytes = null
+      this.pdfPreviewHighlight = ''
+      this.highlightMatched = null
+      this.pptxSlideCount = 0
+      this.pptxSlideTitle = ''
+      this.pptxParagraphs = []
+      this.pptxFullText = ''
     },
     citationPreview(item) { const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : null; return (evidence && evidence.evidenceSnippet) || item.sourceSnippet || '暂无摘要' },
     sourceIcon(type) { return ({ NEWS: 'el-icon-news', POLICY: 'el-icon-document-checked', PDF: 'el-icon-document', REPORT: 'el-icon-data-analysis' })[type] || 'el-icon-files' },
@@ -537,5 +770,21 @@ export default {
 <style scoped>
 .mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.is-disabled { opacity: 0.45; cursor: not-allowed; }.form-tip { margin-top: 6px; color: #909399; font-size: 12px; line-height: 1.4; }.ingest-success { color:#67c23a; margin-right: 8px; font-size: 12px; }.ingest-running { color:#e6a23c; margin-right: 8px; font-size: 12px; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.qa-graph { height:500px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph-filter { margin-bottom:4px; }.qa-graph-status { margin:0 0 12px; color:#409eff; font-weight:600; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
 .source-meta { align-items:center; }.source-link-button { padding:0; }.external-source-link { margin-left:16px; }
+.pdf-preview-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:14px; margin-bottom:10px; color:#606266; font-size:13px; }
+.pdf-locate-stage { display:flex; gap:16px; align-items:flex-start; min-height:70vh; }
+.pdf-locate-scroll { flex:1; min-width:0; overflow:auto; max-height:78vh; background:#525659; border:1px solid #ebeef5; text-align:center; padding:12px; }
+.pdf-locate-canvas-wrap { position:relative; display:inline-block; max-width:100%; }
+.pdf-locate-canvas, .pdf-locate-overlay { display:block; max-width:100%; height:auto; }
+.pdf-locate-overlay { position:absolute; left:0; top:0; pointer-events:none; }
+.locate-snippet { width:280px; flex-shrink:0; padding:12px; background:#fffbe6; border:1px solid #ffe58f; border-radius:6px; line-height:1.7; max-height:78vh; overflow:auto; }
+.locate-snippet-label { color:#909399; font-size:12px; margin-bottom:8px; }
+.locate-snippet mark { background:#ffe58f; }
+.pptx-preview-panel { padding:8px 4px 12px; display:flex; gap:16px; align-items:flex-start; }
+.pptx-slide-card { flex:1; min-width:0; min-height:60vh; max-height:78vh; overflow:auto; padding:28px 32px; background:linear-gradient(180deg,#f8fafc 0%,#ffffff 40%); border:1px solid #dcdfe6; border-radius:10px; box-shadow:0 8px 24px rgba(31,45,61,.08); }
+.pptx-slide-badge { display:inline-block; margin-bottom:12px; padding:2px 10px; border-radius:999px; background:#ecf5ff; color:#409eff; font-size:12px; }
+.pptx-slide-title { margin:0 0 16px; font-size:22px; color:#303133; }
+.pptx-slide-body { line-height:1.9; color:#303133; font-size:15px; }
+.pptx-slide-body p { margin:0 0 10px; }
+.pptx-slide-body mark { background:#ffe58f; color:#303133; padding:0 2px; border-radius:2px; }
 .analysis-timeline { padding:6px 8px 0 6px; }.analysis-step-card { line-height:1.75; }.analysis-step-title { font-weight:700; font-size:15px; color:#303133; margin-bottom:6px; }.analysis-boundary { color:#e6a23c; }.analysis-evidences { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:6px; padding-top:6px; border-top:1px dashed #dcdfe6; }
 </style>

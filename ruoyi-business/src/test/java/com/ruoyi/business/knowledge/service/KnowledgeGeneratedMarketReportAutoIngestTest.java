@@ -35,7 +35,7 @@ class KnowledgeGeneratedMarketReportAutoIngestTest
         KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
         IAiReportService reportService = mock(IAiReportService.class);
         ThreadPoolTaskExecutor executor = mock(ThreadPoolTaskExecutor.class);
-        KnowledgeFileStorage storage = new KnowledgeFileStorage("target/knowledge-auto-market-report-test");
+        KnowledgeFileStorage storage = KnowledgeFileStorage.forTests("target/knowledge-auto-market-report-test");
         AtomicReference<KnowledgeBase> sourceRef = new AtomicReference<>();
         AtomicReference<KnowledgeVersion> versionRef = new AtomicReference<>();
         AtomicReference<KnowledgeIngestTask> taskRef = new AtomicReference<>();
@@ -96,7 +96,7 @@ class KnowledgeGeneratedMarketReportAutoIngestTest
         assertTrue(Files.isRegularFile(Path.of(versionRef.get().getStoredPath())));
         assertEquals("/business/knowledge/versions/201/file", versionRef.get().getSourceUrl());
         assertFalse(chunks.isEmpty());
-        assertTrue(chunks.stream().anyMatch(chunk -> chunk.getContent().contains("新能源汽车份额持续提升")));
+        assertTrue(chunks.stream().anyMatch(chunk -> chunk.getContent().contains("新能源汽车份额持续提�?)));
         assertTrue(chunks.stream().anyMatch(chunk -> Long.valueOf(401L).equals(chunk.getReportId())));
         assertTrue(chunks.stream().anyMatch(chunk -> chunk.getContent().contains("440293")
             && "market.metrics".equals(chunk.getMetricId())));

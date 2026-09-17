@@ -55,6 +55,14 @@ public class VehicleCollectController extends BaseController
     }
 
     @PreAuthorize("@ss.hasPermi('business:vehicle:collect:list')")
+    @GetMapping("/auth-status")
+    public AjaxResult authStatus()
+    {
+        try { return success(client.authStatus()); }
+        catch (AgentServiceClientException exception) { return error(exception.getMessage()); }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:vehicle:collect:list')")
     @GetMapping("/brands")
     public AjaxResult brands()
     {

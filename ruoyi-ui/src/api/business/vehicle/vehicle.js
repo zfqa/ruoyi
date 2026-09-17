@@ -1,5 +1,6 @@
 import request from '@/utils/request'
 
+export const getVehicleAuthStatus = () => request({ url: '/business/vehicle/collect/auth-status', method: 'get' })
 export const listVehicleBrands = () => request({ url: '/business/vehicle/collect/brands', method: 'get' })
 // 首次选择品牌会触发 Python 的实时发现；该请求必须长于 Java 的 600 秒上游等待，
 // 但不影响其他普通页面接口的全局 10 秒超时。

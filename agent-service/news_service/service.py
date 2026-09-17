@@ -682,6 +682,9 @@ class NewsService:
     def delete_articles(self, article_ids: list[int]) -> int:
         return self.store.delete_articles(article_ids)
 
+    def delete_by_canonical_urls(self, canonical_urls: list[str]) -> int:
+        return self.store.delete_by_canonical_urls(canonical_urls)
+
     def delete_by_source_site(self, **filters) -> int:
         return self.store.delete_by_source_site(**filters)
 

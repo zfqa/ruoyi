@@ -49,7 +49,7 @@ mysql -u root -p ry-vue < sql/business_knowledge_qa_audit.sql
 mysql -u root -p ry-vue < sql/business_agent_integration_20260913.sql
 ```
 
-该脚本只扩展新闻任务表并创建新闻文章/任务关系表。新闻正文随后由 Java 自动投影到现有统一知识库表，不创建第二套新闻知识库。
+该脚本只扩展新闻任务表并创建新闻文章/任务关系表。新闻正文由采集任务写入主库；统一知识库需在前端手动点击「入库」后，由 Java 发布到现有知识库表，不创建第二套新闻知识库。
 
 在已有数据库上升级车载市场分析到 Market Agent 21.0 时，执行：
 

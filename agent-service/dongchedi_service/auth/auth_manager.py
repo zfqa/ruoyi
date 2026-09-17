@@ -104,7 +104,12 @@ class DongchediAuthManager:
             return AuthResult(AuthStatus.AUTH_STATE_INVALID, "登录状态文件格式无效，可重新人工登录覆盖。")
         if not raw["cookies"] and not raw["origins"]:
             return AuthResult(AuthStatus.AUTH_REQUIRED, "登录状态文件存在，但其中没有可复用的登录状态。")
-        return AuthResult(AuthStatus.AUTH_REQUIRED, "已找到登录状态文件；需访问目标页面后验证是否仍有效。")
+        return AuthResult(AuthStatus.AUTHENTICATED, "已找到可用的登录状态文件；实际采集时再验证会话是否仍有效。")
+
+    def local_state_ready(self) -> bool:
+        """True when a structurally usable storage-state file is present locally."""
+        result = self.state_file_status()
+        return result.status == AuthStatus.AUTHENTICATED
 
     def _start_browser(self, *, headless: bool) -> tuple[Playwright, Browser]:
         try:

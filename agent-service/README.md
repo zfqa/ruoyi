@@ -7,7 +7,7 @@
 - `/data/upload` 默认且在 Java 调用中强制 `index_to_kb=false`、`persist_review=false`。
 - Python 不提供 Chroma/本地审核库接口；页码、表格、图表、实体和语义切片以 JSON 返回 Java。
 - 文档解析所需 LLM 地址、模型和 API Key 由 Java 的统一 LLM 配置按内部请求下发，不读取同事机器的密钥。
-- 新闻抓取允许使用 SQLite 保存采集运行缓存与去重状态，但正式问答、引用和图谱数据由 Java 自动发布到现有 MySQL 知识库。
+- 新闻抓取允许使用 SQLite 保存采集运行缓存与去重状态；正式问答、引用和图谱数据需在 RuoYi 前端手动「入库」后，由 Java 发布到现有 MySQL 知识库。
 - 所有 Java→Python 接口使用 `AGENT_INTERNAL_TOKEN`，浏览器不直连本服务。
 
 ## 安装与启动

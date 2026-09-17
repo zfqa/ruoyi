@@ -1,6 +1,7 @@
 package com.ruoyi.business.news.collect.service;
 
 import java.util.List;
+import java.util.Map;
 import com.ruoyi.business.news.collect.domain.NewsCollect;
 
 /**
@@ -23,4 +24,7 @@ public interface INewsCollectService
     public int deleteNewsCollectById(Long id);
 
     public int deleteNewsCollectByIds(Long[] ids);
+
+    /** Remove task-article links; when none remain, delete the task as well. */
+    public Map<String, Object> deleteTaskArticles(Long taskId, List<Long> articleIds, String username);
 }

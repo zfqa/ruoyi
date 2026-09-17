@@ -23,17 +23,51 @@
     </resultMap>
 
     <sql id="selectNewsCollectVo">
-        select id, task_name, source_name, trigger_type, status, started_time, completed_time, fetched_count, inserted_count, updated_count, duplicate_count, filtered_count, failed_count, mysql_inserted_count, mysql_updated_count, mysql_existing_count, statistics_version, crawl_run_id, error_message, publish_time_start, publish_time_end, force_flag, create_by, create_time, update_by, update_time, remark from business_news_collect
+        select t.id, t.task_name, t.source_name, t.trigger_type, t.status, t.started_time, t.completed_time,
+               coalesce(c.inserted_count, 0) + coalesce(c.updated_count, 0) as fetched_count,
+               coalesce(c.inserted_count, 0) as inserted_count,
+               coalesce(c.updated_count, 0) as updated_count,
+               coalesce(c.duplicate_count, 0) as duplicate_count,
+               t.filtered_count, t.failed_count,
+               coalesce(m.mysql_inserted_count, 0) as mysql_inserted_count,
+               coalesce(m.mysql_updated_count, 0) as mysql_updated_count,
+               coalesce(m.mysql_existing_count, 0) as mysql_existing_count,
+               t.statistics_version, t.crawl_run_id, t.error_message, t.publish_time_start, t.publish_time_end, t.force_flag,
+               t.create_by, t.create_time, t.update_by, t.update_time, t.remark
+        from business_news_collect t
+        left join (
+            select r.crawl_task_id,
+                   sum(case when upper(ifnull(r.operation,'')) = 'INSERTED' then 1 else 0 end) as inserted_count,
+                   sum(case when upper(ifnull(r.operation,'')) = 'UPDATED' then 1 else 0 end) as updated_count,
+                   sum(case when upper(ifnull(r.operation,'')) like 'DUPLICATE%'
+                         and not exists (
+                           select 1 from business_knowledge k
+                           where k.source_type = 'NEWS'
+                             and k.source_code = concat('NEWS-ARTICLE-', r.article_id)
+                             and k.status = '2'
+                             and k.current_version_id is not null
+                         ) then 1 else 0 end) as duplicate_count
+            from business_news_collect_article r
+            group by r.crawl_task_id
+        ) c on c.crawl_task_id = t.id
+        left join (
+            select crawl_task_id,
+                   sum(case when mysql_operation = 'MYSQL_INSERTED' then 1 else 0 end) as mysql_inserted_count,
+                   sum(case when mysql_operation = 'MYSQL_UPDATED' then 1 else 0 end) as mysql_updated_count,
+                   sum(case when mysql_operation = 'MYSQL_EXISTING' then 1 else 0 end) as mysql_existing_count
+            from business_news_collect_article
+            group by crawl_task_id
+        ) m on m.crawl_task_id = t.id
     </sql>
 
     <select id="selectNewsCollectList" parameterType="com.ruoyi.business.news.collect.domain.NewsCollect" resultMap="NewsCollectResult">
         <include refid="selectNewsCollectVo"/>
         <where>
-            <if test="taskName != null and taskName != ''">and task_name like concat('%', #{taskName}, '%')</if>
-            <if test="sourceName != null and sourceName != ''">and source_name = #{sourceName}</if>
-            <if test="status != null and status != ''">and status = #{status}</if>
+            <if test="taskName != null and taskName != ''">and t.task_name like concat('%', #{taskName}, '%')</if>
+            <if test="sourceName != null and sourceName != ''">and t.source_name = #{sourceName}</if>
+            <if test="status != null and status != ''">and t.status = #{status}</if>
         </where>
-        order by create_time desc
+        order by t.create_time desc
     </select>
 
     <select id="selectHistoricalSourceNames" resultType="String">
@@ -44,7 +78,7 @@
 
     <select id="selectNewsCollectById" parameterType="Long" resultMap="NewsCollectResult">
         <include refid="selectNewsCollectVo"/>
-        where id = #{id}
+        where t.id = #{id}
     </select>
 
     <insert id="insertNewsCollect" parameterType="com.ruoyi.business.news.collect.domain.NewsCollect" useGeneratedKeys="true" keyProperty="id">
@@ -93,6 +127,26 @@
     </update>
     <update id="updateNewsCollectResult" parameterType="com.ruoyi.business.news.collect.domain.NewsCollect">
       update business_news_collect set status=#{status}, completed_time=#{completedTime}, fetched_count=#{fetchedCount}, inserted_count=#{insertedCount}, updated_count=#{updatedCount}, duplicate_count=#{duplicateCount}, filtered_count=#{filteredCount}, failed_count=#{failedCount}, mysql_inserted_count=#{mysqlInsertedCount}, mysql_updated_count=#{mysqlUpdatedCount}, mysql_existing_count=#{mysqlExistingCount}, statistics_version=#{statisticsVersion}, crawl_run_id=#{crawlRunId}, error_message=#{errorMessage}, update_by=#{updateBy}, update_time=sysdate() where id=#{id}
+    </update>
+    <update id="updateMysqlStatistics" parameterType="com.ruoyi.business.news.collect.domain.NewsCollect">
+      update business_news_collect
+      set mysql_inserted_count=#{mysqlInsertedCount},
+          mysql_updated_count=#{mysqlUpdatedCount},
+          mysql_existing_count=#{mysqlExistingCount},
+          statistics_version=#{statisticsVersion},
+          update_by=#{updateBy},
+          update_time=sysdate()
+      where id=#{id}
+    </update>
+    <update id="updateCrawlStatistics" parameterType="com.ruoyi.business.news.collect.domain.NewsCollect">
+      update business_news_collect
+      set fetched_count=#{fetchedCount},
+          inserted_count=#{insertedCount},
+          updated_count=#{updatedCount},
+          duplicate_count=#{duplicateCount},
+          update_by=#{updateBy},
+          update_time=sysdate()
+      where id=#{id}
     </update>
     <update id="markInterruptedRunningTasks">update business_news_collect set status='3', completed_time=sysdate(), error_message='新闻采集任务因服务重启或中断未完成，请重新采集。', update_by='system', update_time=sysdate() where status='1'</update>
 

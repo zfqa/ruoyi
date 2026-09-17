@@ -18,6 +18,7 @@ import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.utils.poi.ExcelUtil;
+import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.business.news.collect.domain.NewsCollect;
 import com.ruoyi.business.news.collect.service.INewsCollectService;
 import com.ruoyi.business.news.collect.service.NewsCollectAsyncService;
@@ -72,12 +73,20 @@ public class NewsCollectController extends BaseController
     }
 
     @PreAuthorize("@ss.hasPermi('business:news:collect:remove')")
+    @Log(title = "移除任务新闻", businessType = BusinessType.DELETE)
     @PostMapping("/{id}/articles/delete")
     public AjaxResult deleteSelectedArticles(@PathVariable Long id, @RequestBody Map<String, List<Long>> request)
     {
         List<Long> articleIds = request.get("articleIds");
         if (articleIds == null || articleIds.isEmpty()) return error("请选择要移除的新闻");
-        return toAjax(newsCollectArticleMapper.deleteSelected(id, articleIds));
+        try
+        {
+            return success(newsCollectService.deleteTaskArticles(id, articleIds, getUsername()));
+        }
+        catch (ServiceException exception)
+        {
+            return error(exception.getMessage());
+        }
     }
 
     @PreAuthorize("@ss.hasPermi('business:news:collect:list')")

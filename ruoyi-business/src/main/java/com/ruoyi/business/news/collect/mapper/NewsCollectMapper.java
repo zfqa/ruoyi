@@ -25,5 +25,10 @@ public interface NewsCollectMapper
 
     public int deleteNewsCollectByIds(Long[] ids);
     public int updateNewsCollectResult(NewsCollect task);
+    public int updateMysqlStatistics(NewsCollect task);
+
+    /** Refresh crawl-side counts after task article links change. */
+    public int updateCrawlStatistics(NewsCollect task);
+
     public int markInterruptedRunningTasks();
 }

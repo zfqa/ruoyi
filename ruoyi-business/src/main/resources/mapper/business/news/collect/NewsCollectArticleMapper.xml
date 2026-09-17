@@ -4,9 +4,12 @@
   <insert id="upsert">
     insert into business_news_collect_article(crawl_task_id,article_id,operation,mysql_operation,create_time)
     values(#{taskId},#{articleId},#{operation},#{mysqlOperation},sysdate())
-    on duplicate key update mysql_operation = case
-      when mysql_operation is null or mysql_operation = '' then values(mysql_operation)
-      else mysql_operation end
+    on duplicate key update
+      operation = values(operation),
+      mysql_operation = case
+        when values(mysql_operation) like 'PENDING%' then values(mysql_operation)
+        when mysql_operation is null or mysql_operation = '' or mysql_operation like 'PENDING%' then values(mysql_operation)
+        else mysql_operation end
   </insert>
   <select id="selectTaskArticles" resultType="java.util.HashMap">
     select a.id articleId,a.title,a.source_name sourceName,a.published_at publishedAt,a.crawled_at crawledAt,
@@ -19,11 +22,52 @@
   <select id="selectTaskArticleIds" resultType="java.lang.Long">
     select article_id from business_news_collect_article where crawl_task_id=#{taskId} order by id
   </select>
+  <select id="selectArticleIdsByTaskIds" resultType="java.lang.Long">
+    select distinct article_id from business_news_collect_article
+    where crawl_task_id in
+    <foreach collection="taskIds" item="taskId" open="(" separator="," close=")">#{taskId}</foreach>
+  </select>
+  <select id="countLinksByArticleId" resultType="int">
+    select count(1) from business_news_collect_article where article_id=#{articleId}
+  </select>
   <select id="countTaskArticle" resultType="int">
     select count(1) from business_news_collect_article where crawl_task_id=#{taskId} and article_id=#{articleId}
   </select>
   <select id="countKnowledgeStored" resultType="int">
     select count(1) from business_knowledge where source_type='NEWS' and source_code=concat('NEWS-ARTICLE-', #{articleId})
+  </select>
+  <select id="selectMysqlOperation" resultType="java.lang.String">
+    select mysql_operation from business_news_collect_article
+    where crawl_task_id=#{taskId} and article_id=#{articleId} limit 1
+  </select>
+  <update id="updateMysqlOperation">
+    update business_news_collect_article
+    set mysql_operation=#{mysqlOperation}
+    where crawl_task_id=#{taskId} and article_id=#{articleId}
+  </update>
+  <select id="selectMysqlOperationCounts" resultType="java.util.HashMap">
+    select
+      coalesce(sum(case when mysql_operation in ('MYSQL_INSERTED') then 1 else 0 end), 0) as inserted,
+      coalesce(sum(case when mysql_operation in ('MYSQL_UPDATED') then 1 else 0 end), 0) as updated,
+      coalesce(sum(case when mysql_operation in ('MYSQL_EXISTING') then 1 else 0 end), 0) as existing
+    from business_news_collect_article
+    where crawl_task_id=#{taskId}
+  </select>
+  <select id="selectCrawlOperationCounts" resultType="java.util.HashMap">
+    select
+      coalesce(sum(case when upper(ifnull(r.operation,'')) = 'INSERTED' then 1 else 0 end), 0) as inserted,
+      coalesce(sum(case when upper(ifnull(r.operation,'')) = 'UPDATED' then 1 else 0 end), 0) as updated,
+      coalesce(sum(case when upper(ifnull(r.operation,'')) like 'DUPLICATE%'
+        and not exists (
+          select 1 from business_knowledge k
+          where k.source_type = 'NEWS'
+            and k.source_code = concat('NEWS-ARTICLE-', r.article_id)
+            and k.status = '2'
+            and k.current_version_id is not null
+        ) then 1 else 0 end), 0) as duplicate,
+      count(1) as linked
+    from business_news_collect_article r
+    where r.crawl_task_id=#{taskId}
   </select>
   <delete id="deleteSelected">delete from business_news_collect_article where crawl_task_id=#{taskId} and article_id in <foreach collection="articleIds" item="id" open="(" separator="," close=")">#{id}</foreach></delete>
   <delete id="deleteByTaskIds">

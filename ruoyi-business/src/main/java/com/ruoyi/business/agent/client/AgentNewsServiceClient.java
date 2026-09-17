@@ -47,6 +47,19 @@ public class AgentNewsServiceClient
         return send(builder.build());
     }
 
+    /** Remove staging-store articles by canonical URL after RuoYi task cleanup. */
+    public JSONObject deleteByCanonicalUrls(java.util.List<String> canonicalUrls) throws AgentServiceClientException
+    {
+        JSONObject body = new JSONObject();
+        body.put("canonical_urls", canonicalUrls);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(endpoint("/news/delete-by-urls"))
+            .timeout(properties.getReadTimeout()).header("Accept", "application/json")
+            .header("Content-Type", "application/json");
+        if (properties.getInternalToken() != null && !properties.getInternalToken().isBlank())
+            builder.header("Authorization", "Bearer " + properties.getInternalToken());
+        return send(builder.POST(HttpRequest.BodyPublishers.ofString(body.toJSONString(), StandardCharsets.UTF_8)).build());
+    }
+
     private JSONObject send(HttpRequest request) throws AgentServiceClientException
     {
         try

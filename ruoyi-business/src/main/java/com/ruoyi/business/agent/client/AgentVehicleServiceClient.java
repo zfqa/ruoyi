@@ -41,6 +41,11 @@ public class AgentVehicleServiceClient
         return send("/api/vehicles/brands").getList("items", VehicleBrandDto.class);
     }
 
+    public JSONObject authStatus() throws AgentServiceClientException
+    {
+        return send("/api/vehicles/auth-status");
+    }
+
     public VehicleSeriesListResponse series(String brand) throws AgentServiceClientException
     {
         long startedAt = System.nanoTime();

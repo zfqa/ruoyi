@@ -87,8 +87,8 @@ public class KnowledgeBaseServiceImpl implements IKnowledgeBaseService
     {
         KnowledgeBase source = knowledgeBaseMapper.selectKnowledgeBaseById(id);
         if (source == null) return 0;
-        if (source.getCurrentVersionId() != null && !"0".equals(source.getEnabled()))
-            throw new IllegalArgumentException("资料已入库，请先在编辑中将“是否启用”改为否，再删除");
+        if (!"0".equals(source.getEnabled()))
+            throw new IllegalArgumentException("请先在编辑中将“是否启用”改为否，再删除");
         List<KnowledgeVersion> versions = knowledgeBaseMapper.selectVersionsBySourceId(id);
         if (versions != null)
         {

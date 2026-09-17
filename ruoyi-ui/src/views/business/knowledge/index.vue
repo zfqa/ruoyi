@@ -22,14 +22,25 @@
           <el-table-column label="知识分类" prop="sourceType" width="120"><template slot-scope="s"><el-tag :type="sourceTypeTag(s.row.sourceType)" size="mini">{{ sourceTypeLabel(s.row.sourceType) }}</el-tag></template></el-table-column>
           <el-table-column label="当前版本ID" prop="currentVersionId" width="110" align="center" />
           <el-table-column label="使用范围" prop="allowedPurpose" min-width="180" show-overflow-tooltip />
-          <el-table-column label="状态" width="100"><template slot-scope="s"><el-tag :type="statusType(s.row.status)" size="mini">{{ statusText(s.row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="状态" width="110"><template slot-scope="s"><el-tag :type="statusType(s.row.status)" size="mini">{{ statusText(s.row.status) }}</el-tag></template></el-table-column>
           <el-table-column label="启用" width="70"><template slot-scope="s">{{ s.row.enabled === '1' ? '是' : '否' }}</template></el-table-column>
           <el-table-column label="操作" width="245" fixed="right">
             <template slot-scope="s">
-              <el-button v-if="!s.row.currentVersionId" size="mini" type="text" icon="el-icon-upload2" @click="openIngest(s.row)">入库</el-button>
+              <el-button v-if="showIngestButton(s.row)" size="mini" type="text" icon="el-icon-upload2" @click="openIngest(s.row)">入库</el-button>
+              <span v-else-if="isIngestSuccess(s.row)" class="ingest-success">入库成功</span>
+              <span v-else-if="isIngestRunning(s.row)" class="ingest-running">入库中</span>
               <el-button size="mini" type="text" icon="el-icon-time" @click="showVersions(s.row)">版本</el-button>
               <el-button size="mini" type="text" icon="el-icon-edit" @click="handleUpdate(s.row)">编辑</el-button>
-              <el-button size="mini" type="text" class="danger" @click="handleDelete(s.row)">删除</el-button>
+              <el-button
+                v-if="canDelete(s.row)"
+                size="mini"
+                type="text"
+                class="danger"
+                @click="handleDelete(s.row)"
+              >删除</el-button>
+              <el-tooltip v-else content="请先编辑，将「是否启用」改为否后再删除" placement="top">
+                <el-button size="mini" type="text" class="danger is-disabled" disabled>删除</el-button>
+              </el-tooltip>
             </template>
           </el-table-column>
         </el-table>
@@ -221,7 +232,10 @@
         <el-form-item label="密级"><el-select v-model="form.confidentiality"><el-option label="内部" value="INTERNAL" /><el-option label="公开" value="PUBLIC" /><el-option label="受限" value="RESTRICTED" /></el-select></el-form-item>
         <el-form-item label="允许使用范围" prop="allowedPurpose"><el-input v-model="form.allowedPurpose" type="textarea" placeholder="例如：仅限POC问答和内部分析，不允许外发" /></el-form-item>
         <el-form-item label="允许角色ID"><el-input v-model="form.allowedRoleIds" placeholder="逗号分隔；留空则继承菜单权限" /></el-form-item>
-        <el-form-item label="是否启用"><el-switch v-model="form.enabled" active-value="1" inactive-value="0" /></el-form-item>
+        <el-form-item label="是否启用">
+          <el-switch v-model="form.enabled" active-value="1" inactive-value="0" />
+          <div class="form-tip">关闭启用后，列表中才会允许删除该资料</div>
+        </el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" /></el-form-item>
       </el-form>
       <div slot="footer"><el-button @click="editOpen=false">取消</el-button><el-button type="primary" @click="submitForm">保存</el-button></div>
@@ -361,9 +375,10 @@ export default {
     handleUpdate(row) { getKnowledgeBase(row.id).then(r => { this.form = r.data; this.editOpen = true }) },
     submitForm() { this.$refs.form.validate(valid => { if (!valid) return; const action = this.form.id ? updateKnowledgeBase : addKnowledgeBase; action(this.form).then(() => { this.$modal.msgSuccess('保存成功'); this.editOpen = false; this.getList() }) }) },
     handleDelete(row) {
-      if (row.currentVersionId && row.enabled !== '0') return this.$modal.msgError('请先编辑并将“是否启用”改为否，再删除')
+      if (!this.canDelete(row)) return this.$modal.msgError('请先编辑并将“是否启用”改为否，再删除')
       this.$modal.confirm(`确认删除“${row.sourceName}”吗？删除后不可恢复。`).then(() => delKnowledgeBase(row.id)).then(() => { this.$modal.msgSuccess('删除成功'); this.getList() }).catch(() => {})
     },
+    canDelete(row) { return String(row && row.enabled) === '0' },
     openIngest(row) { this.stopPolling(); this.ingestSource = row; this.ingestForm = { versionNo: '', url: '', title: '', content: '', issuedBy: '', publishedAt: '', policyLevel: '', reportId: undefined }; this.pdfFile = null; this.newsJsonFile = null; this.currentTask = null; this.ingestOpen = true },
     closeIngest() { this.ingestOpen = false; if (!this.currentTask || !['0','1'].includes(this.currentTask.status)) this.stopPolling() },
     onPdfChange(file) { this.pdfFile = file.raw }, onPdfRemove() { this.pdfFile = null },
@@ -502,8 +517,15 @@ export default {
     sourceIcon(type) { return ({ NEWS: 'el-icon-news', POLICY: 'el-icon-document-checked', PDF: 'el-icon-document', REPORT: 'el-icon-data-analysis' })[type] || 'el-icon-files' },
     sourceTypeLabel(type) { const item = this.sourceTypes.find(t => t.value === type); return item ? item.label : (type || '未分类') },
     sourceTypeTag(type) { return ({ NEWS: 'success', REPORT: 'primary', PDF: 'info', POLICY: 'warning' })[type] || 'info' },
-    statusText(s) { return ({ '0': '待处理', '1': '处理中', '2': '成功', '3': '失败' })[s] || s },
+    statusText(s) { return ({ '0': '待入库', '1': '入库中', '2': '入库成功', '3': '入库失败' })[s] || s },
     statusType(s) { return ({ '0': 'info', '1': 'warning', '2': 'success', '3': 'danger' })[s] || 'info' },
+    isIngestSuccess(row) { return row.status === '2' || !!row.currentVersionId },
+    isIngestRunning(row) { return !this.isIngestSuccess(row) && (row.status === '1' || (row.status === '0' && String(row.sourceCode || '').startsWith('NEWS-ARTICLE-'))) },
+    showIngestButton(row) {
+      if (this.isIngestSuccess(row) || this.isIngestRunning(row)) return false
+      if (row.sourceType === 'NEWS' && String(row.sourceCode || '').startsWith('NEWS-ARTICLE-')) return false
+      return !row.currentVersionId
+    },
     answerModeText(mode) { return ({ LLM_VERIFIED: 'LLM 已核验', LLM_REPAIRED: 'LLM 引用已修复', EXTRACTIVE_FALLBACK: '原文安全降级' })[mode] || mode || '未知模式' },
     answerModeType(mode) { return mode === 'EXTRACTIVE_FALLBACK' ? 'warning' : (mode === 'LLM_REPAIRED' ? 'primary' : 'success') },
     logStatusType(status) { return ({ SUCCESS: 'success', RETRY: 'warning', FALLBACK: 'warning' })[status] || 'info' },
@@ -513,7 +535,7 @@ export default {
 </script>
 
 <style scoped>
-.mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.qa-graph { height:500px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph-filter { margin-bottom:4px; }.qa-graph-status { margin:0 0 12px; color:#409eff; font-weight:600; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
+.mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.is-disabled { opacity: 0.45; cursor: not-allowed; }.form-tip { margin-top: 6px; color: #909399; font-size: 12px; line-height: 1.4; }.ingest-success { color:#67c23a; margin-right: 8px; font-size: 12px; }.ingest-running { color:#e6a23c; margin-right: 8px; font-size: 12px; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.qa-graph { height:500px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph-filter { margin-bottom:4px; }.qa-graph-status { margin:0 0 12px; color:#409eff; font-weight:600; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
 .source-meta { align-items:center; }.source-link-button { padding:0; }.external-source-link { margin-left:16px; }
 .analysis-timeline { padding:6px 8px 0 6px; }.analysis-step-card { line-height:1.75; }.analysis-step-title { font-weight:700; font-size:15px; color:#303133; margin-bottom:6px; }.analysis-boundary { color:#e6a23c; }.analysis-evidences { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:6px; padding-top:6px; border-top:1px dashed #dcdfe6; }
 </style>

@@ -9,7 +9,7 @@ import uuid
 
 from playwright.sync_api import BrowserContext, Response
 
-from dongchedi_service.auth import AuthStatus, DongchediAuthManager
+from dongchedi_service.auth import DongchediAuthManager
 
 from .discovery import BrandDiscoveryResult, DongchediSeriesDiscovery
 from .parser import DongchediSeriesParser
@@ -154,8 +154,7 @@ class VehicleSelectionService:
 
     def _with_context(self, operation: Any) -> Any:
         logger.info("[series-discovery] stage stage=load_auth_state")
-        status = self.auth_manager.state_file_status()
-        if not self.auth_manager.state_path.exists() or status.status == AuthStatus.AUTH_STATE_INVALID:
+        if not self.auth_manager.local_state_ready():
             raise VehicleServiceError(
                 "auth_required",
                 "未找到有效登录状态，请先在 agent-service 目录执行 python scripts/dongchedi_login.py 完成人工登录。",

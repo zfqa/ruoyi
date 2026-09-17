@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -40,12 +42,14 @@ class NewsKnowledgePublishServiceTest
     }
 
     @Test
-    void publishesOneArticleAndReportsWhetherKnowledgeAlreadyExists() throws Exception
+    void publishesOneArticleFinalizesMysqlAndReportsWhetherKnowledgeAlreadyExists() throws Exception
     {
         NewsArticle article = article(7L);
         KnowledgeIngestTask ingestTask = new KnowledgeIngestTask(); ingestTask.setId(19L); ingestTask.setStatus("0");
         when(relationMapper.countTaskArticle(3L, 7L)).thenReturn(1);
         when(relationMapper.countKnowledgeStored(7L)).thenReturn(0);
+        when(relationMapper.selectMysqlOperation(3L, 7L)).thenReturn(NewsCollectAsyncService.PENDING_INSERTED, NewsKnowledgePublishService.MYSQL_INSERTED);
+        when(relationMapper.selectMysqlOperationCounts(3L)).thenReturn(Map.of("inserted", 1, "updated", 0, "existing", 0));
         when(articleMapper.selectById(7L)).thenReturn(article);
         when(knowledgeIngestService.submitCollectedNews(anyLong(), anyString(), anyString(), anyString(),
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(ingestTask);
@@ -54,6 +58,9 @@ class NewsKnowledgePublishServiceTest
 
         assertFalse((Boolean) result.get("reused"));
         assertEquals(19L, result.get("ingestTaskId"));
+        assertEquals(NewsKnowledgePublishService.MYSQL_INSERTED, result.get("mysqlOperation"));
+        verify(relationMapper).updateMysqlOperation(3L, 7L, NewsKnowledgePublishService.MYSQL_INSERTED);
+        verify(taskMapper).updateMysqlStatistics(any(NewsCollect.class));
     }
 
     @Test
@@ -65,6 +72,9 @@ class NewsKnowledgePublishServiceTest
         when(relationMapper.countTaskArticle(anyLong(), anyLong())).thenReturn(1);
         when(relationMapper.countKnowledgeStored(7L)).thenReturn(0);
         when(relationMapper.countKnowledgeStored(8L)).thenReturn(1);
+        when(relationMapper.selectMysqlOperation(eq(3L), eq(7L))).thenReturn(NewsCollectAsyncService.PENDING_INSERTED);
+        when(relationMapper.selectMysqlOperation(eq(3L), eq(8L))).thenReturn(NewsCollectAsyncService.PENDING_EXISTING);
+        when(relationMapper.selectMysqlOperationCounts(3L)).thenReturn(Map.of("inserted", 1, "updated", 0, "existing", 1));
         when(articleMapper.selectById(7L)).thenReturn(article(7L));
         when(articleMapper.selectById(8L)).thenReturn(article(8L));
         when(knowledgeIngestService.submitCollectedNews(anyLong(), anyString(), anyString(), anyString(),
@@ -76,7 +86,21 @@ class NewsKnowledgePublishServiceTest
         assertEquals(1, result.get("submitted"));
         assertEquals(1, result.get("reused"));
         assertEquals(0, result.get("failed"));
+        assertEquals(1, result.get("mysqlInserted"));
+        assertEquals(1, result.get("mysqlExisting"));
         assertTrue((Integer) result.get("submitted") > 0);
+        verify(taskMapper).updateMysqlStatistics(any(NewsCollect.class));
+    }
+
+    @Test
+    void mapsPendingOperationsToFinalMysqlStates()
+    {
+        assertEquals(NewsKnowledgePublishService.MYSQL_INSERTED,
+            NewsKnowledgePublishService.toFinalMysqlOperation(NewsCollectAsyncService.PENDING_INSERTED));
+        assertEquals(NewsKnowledgePublishService.MYSQL_UPDATED,
+            NewsKnowledgePublishService.toFinalMysqlOperation(NewsCollectAsyncService.PENDING_UPDATED));
+        assertEquals(NewsKnowledgePublishService.MYSQL_EXISTING,
+            NewsKnowledgePublishService.toFinalMysqlOperation(NewsCollectAsyncService.PENDING_EXISTING));
     }
 
     private NewsArticle article(Long id)

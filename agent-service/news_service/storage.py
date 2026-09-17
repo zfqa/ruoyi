@@ -290,6 +290,22 @@ class NewsStore:
             cursor = connection.execute(f"DELETE FROM news_articles WHERE id IN ({placeholders})", unique_ids)
         return cursor.rowcount
 
+    def delete_by_canonical_urls(self, canonical_urls: list[str]) -> int:
+        unique_urls = [url.strip() for url in dict.fromkeys(canonical_urls) if url and url.strip()]
+        if not unique_urls:
+            return 0
+        placeholders = ",".join("?" for _ in unique_urls)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f"DELETE FROM news_articles WHERE canonical_url IN ({placeholders})",
+                unique_urls,
+            )
+            connection.execute(
+                f"DELETE FROM news_crawl_logs WHERE article_url IN ({placeholders})",
+                unique_urls,
+            )
+        return cursor.rowcount
+
     def delete_by_source_site(self, *, source_site: str, publish_time_start: str | None, publish_time_end: str | None) -> int:
         clauses = ["source_site=?"]
         parameters: list[object] = [source_site]

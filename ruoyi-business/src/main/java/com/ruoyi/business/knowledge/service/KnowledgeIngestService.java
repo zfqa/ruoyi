@@ -206,18 +206,38 @@ public class KnowledgeIngestService
         KnowledgeVersion existing = mapper.selectVersionByHash(source.getId(), actualHash);
         if (existing != null)
         {
-            KnowledgeIngestTask task = mapper.selectIngestTaskByVersionId(existing.getId());
-            if (task != null) return task;
+            KnowledgeIngestTask existingTask = mapper.selectIngestTaskByVersionId(existing.getId());
+            if (existingTask != null && "2".equals(existingTask.getStatus()) && source.getCurrentVersionId() != null)
+                return existingTask;
+            // Resume incomplete/failed collected-news ingest synchronously.
+            KnowledgeBase actualSource = source;
+            KnowledgeVersion resumeVersion = existing;
+            return submitSync(resumeVersion, username,
+                () -> processCollectedNews(actualSource, resumeVersion, title, normalized, buildNewsEvidence(
+                    articleId, sourceName, sourceSite, publishedAt, crawledAt, uri.toString(), actualHash).toJSONString()));
         }
         String versionNo = "news-" + articleId + "-" + actualHash.substring(0, Math.min(12, actualHash.length()));
         KnowledgeVersion version = createVersion(source, versionNo, title, "", uri.toString(), actualHash, username);
         version.setPublishedTime(parsePublishedTime(publishedAt)); mapper.updateVersion(version);
-        JSONObject evidence = new JSONObject(); evidence.put("kind", "NEWS"); evidence.put("news_id", articleId);
-        evidence.put("source_name", clean(sourceName)); evidence.put("source_site", clean(sourceSite));
-        evidence.put("published_at", clean(publishedAt)); evidence.put("crawled_at", clean(crawledAt));
-        evidence.put("original_url", uri.toString()); evidence.put("content_hash", actualHash);
         KnowledgeBase actualSource = source;
-        return submit(version, username, () -> processCollectedNews(actualSource, version, title, normalized, evidence.toJSONString()));
+        return submitSync(version, username, () -> processCollectedNews(actualSource, version, title, normalized,
+            buildNewsEvidence(articleId, sourceName, sourceSite, publishedAt, crawledAt, uri.toString(), actualHash)
+                .toJSONString()));
+    }
+
+    private JSONObject buildNewsEvidence(Long articleId, String sourceName, String sourceSite, String publishedAt,
+        String crawledAt, String originalUrl, String actualHash)
+    {
+        JSONObject evidence = new JSONObject();
+        evidence.put("kind", "NEWS");
+        evidence.put("news_id", articleId);
+        evidence.put("source_name", clean(sourceName));
+        evidence.put("source_site", clean(sourceSite));
+        evidence.put("published_at", clean(publishedAt));
+        evidence.put("crawled_at", clean(crawledAt));
+        evidence.put("original_url", originalUrl);
+        evidence.put("content_hash", actualHash);
+        return evidence;
     }
 
     /**
@@ -628,6 +648,26 @@ public class KnowledgeIngestService
             throw new IllegalStateException("知识库入库队列已满，请稍后重试");
         }
         return task;
+    }
+
+    /** Collected-news publish waits until MySQL knowledge rows are ready for QA. */
+    private KnowledgeIngestTask submitSync(KnowledgeVersion version, String username, ThrowingRunnable processor)
+    {
+        KnowledgeIngestTask task = mapper.selectIngestTaskByVersionId(version.getId());
+        if (task == null)
+        {
+            task = new KnowledgeIngestTask();
+            task.setSourceId(version.getSourceId()); task.setVersionId(version.getId()); task.setStatus("0");
+            task.setProgress(0); task.setCurrentStage("排队中"); task.setChunkCount(0); task.setErrorMessage("");
+            task.setCreateBy(username);
+            mapper.insertIngestTask(task);
+        }
+        runTask(task.getId(), version.getId(), processor);
+        KnowledgeIngestTask finished = mapper.selectIngestTaskById(task.getId());
+        if (finished == null || !"2".equals(finished.getStatus()))
+            throw new IllegalStateException(finished == null || finished.getErrorMessage() == null
+                || finished.getErrorMessage().isBlank() ? "新闻入库失败" : finished.getErrorMessage());
+        return finished;
     }
 
     private void runTask(Long taskId, Long versionId, ThrowingRunnable processor)

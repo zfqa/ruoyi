@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from news_service.config import load_sources
 from news_service.crawler.browser_manager import BrowserManager
-from news_service.models import NewsBatchDeleteRequest, NewsCrawlRequest, NewsDeleteBySourceRequest
+from news_service.models import NewsBatchDeleteRequest, NewsCrawlRequest, NewsDeleteBySourceRequest, NewsDeleteByUrlsRequest
 from news_service.scheduler import get_news_scheduler
 from news_service.service import NewsService
 from data_service.service.ingestion_service import ingest_document
@@ -94,6 +94,26 @@ async def list_vehicle_brands(authorization: str | None = Header(default=None)) 
     """Return the fixed business whitelist; this action never accesses Dongchedi."""
     _require_internal_token(authorization)
     return {"items": vehicle_selection_service.list_brands()}
+
+
+@app.get(
+    "/api/vehicles/auth-status",
+    summary="获取懂车帝登录状态文件",
+    description="检查本地 Playwright 登录态文件是否存在且结构可用；不访问懂车帝上游，也不证明会话一定仍有效。",
+    tags=["懂车帝车辆"],
+)
+async def vehicle_auth_status(authorization: str | None = Header(default=None)) -> dict:
+    _require_internal_token(authorization)
+    from dongchedi_service.auth import DongchediAuthManager
+
+    manager = DongchediAuthManager()
+    result = manager.state_file_status()
+    return {
+        "ready": manager.local_state_ready(),
+        "status": result.status.value,
+        "message": result.message,
+        "state_path": str(manager.state_path),
+    }
 
 
 @app.get(
@@ -462,6 +482,19 @@ async def batch_delete_news(request: NewsBatchDeleteRequest, authorization: str 
     requested_ids = list(dict.fromkeys(request.ids))
     deleted = NewsService().delete_articles(requested_ids)
     return {"requested": len(request.ids), "deleted": deleted, "not_found": len(requested_ids) - deleted}
+
+
+@app.post(
+    "/news/delete-by-urls",
+    summary="按规范化URL删除新闻",
+    description="按 canonical_url 批量删除采集暂存库中的新闻，并清理对应抓取日志。用于任务列表清空后的 SQLite 同步。",
+    tags=["新闻资讯"],
+)
+async def delete_news_by_urls(request: NewsDeleteByUrlsRequest, authorization: str | None = Header(default=None)) -> dict:
+    _require_news_internal_token(authorization)
+    requested = list(dict.fromkeys(url.strip() for url in request.canonical_urls if url and url.strip()))
+    deleted = NewsService().delete_by_canonical_urls(requested)
+    return {"requested": len(request.canonical_urls), "deleted": deleted, "not_found": max(0, len(requested) - deleted)}
 
 
 @app.post(

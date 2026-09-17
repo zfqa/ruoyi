@@ -5,6 +5,12 @@
  <select id="selectByCanonicalUrl" resultMap="Article">select * from business_news_article where canonical_url=#{canonicalUrl} limit 1</select>
  <select id="selectByContentHash" resultMap="Article">select * from business_news_article where content_hash=#{contentHash} limit 1</select>
  <select id="selectById" resultMap="Article">select * from business_news_article where id=#{id}</select>
+ <select id="selectCanonicalUrlsByIds" resultType="java.lang.String">
+  select canonical_url from business_news_article
+  where id in
+  <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    and canonical_url is not null and canonical_url &lt;&gt; ''
+ </select>
  <select id="selectList" parameterType="com.ruoyi.business.news.article.NewsArticle" resultMap="Article">select * from business_news_article <where><if test="sourceName!=null and sourceName!=''">and source_name=#{sourceName}</if><if test="title!=null and title!=''">and title like concat('%',#{title},'%')</if><if test="publishedAt!=null and publishedAt!=''">and published_at like concat(#{publishedAt},'%')</if><if test="crawledAt!=null and crawledAt!=''">and crawled_at like concat(#{crawledAt},'%')</if><if test="crawlTaskId!=null">and crawl_task_id=#{crawlTaskId}</if></where> order by id desc</select>
  <insert id="insert" parameterType="com.ruoyi.business.news.article.NewsArticle" useGeneratedKeys="true" keyProperty="id">insert into business_news_article(source_name,source_site,title,content,url,original_url,canonical_url,published_at,crawled_at,matched_keywords,content_hash,crawl_task_id,create_by,create_time) values(#{sourceName},#{sourceSite},#{title},#{content},#{url},#{originalUrl},#{canonicalUrl},#{publishedAt},#{crawledAt},#{matchedKeywords},#{contentHash},#{crawlTaskId},'system',sysdate())</insert>
  <update id="updateById" parameterType="com.ruoyi.business.news.article.NewsArticle">update business_news_article set source_name=#{sourceName},source_site=#{sourceSite},title=#{title},content=#{content},url=#{url},original_url=#{originalUrl},published_at=#{publishedAt},crawled_at=#{crawledAt},matched_keywords=#{matchedKeywords},content_hash=#{contentHash},update_by='system',update_time=sysdate() where id=#{id}</update>

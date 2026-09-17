@@ -413,6 +413,10 @@ class NewsBatchDeleteRequest(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=500)
 
 
+class NewsDeleteByUrlsRequest(BaseModel):
+    canonical_urls: list[str] = Field(min_length=1, max_length=500)
+
+
 class NewsDeleteBySourceRequest(BaseModel):
     source_site: str = Field(min_length=1, max_length=255)
     publish_time_start: str | None = Field(default=None, max_length=100)

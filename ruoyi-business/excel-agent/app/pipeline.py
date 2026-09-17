@@ -16,6 +16,7 @@ from app.extraction.record_builder import build_records
 from app.llm.client import ArkChatClient
 from app.llm.interpreter import interpret_table
 from app.report.metrics import calculate_competitive_metrics
+from app.report.record_merge import merge_records_by_year_quarter, period_coverage
 from app.report.tianma_history import calculate_tianma_history_metrics
 from app.report.tianma_product import calculate_tianma_product_metrics
 from app.report.tianma_growth import calculate_tianma_application_metrics, calculate_tianma_customer_metrics
@@ -33,6 +34,8 @@ def parse_workbook(
     max_llm_tables: int | None = None,
     baseline_file_path: str | None = None,
     supply_chain_file_path: str | None = None,
+    extra_history_file_paths: list[str] | None = None,
+    extra_supply_chain_file_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     pivot_cache = extract_shipment_share_cache(file_path)
     if pivot_cache is not None:
@@ -41,6 +44,8 @@ def parse_workbook(
         return _parse_shipment_share_cache(
             file_path, pivot_cache, max_records_per_table, use_llm,
             baseline_file_path, baseline_cache, supply_chain_file_path, supply_chain_cache,
+            extra_history_file_paths=extra_history_file_paths or [],
+            extra_supply_chain_file_paths=extra_supply_chain_file_paths or [],
         )
     wb_formula, wb_value = load_workbooks(file_path)
     workbook_id = _file_hash(file_path)
@@ -279,10 +284,35 @@ def _parse_shipment_share_cache(
     file_path, cache, max_records_per_table, use_llm,
     baseline_file_path=None, baseline_cache=None,
     supply_chain_file_path=None, supply_chain_cache=None,
+    extra_history_file_paths=None, extra_supply_chain_file_paths=None,
 ):
     workbook_id = f"sha256:{_file_hash(file_path)}"
     file_name = os.path.basename(file_path)
-    records = _pivot_cache_records(cache, file_name, workbook_id)
+    primary_records = _pivot_cache_records(cache, file_name, workbook_id)
+
+    history_groups: list[tuple[str, list[dict[str, Any]]]] = []
+    history_sources = []
+    for extra_path in list(extra_history_file_paths or []):
+        if not extra_path:
+            continue
+        extra_cache = extract_shipment_share_cache(extra_path)
+        if extra_cache is None:
+            continue
+        extra_id = f"sha256:{_file_hash(extra_path)}"
+        extra_name = os.path.basename(extra_path)
+        extra_records = _pivot_cache_records(
+            extra_cache, extra_name, extra_id, "Shipment share (extra history)"
+        )
+        history_groups.append((extra_name, extra_records))
+        history_sources.append({
+            "workbook_id": extra_id,
+            "file_name": extra_name,
+            "role": "extra history",
+        })
+    # Primary current workbook is applied last so its Year/Quarter wins on overlap.
+    history_groups.append((file_name, primary_records))
+    records = merge_records_by_year_quarter(history_groups) if len(history_groups) > 1 else primary_records
+
     baseline_records = []
     baseline_source = None
     if baseline_file_path and baseline_cache:
@@ -296,6 +326,28 @@ def _parse_shipment_share_cache(
             "file_name": baseline_name,
             "role": "Y22 baseline",
         }
+
+    supply_groups: list[tuple[str, list[dict[str, Any]]]] = []
+    supply_sources = []
+    for extra_path in list(extra_supply_chain_file_paths or []):
+        if not extra_path:
+            continue
+        extra_cache = extract_supply_chain_cache(extra_path)
+        if extra_cache is None:
+            continue
+        extra_id = f"sha256:{_file_hash(extra_path)}"
+        extra_name = os.path.basename(extra_path)
+        extra_records = _pivot_cache_records(
+            extra_cache, extra_name, extra_id,
+            "Panel maker to client pivot", "panel-maker-client-pivot-cache",
+        )
+        supply_groups.append((extra_name, extra_records))
+        supply_sources.append({
+            "workbook_id": extra_id,
+            "file_name": extra_name,
+            "role": "extra supply chain",
+        })
+
     supply_chain_records = []
     supply_chain_source = None
     if supply_chain_file_path and supply_chain_cache:
@@ -310,16 +362,24 @@ def _parse_shipment_share_cache(
             "file_name": supply_chain_name,
             "role": "Supply Chain customer/region",
         }
+        supply_groups.append((supply_chain_name, supply_chain_records))
+    if len(supply_groups) > 1:
+        supply_chain_records = merge_records_by_year_quarter(supply_groups)
+    elif supply_groups:
+        supply_chain_records = supply_groups[0][1]
+
     metric_table = {**cache, "records": records}
     preview_records = records if max_records_per_table is None else records[:max_records_per_table]
+    source_workbooks = [item for item in [{
+        "workbook_id": workbook_id,
+        "file_name": file_name,
+        "role": "current history",
+    }, *history_sources, baseline_source, supply_chain_source, *supply_sources] if item]
     result = {
         "workbook_id": workbook_id,
         "file_name": file_name,
-        "source_workbooks": [item for item in [{
-            "workbook_id": workbook_id,
-            "file_name": file_name,
-            "role": "Y23-Y25 current",
-        }, baseline_source, supply_chain_source] if item],
+        "source_workbooks": source_workbooks,
+        "period_coverage": period_coverage(records),
         "sheets": [{
             "sheet_name": "Shipment share",
             "sheet_index": None,
@@ -335,7 +395,7 @@ def _parse_shipment_share_cache(
                 "data": {"record_count": len(records)},
                 "fields": [{"name": normalize_field_name(name), "original": name} for name in cache["fields"]],
                 "records": preview_records,
-                "notes": ["从Shipment share内嵌Pivot Cache读取全量明细"],
+                "notes": ["从Shipment share内嵌Pivot Cache读取全量明细，多History按Year/Quarter后写覆盖合并"],
                 "source_notes": [],
                 "quality": {
                     "structure_confidence": 1.0,
@@ -350,18 +410,23 @@ def _parse_shipment_share_cache(
             "sheet_name": "Panel maker to client pivot",
             "sheet_index": None,
             "max_row": len(supply_chain_records),
-            "max_column": len(supply_chain_cache["fields"]),
-            "effective_range": supply_chain_cache["range"],
+            "max_column": len((supply_chain_cache or {"fields": []})["fields"]) if supply_chain_cache else (
+                len(supply_groups[0][1][0]) if supply_groups and supply_groups[0][1] else 0
+            ),
+            "effective_range": (supply_chain_cache or {}).get("range"),
             "merged_ranges": [],
             "tables": [{
                 "table_id": "panel-maker-client-pivot-cache",
-                "table_name": supply_chain_cache["table"],
-                "source": {"sheet": "Panel maker to client pivot", "range": supply_chain_cache["range"]},
+                "table_name": (supply_chain_cache or {"table": "Panel maker to client pivot"}).get("table", "Panel maker to client pivot"),
+                "source": {"sheet": "Panel maker to client pivot", "range": (supply_chain_cache or {}).get("range")},
                 "header": None,
                 "data": {"record_count": len(supply_chain_records)},
-                "fields": [{"name": normalize_field_name(name), "original": name} for name in supply_chain_cache["fields"]],
+                "fields": (
+                    [{"name": normalize_field_name(name), "original": name} for name in supply_chain_cache["fields"]]
+                    if supply_chain_cache else []
+                ),
                 "records": supply_chain_records if max_records_per_table is None else supply_chain_records[:max_records_per_table],
-                "notes": ["从Panel maker to client pivot内嵌Pivot Cache读取全量明细"],
+                "notes": ["从Panel maker to client pivot内嵌Pivot Cache读取全量明细，多Supply按Year/Quarter后写覆盖合并"],
                 "source_notes": [],
                 "quality": {
                     "structure_confidence": 1.0, "field_mapping_confidence": 1.0,
@@ -369,7 +434,7 @@ def _parse_shipment_share_cache(
                     "llm_interpreted": False, "review_required": False,
                 },
             }],
-        }] if supply_chain_cache else []),
+        }] if supply_chain_records else []),
         "quality": {
             "cell_match_rate": 1.0,
             "value_source": "ooxml_pivot_cache",

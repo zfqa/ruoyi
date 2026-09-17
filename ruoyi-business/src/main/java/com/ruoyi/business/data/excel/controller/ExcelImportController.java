@@ -230,7 +230,8 @@ public class ExcelImportController extends BaseController
         ParseOptions options = parseOptions(payload);
         return submitParse(file.toString(), file.getFileName().toString(), file.toString(),
             baselineFile == null ? null : baselineFile.toString(),
-            supplyChainFile == null ? null : supplyChainFile.toString(), options);
+            supplyChainFile == null ? null : supplyChainFile.toString(),
+            List.of(), List.of(), options);
     }
 
     @PreAuthorize("@ss.hasPermi('business:data:excel:query')")
@@ -250,14 +251,38 @@ public class ExcelImportController extends BaseController
         String supplyChainFileName = stringValue(payload.get("supplyChainFileName"));
         Path supplyChainPath = StringUtils.isEmpty(supplyChainFileName)
             ? null : excelFileStorage.resolveUploadedFile(supplyChainFileName);
+        List<String> extraHistoryPaths = resolveUploadedPathList(payload.get("extraHistoryFileNames"));
+        List<String> extraSupplyPaths = resolveUploadedPathList(payload.get("extraSupplyChainFileNames"));
         ParseOptions options = parseOptions(payload);
         return submitParse(absolutePath.toString(), absolutePath.getFileName().toString(), fileName,
             baselinePath == null ? null : baselinePath.toString(),
-            supplyChainPath == null ? null : supplyChainPath.toString(), options);
+            supplyChainPath == null ? null : supplyChainPath.toString(),
+            extraHistoryPaths, extraSupplyPaths, options);
+    }
+
+    private List<String> resolveUploadedPathList(Object raw) throws IOException
+    {
+        List<String> paths = new ArrayList<>();
+        if (!(raw instanceof List<?> list))
+        {
+            return paths;
+        }
+        for (Object item : list)
+        {
+            String name = stringValue(item);
+            if (StringUtils.isEmpty(name))
+            {
+                continue;
+            }
+            paths.add(excelFileStorage.resolveUploadedFile(name).toString());
+        }
+        return paths;
     }
 
     private AjaxResult submitParse(String absolutePath, String displayFileName, String storedFilePath,
-        String baselineAbsolutePath, String supplyChainAbsolutePath, ParseOptions options)
+        String baselineAbsolutePath, String supplyChainAbsolutePath,
+        List<String> extraHistoryAbsolutePaths, List<String> extraSupplyAbsolutePaths,
+        ParseOptions options)
     {
         ExcelImport task = new ExcelImport();
         task.setTaskName(displayFileName);
@@ -269,8 +294,13 @@ public class ExcelImportController extends BaseController
 
         try
         {
+            final List<String> historyExtras = extraHistoryAbsolutePaths == null
+                ? List.of() : List.copyOf(extraHistoryAbsolutePaths);
+            final List<String> supplyExtras = extraSupplyAbsolutePaths == null
+                ? List.of() : List.copyOf(extraSupplyAbsolutePaths);
             excelParseTaskExecutor.execute(() -> executeParse(
-                task.getId(), absolutePath, baselineAbsolutePath, supplyChainAbsolutePath, options));
+                task.getId(), absolutePath, baselineAbsolutePath, supplyChainAbsolutePath,
+                historyExtras, supplyExtras, options));
         }
         catch (RuntimeException ex)
         {
@@ -287,7 +317,8 @@ public class ExcelImportController extends BaseController
     }
 
     private void executeParse(Long taskId, String absolutePath, String baselineAbsolutePath,
-        String supplyChainAbsolutePath, ParseOptions options)
+        String supplyChainAbsolutePath, List<String> extraHistoryAbsolutePaths,
+        List<String> extraSupplyAbsolutePaths, ParseOptions options)
     {
         ExcelImport task = excelImportService.selectExcelImportById(taskId);
         if (task == null)
@@ -298,7 +329,8 @@ public class ExcelImportController extends BaseController
         {
             task.setRemark("正在解析工作簿（LLM候选表调用上限: " + llmMaxTableCalls + "）");
             excelImportService.updateExcelImport(task);
-            String output = runAgent(absolutePath, baselineAbsolutePath, supplyChainAbsolutePath, options);
+            String output = runAgent(absolutePath, baselineAbsolutePath, supplyChainAbsolutePath,
+                extraHistoryAbsolutePaths, extraSupplyAbsolutePaths, options);
             fillParseSummary(task, output);
             task.setResultJson(output);
             task.setStatus("1");
@@ -507,7 +539,8 @@ public class ExcelImportController extends BaseController
     }
 
     private String runAgent(String absolutePath, String baselineAbsolutePath,
-        String supplyChainAbsolutePath, ParseOptions options)
+        String supplyChainAbsolutePath, List<String> extraHistoryAbsolutePaths,
+        List<String> extraSupplyAbsolutePaths, ParseOptions options)
         throws IOException, InterruptedException
     {
         java.io.File agent = resolveAgentScript();
@@ -522,7 +555,8 @@ public class ExcelImportController extends BaseController
             try
             {
                 return runAgentWithPython(
-                    python, agent, absolutePath, baselineAbsolutePath, supplyChainAbsolutePath, options);
+                    python, agent, absolutePath, baselineAbsolutePath, supplyChainAbsolutePath,
+                    extraHistoryAbsolutePaths, extraSupplyAbsolutePaths, options);
             }
             catch (PythonLaunchException ex)
             {
@@ -533,7 +567,9 @@ public class ExcelImportController extends BaseController
     }
 
     private String runAgentWithPython(String python, java.io.File agent, String absolutePath,
-        String baselineAbsolutePath, String supplyChainAbsolutePath, ParseOptions options)
+        String baselineAbsolutePath, String supplyChainAbsolutePath,
+        List<String> extraHistoryAbsolutePaths, List<String> extraSupplyAbsolutePaths,
+        ParseOptions options)
         throws IOException, InterruptedException
     {
         List<String> command = new ArrayList<>();
@@ -551,6 +587,28 @@ public class ExcelImportController extends BaseController
         {
             command.add("--supply-chain-file");
             command.add(supplyChainAbsolutePath);
+        }
+        if (extraHistoryAbsolutePaths != null)
+        {
+            for (String path : extraHistoryAbsolutePaths)
+            {
+                if (StringUtils.isNotEmpty(path))
+                {
+                    command.add("--extra-history-file");
+                    command.add(path);
+                }
+            }
+        }
+        if (extraSupplyAbsolutePaths != null)
+        {
+            for (String path : extraSupplyAbsolutePaths)
+            {
+                if (StringUtils.isNotEmpty(path))
+                {
+                    command.add("--extra-supply-chain-file");
+                    command.add(path);
+                }
+            }
         }
         if (options.includeRawCells)
         {

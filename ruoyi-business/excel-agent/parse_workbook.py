@@ -25,6 +25,14 @@ def main() -> int:
     parser.add_argument("--max-llm-tables", type=int, default=None, help="Maximum table candidates sent to the LLM")
     parser.add_argument("--baseline-file", default=None, help="Older tracker workbook used only for Y22 history")
     parser.add_argument("--supply-chain-file", default=None, help="Supply Chain workbook used for customer and region analysis")
+    parser.add_argument(
+        "--extra-history-file", action="append", default=[],
+        help="Additional History workbook(s); Year/Quarter overlap is overridden by later files and --file",
+    )
+    parser.add_argument(
+        "--extra-supply-chain-file", action="append", default=[],
+        help="Additional Supply Chain workbook(s); Year/Quarter overlap is overridden by later files and --supply-chain-file",
+    )
     args = parser.parse_args()
 
     result = parse_workbook(
@@ -36,6 +44,8 @@ def main() -> int:
         max_llm_tables=args.max_llm_tables,
         baseline_file_path=args.baseline_file,
         supply_chain_file_path=args.supply_chain_file,
+        extra_history_file_paths=args.extra_history_file,
+        extra_supply_chain_file_paths=args.extra_supply_chain_file,
     )
     print(to_json(result))
     return 0

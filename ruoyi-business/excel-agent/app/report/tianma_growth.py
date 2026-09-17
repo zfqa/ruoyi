@@ -5,9 +5,11 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.report.periods import BASE_PERIODS, SUPPORTED_YEARS, periods_for_years
 
-PERIODS = ("Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3")
-CLIENT_PERIODS = ("Y22", "Y23", "Y24", "Y25Q1-Q3")
+
+PERIODS = BASE_PERIODS + ("Y26Q1",)
+CLIENT_PERIODS = ("Y22", "Y23", "Y24", "Y25Q1-Q3", "Y26Q1")
 TECHNOLOGIES = ("LTPS", "a-Si")
 REGION_ORDER = ("日系", "欧系", "中系", "美系", "韩系", "其他")
 APPLICATION_ORDER = ("仪表", "中控", "HUD", "控制屏", "后视镜", "娱乐屏")
@@ -129,17 +131,21 @@ def calculate_tianma_customer_metrics(
     top_clients.sort(key=lambda client: (reference_order.get(client, 99), -top_sums[(client,)]["value"]))
     current_total = _selected_bucket(rows, 2025, {1, 2, 3})
     prior_total = _selected_bucket(rows, 2024, {1, 2, 3})
+    client_periods = tuple(
+        period for period in CLIENT_PERIODS
+        if period != "Y26Q1" or any(row["year"] == 2026 for row in rows)
+    )
     client_series = []
     for client in top_clients:
         client_rows = [row for row in rows if row["client"] == client]
-        buckets = _period_buckets(client_rows, CLIENT_PERIODS, include_y25f=False)
+        buckets = _period_buckets(client_rows, client_periods, include_y25f=False)
         current = _selected_bucket(client_rows, 2025, {1, 2, 3})
         prior = _selected_bucket(client_rows, 2024, {1, 2, 3})
         client_series.append({
             "metric_id": f"{_slug(maker)}.client.{_slug(client)}.shipment",
             "client": client,
             "unit": "thousand_units",
-            "periods": {period: _bucket_value(buckets[period]) for period in CLIENT_PERIODS},
+            "periods": {period: _bucket_value(buckets.get(period)) for period in client_periods},
             "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(current, prior),
             "share_y25_q1_q3": _share(current, current_total),
             "share_y24_q1_q3": _share(prior, prior_total),
@@ -149,7 +155,7 @@ def calculate_tianma_customer_metrics(
             "growth_contribution_y25_q1_q3": _growth_contribution(
                 current, prior, current_total, prior_total
             ),
-            "evidence": {period: _bucket_evidence(buckets[period]) for period in CLIENT_PERIODS},
+            "evidence": {period: _bucket_evidence(buckets.get(period)) for period in client_periods},
         })
 
     region_rows = [row for row in rows if not row.get("excluded_from_region")]
@@ -163,7 +169,7 @@ def calculate_tianma_customer_metrics(
             "original_specification": "Automobile monitor",
             "excluded_product": "Automobile monitor (Others)",
             "panel_maker": maker,
-            "years": [2022, 2023, 2024, 2025],
+            "years": list(SUPPORTED_YEARS),
             "top_client_basis": "Y25 Q1-Q3 Qty descending",
             "top_client_exclusions": ["Others", "Not Defined", "GM"],
             "region_technology_exclusions": ["Oxide"],
@@ -172,7 +178,7 @@ def calculate_tianma_customer_metrics(
         "top_clients": {
             "metric_id": f"{_slug(maker)}.clients.top6.y25q1_q3",
             "unit": "thousand_units",
-            "period_order": list(CLIENT_PERIODS),
+            "period_order": list(client_periods),
             "clients": client_series,
         },
         "regions": {
@@ -196,12 +202,13 @@ def calculate_tianma_application_metrics(
 ) -> dict[str, Any]:
     current = [_normalize_application(record, "current", maker) for record in current_records]
     baseline = [_normalize_application(record, "baseline", maker) for record in (baseline_records or [])]
-    rows = [row for row in current if row is not None and row["year"] in {2023, 2024, 2025}]
+    rows = [row for row in current if row is not None and row["year"] in set(SUPPORTED_YEARS) - {2022}]
     rows.extend(row for row in baseline if row is not None and row["year"] == 2022)
     gaps = []
     if not baseline_records:
         gaps.append(f"未提供1Q25 with 4Q24 Results基准文件，{maker}应用别Y22指标暂缺")
 
+    active_periods = periods_for_years(row["year"] for row in rows)
     series = []
     current_total = _selected_bucket(rows, 2025, {1, 2, 3})
     prior_total = _selected_bucket(rows, 2024, {1, 2, 3})
@@ -209,31 +216,38 @@ def calculate_tianma_application_metrics(
     prior_area_total = _selected_measure_bucket(rows, 2024, {1, 2, 3}, "display_area")
     for application in APPLICATION_ORDER:
         selected = [row for row in rows if row["application"] == application]
-        buckets = _period_buckets(selected, PERIODS, include_y25f=True)
+        buckets = _period_buckets(selected, active_periods, include_y25f=True)
         prior_q1_q3 = _selected_bucket(selected, 2024, {1, 2, 3})
         current_q1_q3 = _selected_bucket(selected, 2025, {1, 2, 3})
+        prior_q1 = _selected_bucket(selected, 2025, {1})
         area_buckets = _measure_period_buckets(selected, "display_area")
         prior_area_q1_q3 = _selected_measure_bucket(selected, 2024, {1, 2, 3}, "display_area")
         current_area_q1_q3 = _selected_measure_bucket(selected, 2025, {1, 2, 3}, "display_area")
+        yoy_periods = {
+            "Y22": None,
+            "Y23": _yoy(buckets.get("Y23"), buckets.get("Y22")),
+            "Y24": _yoy(buckets.get("Y24"), buckets.get("Y23")),
+            "Y25F": _yoy(buckets.get("Y25F"), buckets.get("Y24")),
+            "Y25Q1-Q3": _yoy(buckets.get("Y25Q1-Q3"), prior_q1_q3),
+        }
+        if "Y26Q1" in active_periods:
+            yoy_periods["Y26Q1"] = _yoy(buckets.get("Y26Q1"), prior_q1)
         series.append({
             "metric_id": f"{_slug(maker)}.application.{_slug(application)}.shipment",
             "application": application,
             "unit": "thousand_units",
-            "periods": {period: _bucket_value(buckets[period]) for period in PERIODS},
+            "periods": {period: _bucket_value(buckets.get(period)) for period in active_periods},
             "share_y25_q1_q3": _share(current_q1_q3, current_total),
             "growth_contribution_y25_q1_q3": _growth_contribution(
                 current_q1_q3, prior_q1_q3, current_total, prior_total
             ),
-            "yoy_periods": {
-                "Y22": None,
-                "Y23": _yoy(buckets["Y23"], buckets["Y22"]),
-                "Y24": _yoy(buckets["Y24"], buckets["Y23"]),
-                "Y25F": _yoy(buckets["Y25F"], buckets["Y24"]),
-                "Y25Q1-Q3": _yoy(buckets["Y25Q1-Q3"], prior_q1_q3),
-            },
+            "yoy_periods": yoy_periods,
             "display_area": {
                 "unit": "square_meters",
-                "periods": {period: _bucket_value(area_buckets[period]) for period in PERIODS},
+                "periods": {
+                    period: _bucket_value(area_buckets.get(period)) for period in active_periods
+                    if period in area_buckets
+                },
                 "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(current_area_q1_q3, prior_area_q1_q3),
                 "share_y25_q1_q3": _share(current_area_q1_q3, current_area_total),
                 "growth_contribution_y25_q1_q3": _growth_contribution(
@@ -241,10 +255,11 @@ def calculate_tianma_application_metrics(
                     current_area_total, prior_area_total,
                 ),
                 "evidence": {
-                    period: _bucket_evidence(area_buckets[period]) for period in PERIODS
+                    period: _bucket_evidence(area_buckets.get(period))
+                    for period in active_periods if period in area_buckets
                 },
             },
-            "evidence": {period: _bucket_evidence(buckets[period]) for period in PERIODS},
+            "evidence": {period: _bucket_evidence(buckets.get(period)) for period in active_periods},
         })
 
     q1_q3_rows = [row for row in rows if row["year"] == 2025 and row["quarter"] in {1, 2, 3}]
@@ -294,7 +309,7 @@ def calculate_tianma_application_metrics(
         "application_history": {
             "metric_id": f"{_slug(maker)}.applications.shipment.history",
             "unit": "thousand_units",
-            "period_order": list(PERIODS),
+            "period_order": list(active_periods),
             "series": series,
         },
         "key_sizes": {
@@ -357,7 +372,7 @@ def _normalize_supply(record, maker_name):
     source_technology = _text(_value(_fact(record, "technology")))
     quantity_fact = _fact(record, "quantity_000", "shipment")
     quantity = _decimal(_value(quantity_fact))
-    if year not in {2022, 2023, 2024, 2025} or quarter not in {1, 2, 3, 4} or quantity is None:
+    if year not in SUPPORTED_YEARS or quarter not in {1, 2, 3, 4} or quantity is None:
         return None
     if not _maker_matches(maker, maker_name) or specification.lower() != "automobile monitor":
         return None
@@ -385,7 +400,7 @@ def _normalize_application(record, source_role, maker_name):
     quantity = _decimal(_value(quantity_fact))
     area_fact = _fact(record, "display_area")
     display_area = _decimal(_value(area_fact))
-    if year not in {2022, 2023, 2024, 2025} or quarter not in {1, 2, 3, 4} or quantity is None:
+    if year not in SUPPORTED_YEARS or quarter not in {1, 2, 3, 4} or quantity is None:
         return None
     if not _maker_matches(maker, maker_name) or specification.lower() != "automobile monitor" or application is None:
         return None
@@ -405,10 +420,13 @@ def _period_buckets(rows, periods, include_y25f):
             period = f"Y{str(row['year'])[-2:]}"
             if period in buckets:
                 _add(buckets[period], row)
-        elif include_y25f and "Y25F" in buckets:
-            _add(buckets["Y25F"], row)
-        if row["year"] == 2025 and row["quarter"] in {1, 2, 3} and "Y25Q1-Q3" in buckets:
-            _add(buckets["Y25Q1-Q3"], row)
+        elif row["year"] == 2025:
+            if include_y25f and "Y25F" in buckets:
+                _add(buckets["Y25F"], row)
+            if row["quarter"] in {1, 2, 3} and "Y25Q1-Q3" in buckets:
+                _add(buckets["Y25Q1-Q3"], row)
+        elif row["year"] == 2026 and row["quarter"] == 1 and "Y26Q1" in buckets:
+            _add(buckets["Y26Q1"], row)
     return buckets
 
 
@@ -417,14 +435,22 @@ def _selected_bucket(rows, year, quarters):
 
 
 def _measure_period_buckets(rows, measure):
-    buckets = {period: _empty_bucket() for period in PERIODS}
+    periods = periods_for_years(row["year"] for row in rows)
+    buckets = {period: _empty_bucket() for period in periods}
     for row in rows:
         if row.get(measure) is None:
             continue
-        period = f"Y{str(row['year'])[-2:]}" if row["year"] < 2025 else "Y25F"
-        _add_measure(buckets[period], row, measure)
-        if row["year"] == 2025 and row["quarter"] in {1, 2, 3}:
-            _add_measure(buckets["Y25Q1-Q3"], row, measure)
+        if row["year"] < 2025:
+            period = f"Y{str(row['year'])[-2:]}"
+            if period in buckets:
+                _add_measure(buckets[period], row, measure)
+        elif row["year"] == 2025:
+            if "Y25F" in buckets:
+                _add_measure(buckets["Y25F"], row, measure)
+            if row["quarter"] in {1, 2, 3} and "Y25Q1-Q3" in buckets:
+                _add_measure(buckets["Y25Q1-Q3"], row, measure)
+        elif row["year"] == 2026 and row["quarter"] == 1 and "Y26Q1" in buckets:
+            _add_measure(buckets["Y26Q1"], row, measure)
     return buckets
 
 

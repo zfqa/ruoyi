@@ -10,7 +10,7 @@
           action="#"
           :auto-upload="false"
           :multiple="true"
-          :limit="3"
+          :limit="5"
           :show-file-list="false"
           :disabled="uploadingFiles || parsing"
           :file-list="freeFileList"
@@ -20,18 +20,20 @@
           :on-exceed="onFreeFileExceed"
         >
           <el-button size="small" type="primary" icon="el-icon-folder-opened" :loading="uploadingFiles">选取文件</el-button>
-          <div slot="tip" class="el-upload__tip">可一次选择 1～3 个 Excel/CSV（单个 ≤10MB）。系统按文件名自动识别角色，识别不准时可手动调整。</div>
+          <div slot="tip" class="el-upload__tip">可一次选择 1～5 个 Excel/CSV（单个 ≤10MB）。支持多份 History / Supply 按 Year/Quarter 合并；系统按文件名自动识别角色，识别不准时可手动调整。</div>
         </el-upload>
         <el-table v-if="selectedFiles.length" :data="selectedFiles" border size="mini" class="role-table">
           <el-table-column label="文件名" min-width="260" show-overflow-tooltip>
             <template slot-scope="scope">{{ scope.row.originalName }}</template>
           </el-table-column>
-          <el-table-column label="解析角色" width="220">
+          <el-table-column label="解析角色" width="240">
             <template slot-scope="scope">
               <el-select v-model="scope.row.role" size="mini" placeholder="请指定角色" style="width:100%" @change="onRoleChange(scope.row)">
-                <el-option label="当前文件（主数据）" value="current" />
+                <el-option label="当前主 History" value="current" />
+                <el-option label="补充 History（多季度）" value="extra_history" />
                 <el-option label="Y22 基准文件" value="baseline" />
-                <el-option label="客户/区域（Supply Chain）" value="supply" />
+                <el-option label="主 Supply Chain" value="supply" />
+                <el-option label="补充 Supply Chain" value="extra_supply" />
               </el-select>
             </template>
           </el-table-column>
@@ -204,10 +206,15 @@ import { listExcelImport, getExcelImport, getExcelImportResult, getExcelImportSt
 import { exportAiReportOffice } from "@/api/business/report/aiReport";
 
 const ROLE_OPTIONS = [
-  { value: 'current', label: '当前文件（主数据）' },
+  { value: 'current', label: '当前主 History' },
+  { value: 'extra_history', label: '补充 History（多季度）' },
   { value: 'baseline', label: 'Y22 基准文件' },
-  { value: 'supply', label: '客户/区域（Supply Chain）' }
+  { value: 'supply', label: '主 Supply Chain' },
+  { value: 'extra_supply', label: '补充 Supply Chain' }
 ]
+
+/** Unique roles: only one current / baseline / supply; extras may repeat. */
+const UNIQUE_ROLES = new Set(['current', 'baseline', 'supply'])
 
 /** 解析默认参数：与原先表单默认值一致，页面不再暴露高级开关。 */
 const DEFAULT_PARSE_OPTIONS = {
@@ -258,10 +265,15 @@ export default {
         const item = this.selectedFiles.find(file => file.role === role && file.storedName)
         return item ? item.storedName : ""
       }
+      const many = role => this.selectedFiles
+        .filter(file => file.role === role && file.storedName)
+        .map(file => file.storedName)
       return {
         fileName: byRole('current'),
         baselineFileName: byRole('baseline'),
-        supplyChainFileName: byRole('supply')
+        supplyChainFileName: byRole('supply'),
+        extraHistoryFileNames: many('extra_history'),
+        extraSupplyChainFileNames: many('extra_supply')
       }
     },
     canParseUploaded() {
@@ -269,7 +281,7 @@ export default {
     },
     roleHint() {
       if (!this.selectedFiles.length) {
-        return "请先解压 ZIP 后再选择 Excel；未指定 Y22 基准时，报告中 Y22 会显示为缺失。"
+        return "三文件对标终稿；五文件=三文件+1Q26 History/Supply，对标 1Q26 Analysis。"
       }
       const labels = this.selectedFiles.map(file => {
         const role = ROLE_OPTIONS.find(item => item.value === file.role)
@@ -325,24 +337,63 @@ export default {
     },
     guessFileRole(fileName) {
       const name = String(fileName || '').toLowerCase()
-      if (/supply\s*chain|供应链|customer|region|区域/.test(name)) return 'supply'
-      if (/1q25|4q24|baseline|基准|y22/.test(name)) return 'baseline'
-      if (/4q25|3q25|current|当前/.test(name)) return 'current'
+      if (/supply\s*chain|供应链|customer|region|区域/.test(name)) {
+        return /1q26|q126/.test(name) ? 'extra_supply' : 'supply'
+      }
+      if (/1q25|4q24|baseline|基准|y22/.test(name) && !/4q25|3q25|1q26/.test(name)) return 'baseline'
+      if (/1q26|q126/.test(name) && /history|pivot/.test(name)) return 'extra_history'
+      if (/4q25|3q25|current|当前|history|pivot/.test(name)) return 'current'
       return ''
+    },
+    historyRank(fileName) {
+      const name = String(fileName || '').toLowerCase()
+      if (/1q26|q126/.test(name)) return 2601
+      if (/4q25|3q25/.test(name)) return 2504
+      if (/1q25|4q24/.test(name)) return 2501
+      return 0
     },
     assignRoles(files) {
       const used = new Set()
       const next = files.map(file => ({ ...file }))
       next.forEach(file => {
         const guessed = this.guessFileRole(file.originalName)
-        if (guessed && !used.has(guessed)) {
-          file.role = guessed
-          used.add(guessed)
-        } else {
+        if (!guessed) {
           file.role = ''
+          return
         }
+        if (UNIQUE_ROLES.has(guessed) && used.has(guessed)) {
+          if (guessed === 'current') file.role = 'extra_history'
+          else if (guessed === 'supply') file.role = 'extra_supply'
+          else file.role = ''
+          return
+        }
+        file.role = guessed
+        if (UNIQUE_ROLES.has(guessed)) used.add(guessed)
       })
-      const leftovers = ['current', 'baseline', 'supply'].filter(role => !used.has(role))
+      // Newest History should be primary current so merge last-write wins.
+      const historyFiles = next.filter(file =>
+        file.role === 'current' || file.role === 'extra_history' ||
+        (/history|pivot/.test(String(file.originalName || '').toLowerCase()) &&
+          !/supply/.test(String(file.originalName || '').toLowerCase()) &&
+          file.role !== 'baseline')
+      )
+      if (historyFiles.length) {
+        historyFiles.sort((a, b) => this.historyRank(b.originalName) - this.historyRank(a.originalName))
+        historyFiles.forEach((file, index) => {
+          file.role = index === 0 ? 'current' : 'extra_history'
+        })
+      }
+      const supplyFiles = next.filter(file =>
+        file.role === 'supply' || file.role === 'extra_supply' ||
+        /supply\s*chain|供应链/.test(String(file.originalName || '').toLowerCase())
+      )
+      if (supplyFiles.length) {
+        supplyFiles.sort((a, b) => this.historyRank(b.originalName) - this.historyRank(a.originalName))
+        supplyFiles.forEach((file, index) => {
+          file.role = index === 0 ? 'supply' : 'extra_supply'
+        })
+      }
+      const leftovers = ['current', 'baseline', 'supply'].filter(role => !next.some(file => file.role === role))
       next.forEach(file => {
         if (!file.role && leftovers.length) {
           file.role = leftovers.shift()
@@ -351,7 +402,7 @@ export default {
       return next
     },
     onFreeFileExceed() {
-      this.$modal.msgWarning('最多选择 3 个文件')
+      this.$modal.msgWarning('最多选择 5 个文件')
     },
     onFreeFileRemove(file, fileList) {
       this.freeFileList = fileList
@@ -364,7 +415,7 @@ export default {
     syncSelectedFromUploadList(fileList) {
       const allowed = ['xlsx', 'xlsm', 'csv']
       const next = []
-      for (const item of fileList.slice(-3)) {
+      for (const item of fileList.slice(-5)) {
         const raw = item.raw
         const originalName = (raw && raw.name) || item.name || ''
         const ext = originalName.split('.').pop().toLowerCase()
@@ -416,6 +467,7 @@ export default {
       })
     },
     onRoleChange(changed) {
+      if (!UNIQUE_ROLES.has(changed.role)) return
       this.selectedFiles.forEach(file => {
         if (file !== changed && file.role === changed.role) {
           file.role = ''
@@ -438,7 +490,7 @@ export default {
     },
     handleParseUploaded() {
       if (!this.uploadForm.fileName) {
-        this.$modal.msgError("请至少指定一个「当前文件（主数据）」并完成上传");
+        this.$modal.msgError("请至少指定一个「当前主 History」并完成上传");
         return;
       }
       const missingRole = this.selectedFiles.find(file => !file.role)
@@ -453,11 +505,18 @@ export default {
       this.parsing = true;
       this.taskProgress = 0;
       this.taskRemark = "正在提交解析任务";
-      parseUploadExcel(this.uploadForm.fileName, {
+      const payload = {
         ...DEFAULT_PARSE_OPTIONS,
         baselineFileName: this.uploadForm.baselineFileName || undefined,
         supplyChainFileName: this.uploadForm.supplyChainFileName || undefined
-      }).then(response => {
+      }
+      if (this.uploadForm.extraHistoryFileNames && this.uploadForm.extraHistoryFileNames.length) {
+        payload.extraHistoryFileNames = this.uploadForm.extraHistoryFileNames
+      }
+      if (this.uploadForm.extraSupplyChainFileNames && this.uploadForm.extraSupplyChainFileNames.length) {
+        payload.extraSupplyChainFileNames = this.uploadForm.extraSupplyChainFileNames
+      }
+      parseUploadExcel(this.uploadForm.fileName, payload).then(response => {
         this.$modal.msgSuccess("解析任务已提交");
         this.getList();
         return this.waitForTask(response.data.taskId);

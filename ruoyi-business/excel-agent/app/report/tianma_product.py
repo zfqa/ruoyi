@@ -4,9 +4,11 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.report.periods import BASE_PERIODS, SUPPORTED_YEARS, periods_for_years
 
-YEARS = (2022, 2023, 2024, 2025)
-PERIODS = ("Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3")
+
+YEARS = SUPPORTED_YEARS
+PERIODS = BASE_PERIODS + ("Y26Q1",)
 TECHNOLOGIES = ("LTPS", "a-Si")
 SIZE_BUCKETS = (
     ("<8", '8”以下'),
@@ -24,8 +26,9 @@ def calculate_tianma_product_metrics(
     """Calculate one maker's technology and size section without LLM arithmetic."""
     current = [_normalize(record, "current", maker) for record in current_records]
     baseline = [_normalize(record, "baseline", maker) for record in (baseline_records or [])]
-    rows = [row for row in current if row is not None and row["year"] in {2023, 2024, 2025}]
+    rows = [row for row in current if row is not None and row["year"] in set(YEARS) - {2022}]
     rows.extend(row for row in baseline if row is not None and row["year"] == 2022)
+    active_periods = periods_for_years(row["year"] for row in rows)
 
     gaps = []
     if not baseline_records:
@@ -47,20 +50,22 @@ def calculate_tianma_product_metrics(
             "maker": maker,
             "technologies": list(TECHNOLOGIES),
             "years": list(YEARS),
-            "period_order": list(PERIODS),
+            "period_order": list(active_periods),
             "y25q1_q3_quarters": ["Q1", "Q2", "Q3"],
             "y22_source": "baseline_workbook",
-            "y23_y25_source": "current_workbook",
+            "y23_y26_source": "merged_current_workbooks",
             "source_row_count": len(rows),
         },
         "formulas": {
             "yoy": "current comparable period / previous comparable period - 1",
             "y25f_yoy": "Y25F / Y24 - 1",
             "y25q1_q3_yoy": "Y25 Q1-Q3 / Y24 Q1-Q3 - 1",
+            "y26q1_yoy": "Y26 Q1 / Y25 Q1 - 1",
             "size_buckets": ["Size < 8", "8 <= Size < 12", "12 <= Size < 15", "Size >= 15"],
         },
         "technology_history": {
-            technology: _technology_metric(rows, technology, maker_key) for technology in TECHNOLOGIES
+            technology: _technology_metric(rows, technology, maker_key, active_periods)
+            for technology in TECHNOLOGIES
         },
         "y25q1_q3_size_distribution": _exact_size_distribution(rows, maker_key),
         "technology_size_growth": {
@@ -100,26 +105,32 @@ def _normalize(record, source_role, maker_name):
     }
 
 
-def _technology_metric(rows, technology, maker_key):
+def _technology_metric(rows, technology, maker_key, periods):
     selected = [row for row in rows if row["technology"] == technology]
-    buckets = _period_buckets(selected)
+    buckets = _period_buckets(selected, periods)
     prior_q1_q3 = _selected_bucket(selected, 2024, {1, 2, 3})
+    prior_q1 = _selected_bucket(selected, 2025, {1})
     return _period_metric(
-        buckets, prior_q1_q3, f"{maker_key}.technology.{_slug(technology)}.shipment"
+        buckets, prior_q1_q3, f"{maker_key}.technology.{_slug(technology)}.shipment",
+        periods, prior_q1=prior_q1,
     )
 
 
 def _technology_size_metric(rows, technology, maker_key):
     selected = [row for row in rows if row["technology"] == technology and row["size"] is not None]
+    periods = periods_for_years(row["year"] for row in rows)
     series = []
     for bucket_name, label in SIZE_BUCKETS:
         bucket_rows = [row for row in selected if _size_bucket(row["size"]) == bucket_name]
-        buckets = _period_buckets(bucket_rows)
+        buckets = _period_buckets(bucket_rows, periods)
         prior_q1_q3 = _selected_bucket(bucket_rows, 2024, {1, 2, 3})
+        prior_q1 = _selected_bucket(bucket_rows, 2025, {1})
         metric = _period_metric(
             buckets,
             prior_q1_q3,
             f"{maker_key}.technology_size.{_slug(technology)}.{_slug(bucket_name)}",
+            periods,
+            prior_q1=prior_q1,
         )
         metric.update({"size_bucket": bucket_name, "label": label})
         series.append(metric)
@@ -127,7 +138,7 @@ def _technology_size_metric(rows, technology, maker_key):
         "metric_id": f"{maker_key}.technology_size.{_slug(technology)}",
         "technology": technology,
         "unit": "thousand_units",
-        "period_order": list(PERIODS),
+        "period_order": list(periods),
         "series": series,
     }
 
@@ -169,30 +180,41 @@ def _exact_size_distribution(rows, maker_key):
     }
 
 
-def _period_metric(buckets, prior_q1_q3, metric_id):
+def _period_metric(buckets, prior_q1_q3, metric_id, periods, prior_q1=None):
+    yoy_periods = {
+        "Y22": None,
+        "Y23": _standard_yoy(buckets.get("Y23"), buckets.get("Y22")),
+        "Y24": _standard_yoy(buckets.get("Y24"), buckets.get("Y23")),
+        "Y25F": _standard_yoy(buckets.get("Y25F"), buckets.get("Y24")),
+        "Y25Q1-Q3": _standard_yoy(buckets.get("Y25Q1-Q3"), prior_q1_q3),
+    }
+    if "Y26Q1" in periods:
+        yoy_periods["Y26Q1"] = _standard_yoy(buckets.get("Y26Q1"), prior_q1)
     return {
         "metric_id": metric_id,
         "unit": "thousand_units",
-        "periods": {period: _bucket_value(buckets[period]) for period in PERIODS},
-        "standard_y25f_yoy": _standard_yoy(buckets["Y25F"], buckets["Y24"]),
-        "yoy_periods": {
-            "Y22": None,
-            "Y23": _standard_yoy(buckets["Y23"], buckets["Y22"]),
-            "Y24": _standard_yoy(buckets["Y24"], buckets["Y23"]),
-            "Y25F": _standard_yoy(buckets["Y25F"], buckets["Y24"]),
-            "Y25Q1-Q3": _standard_yoy(buckets["Y25Q1-Q3"], prior_q1_q3),
-        },
-        "evidence": {period: _bucket_evidence(buckets[period]) for period in PERIODS},
+        "periods": {period: _bucket_value(buckets.get(period)) for period in periods},
+        "standard_y25f_yoy": _standard_yoy(buckets.get("Y25F"), buckets.get("Y24")),
+        "yoy_periods": yoy_periods,
+        "evidence": {period: _bucket_evidence(buckets.get(period)) for period in periods},
     }
 
 
-def _period_buckets(rows):
-    buckets = {period: _empty_bucket() for period in PERIODS}
+def _period_buckets(rows, periods=None):
+    periods = periods or PERIODS
+    buckets = {period: _empty_bucket() for period in periods}
     for row in rows:
-        period = f"Y{str(row['year'])[-2:]}" if row["year"] < 2025 else "Y25F"
-        _add(buckets[period], row)
-        if row["year"] == 2025 and row["quarter"] in {1, 2, 3}:
-            _add(buckets["Y25Q1-Q3"], row)
+        if row["year"] < 2025:
+            period = f"Y{str(row['year'])[-2:]}"
+            if period in buckets:
+                _add(buckets[period], row)
+        elif row["year"] == 2025:
+            if "Y25F" in buckets:
+                _add(buckets["Y25F"], row)
+            if row["quarter"] in {1, 2, 3} and "Y25Q1-Q3" in buckets:
+                _add(buckets["Y25Q1-Q3"], row)
+        elif row["year"] == 2026 and row["quarter"] == 1 and "Y26Q1" in buckets:
+            _add(buckets["Y26Q1"], row)
     return buckets
 
 
@@ -217,11 +239,13 @@ def _add(bucket, row):
 
 
 def _bucket_value(bucket):
-    return None if not bucket["count"] else _number(bucket["value"])
+    if not bucket or not bucket["count"]:
+        return None
+    return _number(bucket["value"])
 
 
 def _bucket_evidence(bucket):
-    if not bucket["count"]:
+    if not bucket or not bucket["count"]:
         return None
     return {
         "source_roles": sorted(bucket["sources"]),
@@ -232,7 +256,7 @@ def _bucket_evidence(bucket):
 
 
 def _standard_yoy(current, previous):
-    if not current["count"] or not previous["count"] or previous["value"] == 0:
+    if not current or not previous or not current["count"] or not previous["count"] or previous["value"] == 0:
         return None
     return _number(current["value"] / previous["value"] - Decimal("1"))
 

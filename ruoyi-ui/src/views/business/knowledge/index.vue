@@ -68,158 +68,195 @@
       </el-tab-pane>
 
       <el-tab-pane label="知识问答" name="qa">
-        <el-form size="small" @submit.native.prevent>
-          <el-form-item label="问题">
-            <el-input v-model="qaForm.question" type="textarea" :rows="3" placeholder="回答只允许使用当前有效版本，并强制附带来源编号" />
-          </el-form-item>
-          <el-form-item label="限定来源">
-            <el-select v-model="qaForm.sourceType" clearable placeholder="留空：综合报告、新闻、政策和PDF"><el-option v-for="t in sourceTypes" :key="t.value" :label="t.label" :value="t.value" /></el-select>
-            <el-checkbox v-model="qaForm.includeNews" :disabled="!!qaForm.sourceType" style="margin-left:16px">结合新闻/政策解释</el-checkbox>
-            <el-button type="primary" icon="el-icon-chat-dot-round" :loading="asking" style="margin-left:12px" @click="doAsk">提问</el-button>
-            <el-button icon="el-icon-setting" v-hasPermi="['business:ai:config:query']" @click="goAiConfig">AI 配置</el-button>
-          </el-form-item>
-        </el-form>
-        <el-collapse class="qa-history">
-          <el-collapse-item title="最近问答记录（服务重启后仍可恢复）" name="history">
-            <el-button size="mini" icon="el-icon-refresh" :loading="qaHistoryLoading" @click="loadQaHistory">刷新</el-button>
-            <el-table :data="qaHistory" size="mini" style="margin-top:10px">
-              <el-table-column label="问题" prop="question" min-width="260" show-overflow-tooltip />
-              <el-table-column label="状态" prop="status" width="100" />
-              <el-table-column label="进度" prop="progress" width="80"><template slot-scope="s">{{ s.row.progress }}%</template></el-table-column>
-              <el-table-column label="创建时间" prop="createdAt" width="170" />
-              <el-table-column label="操作" width="90"><template slot-scope="s"><el-button type="text" size="mini" @click="restoreQaTask(s.row)">查看</el-button></template></el-table-column>
-            </el-table>
-          </el-collapse-item>
-        </el-collapse>
-        <el-card v-if="asking && qaTask" shadow="never" class="qa-progress-card">
-          <div class="qa-progress-head"><b>{{ qaTask.currentStage }}</b><span>{{ qaTask.progress || 0 }}%</span></div>
-          <el-progress :percentage="qaTask.progress || 0" :status="qaTask.status==='FAILED' ? 'exception' : undefined" />
-          <el-collapse v-model="qaRunningPanels" class="trace-collapse">
-            <el-collapse-item title="查看实时任务拆解与检索动作" name="running-trace">
-              <el-alert v-if="qaTask.queryPlan && qaTask.queryPlan.length" :title="qaTask.queryPlan[0].action" type="info" :closable="false" class="mb16" />
-              <el-steps direction="vertical" :active="runningActiveStep" finish-status="success" process-status="process">
-                <el-step v-for="step in (qaTask.queryPlan || [])" :key="`running-${step.order}`" :title="step.name" :description="`${step.action} · ${step.input || ''}`" />
-              </el-steps>
-              <el-table v-if="qaTask.retrievalLogs && qaTask.retrievalLogs.length" :data="qaTask.retrievalLogs" size="mini">
-                <el-table-column label="状态" prop="status" width="100" /><el-table-column label="动作" prop="action" width="150" />
-                <el-table-column label="输入/过滤" prop="input" min-width="200" /><el-table-column label="结果" prop="result" min-width="180" />
-              </el-table>
-            </el-collapse-item>
-          </el-collapse>
-        </el-card>
-        <el-card v-if="qaResult" shadow="never" class="answer-card">
-          <div slot="header" class="answer-header">
-            <span><b>知识库回答</b><el-tag size="mini" :type="answerModeType(qaResult.answerMode)" class="answer-mode">{{ answerModeText(qaResult.answerMode) }}</el-tag></span>
-            <span class="model-name">{{ qaResult.model }}</span>
+        <div class="qa-chat-shell">
+          <div class="qa-chat-toolbar">
+            <div class="qa-chat-toolbar-left">
+              <el-select v-model="qaForm.sourceType" clearable size="mini" placeholder="全部来源" class="qa-source-select">
+                <el-option v-for="t in sourceTypes" :key="t.value" :label="t.label" :value="t.value" />
+              </el-select>
+              <el-checkbox v-model="qaForm.includeNews" :disabled="!!qaForm.sourceType" size="mini">结合新闻/政策</el-checkbox>
+              <span class="qa-web-llm">
+                <el-switch v-model="qaForm.webLlm" />
+                <span>联网大模型</span>
+              </span>
+            </div>
+            <div class="qa-chat-toolbar-right">
+              <el-button type="text" size="mini" icon="el-icon-time" @click="qaHistoryDrawer = true">历史记录</el-button>
+              <el-button type="text" size="mini" icon="el-icon-delete" :disabled="!qaMessages.length && !asking" @click="clearQaChat">清空对话</el-button>
+              <el-button type="text" size="mini" icon="el-icon-setting" v-hasPermi="['business:ai:config:query']" @click="goAiConfig">AI 配置</el-button>
+            </div>
           </div>
-          <el-alert v-for="(warning,index) in (qaResult.warnings || [])" :key="`warning-${index}`" :title="warning" type="warning" :closable="false" class="mb16" />
-          <div v-if="qaResult.sourceBreakdown" class="source-breakdown">
-            <span>本次证据：</span>
-            <el-tag size="mini" type="success">事实结论引用覆盖率 {{ qaResult.citationCoveragePercent }}%</el-tag>
-            <el-tag size="mini">分析报告 {{ qaResult.sourceBreakdown.REPORT || 0 }}</el-tag>
-            <el-tag size="mini" type="warning">新闻 {{ qaResult.sourceBreakdown.NEWS || 0 }}</el-tag>
-            <el-tag size="mini" type="success">政策 {{ qaResult.sourceBreakdown.POLICY || 0 }}</el-tag>
-            <el-tag size="mini" type="info">PDF {{ qaResult.sourceBreakdown.PDF || 0 }}</el-tag>
-          </div>
-          <el-collapse v-model="qaTracePanels" class="trace-collapse">
-            <el-collapse-item name="final-trace">
-              <template slot="title"><i class="el-icon-connection trace-title-icon" />思考链路及参考内容</template>
-              <el-steps :active="(qaResult.queryPlan || []).length" finish-status="success" simple>
-                <el-step v-for="step in qaResult.queryPlan" :key="step.order" :title="step.name" :description="`${step.action} · ${step.input || ''}`" />
-              </el-steps>
-              <el-table v-if="qaResult.retrievalLogs" :data="qaResult.retrievalLogs" size="mini" class="log-table">
-                <el-table-column label="状态" prop="status" width="100"><template slot-scope="s"><el-tag size="mini" :type="logStatusType(s.row.status)">{{ s.row.status }}</el-tag></template></el-table-column>
-                <el-table-column label="动作" prop="action" width="150" /><el-table-column label="输入/过滤" prop="input" min-width="220" />
-                <el-table-column label="结果" prop="result" min-width="160" />
-                <el-table-column label="耗时" width="90"><template slot-scope="s">{{ s.row.durationMs }} ms</template></el-table-column>
-              </el-table>
-            </el-collapse-item>
-          </el-collapse>
-          <template v-if="qaResult.analysisTrace && qaResult.analysisTrace.length">
-            <el-divider content-position="left">直白分析过程（可审计）</el-divider>
-            <el-alert title="这里展示的是可核验的任务拆解、执行动作和证据判断，不展示不可验证的模型内部隐性思维。" type="info" :closable="false" class="mb16" />
-            <el-timeline class="analysis-timeline">
-              <el-timeline-item v-for="step in qaResult.analysisTrace" :key="`analysis-${step.order}`" :timestamp="`步骤 ${step.order}`" placement="top" type="primary">
-                <el-card shadow="never" class="analysis-step-card">
-                  <div class="analysis-step-title">{{ step.title }}</div>
-                  <div><b>我做了什么：</b>{{ step.action }}</div>
-                  <div><b>得到什么：</b>{{ step.result }}</div>
-                  <div class="analysis-boundary"><b>结论边界：</b>{{ step.boundary }}</div>
-                  <div v-if="step.evidences && step.evidences.length" class="analysis-evidences">
-                    <span>对应证据：</span>
-                    <el-button v-for="evidence in step.evidences" :key="`${step.order}-${evidence.citationLabel}-${evidence.chunkId}`" type="text" size="mini" @click="openEvidence(evidence)">
-                      [{{ evidence.citationLabel }}] {{ evidence.sourceName }}<span v-if="evidence.pageStart"> · 第{{ evidence.pageStart }}页</span>
-                    </el-button>
-                  </div>
-                </el-card>
-              </el-timeline-item>
-            </el-timeline>
-          </template>
-          <div class="answer-text">
-            <template v-for="segment in qaAnswerSegments">
-              <span v-if="!segment.citation" :key="segment.key">{{ segment.text }}</span>
-              <el-popover v-else :key="segment.key" placement="top-start" width="430" trigger="hover">
-                <div class="inline-source-title"><i :class="sourceIcon(segment.citation.sourceType)" /> {{ segment.citation.sourceName }} · {{ segment.citation.versionNo }}</div>
-                <div class="citation-snippet">{{ citationPreview(segment.citation) }}</div>
-                <a v-if="segment.citation.sourceUrl" :href="segment.citation.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源原文</a>
-                <sup slot="reference" class="inline-citation" @click.stop="openCitation(segment.citation)">[{{ segment.citation.citationLabel }}]</sup>
-              </el-popover>
-            </template>
-          </div>
-          <template v-if="qaResult.claims && qaResult.claims.length">
-            <el-divider content-position="left">逐句证据核验</el-divider>
-            <div v-for="(claim, claimIndex) in qaResult.claims" :key="`claim-${claimIndex}`" class="claim-row">
-              <div><el-tag type="success" size="mini">已核验</el-tag> {{ claim.claimText }}</div>
-              <div v-for="(evidence, evidenceIndex) in claim.evidences" :key="`evidence-${claimIndex}-${evidenceIndex}`" class="claim-evidence">
-                <b>[{{ evidence.citationLabel }}]</b>
-                {{ evidence.sourceName }}<span v-if="evidence.originalName"> · {{ evidence.originalName }}</span><span v-if="evidence.pageStart"> · PDF 第 {{ evidence.pageStart }} 页</span>
-                · 匹配度 {{ Math.round(evidence.matchScore * 100) }}%
-                <div class="citation-snippet">原文：{{ evidence.evidenceSnippet }}</div>
-                <el-button type="text" size="mini" @click="openEvidence(evidence)">精确定位原文</el-button>
+
+          <div ref="qaChatScroll" class="qa-chat-messages">
+            <div v-if="!qaMessages.length && !asking" class="qa-chat-empty">
+              <div class="qa-chat-empty-title">知识库对话</div>
+              <div class="qa-chat-empty-desc">先给结论，再补充关键数据。思考链路和引用来源会保留在每条回答里。</div>
+              <div class="qa-chat-suggestions">
+                <button v-for="tip in qaSuggestions" :key="tip" type="button" class="qa-suggestion" @click="useQaSuggestion(tip)">{{ tip }}</button>
               </div>
             </div>
-          </template>
-          <el-divider content-position="left">引用来源</el-divider>
-          <div v-for="item in qaResult.citations" :key="item.id" class="citation-row">
-            <i :class="sourceIcon(item.sourceType)" /><b>[{{ item.citationLabel }}]</b> {{ item.sourceName }} · {{ item.versionNo }}
-            <span v-if="item.originalName"> · {{ item.originalName }}</span>
-            <span v-if="item.pageStart"> · PDF 第 {{ item.pageStart }} 页</span>
-            <span v-if="item.metricId"> · 指标 {{ item.metricId }}</span>
-            <a v-if="item.sourceUrl" :href="item.sourceUrl" target="_blank" rel="noopener noreferrer"> · 原文链接</a>
-            <div class="citation-snippet">{{ item.sourceSnippet }}</div>
-            <el-button type="text" size="mini" @click="openCitation(item)">点击定位引用段落</el-button>
+
+            <div v-for="message in qaMessages" :key="message.id" :class="['qa-msg', message.role]">
+              <div class="qa-msg-meta">
+                <span class="qa-msg-role">{{ message.role === 'user' ? '我' : '助手' }}</span>
+                <el-tag v-if="message.role === 'assistant' && message.result" size="mini" :type="answerModeType(message.result.answerMode)">{{ answerModeText(message.result.answerMode) }}</el-tag>
+                <span v-if="message.role === 'assistant' && message.result && message.result.model" class="qa-msg-model">{{ message.result.model }}</span>
+              </div>
+
+              <div v-if="message.role === 'user'" class="qa-msg-bubble qa-msg-user">{{ message.content }}</div>
+
+              <div v-else class="qa-msg-bubble qa-msg-assistant">
+                <el-alert
+                  v-for="(warning, index) in ((message.result && message.result.warnings) || [])"
+                  :key="`${message.id}-warn-${index}`"
+                  :title="warning"
+                  type="warning"
+                  :closable="false"
+                  class="mb12"
+                />
+                <div v-if="message.result && message.result.sourceBreakdown" class="qa-msg-tags">
+                  <el-tag v-if="message.result.answerMode === 'WEB_SEARCH' || message.result.answerMode === 'KB_AND_WEB'" size="mini" type="warning">联网搜索</el-tag>
+                  <el-tag v-else-if="message.result.citationPolicy === 'AGENT_GROUNDED'" size="mini" type="info">参考来源见下方</el-tag>
+                  <el-tag size="mini">报告 {{ message.result.sourceBreakdown.REPORT || 0 }}</el-tag>
+                  <el-tag size="mini" type="warning">新闻 {{ message.result.sourceBreakdown.NEWS || 0 }}</el-tag>
+                  <el-tag size="mini" type="success">政策 {{ message.result.sourceBreakdown.POLICY || 0 }}</el-tag>
+                  <el-tag size="mini" type="info">PDF {{ message.result.sourceBreakdown.PDF || 0 }}</el-tag>
+                </div>
+                <div class="qa-msg-answer">
+                  <template v-for="segment in answerSegments(message.result)">
+                    <span v-if="!segment.citation" :key="segment.key">{{ segment.text }}</span>
+                    <el-popover v-else :key="segment.key" placement="top-start" width="430" trigger="hover">
+                      <div class="inline-source-title"><i :class="sourceIcon(segment.citation.sourceType)" /> {{ segment.citation.sourceName }} · {{ segment.citation.versionNo }}</div>
+                      <div class="citation-snippet">{{ citationPreview(segment.citation) }}</div>
+                      <a v-if="segment.citation.sourceUrl" :href="segment.citation.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源原文</a>
+                      <sup slot="reference" class="inline-citation" @click.stop="openCitation(segment.citation)">[{{ segment.citation.citationLabel }}]</sup>
+                    </el-popover>
+                  </template>
+                </div>
+
+                <el-collapse v-if="message.result" v-model="message.openPanels" class="qa-msg-panels" @change="onAssistantPanelsChange(message)">
+                  <el-collapse-item title="思考链路" name="trace">
+                    <el-steps v-if="message.result.queryPlan && message.result.queryPlan.length" :active="message.result.queryPlan.length" finish-status="success" simple>
+                      <el-step v-for="step in message.result.queryPlan" :key="`${message.id}-plan-${step.order}`" :title="step.name" :description="`${step.action} · ${step.input || ''}`" />
+                    </el-steps>
+                    <el-table v-if="message.result.retrievalLogs && message.result.retrievalLogs.length" :data="message.result.retrievalLogs" size="mini" class="log-table">
+                      <el-table-column label="状态" prop="status" width="100"><template slot-scope="s"><el-tag size="mini" :type="logStatusType(s.row.status)">{{ s.row.status }}</el-tag></template></el-table-column>
+                      <el-table-column label="动作" prop="action" width="140" />
+                      <el-table-column label="输入/过滤" prop="input" min-width="180" />
+                      <el-table-column label="结果" prop="result" min-width="140" />
+                      <el-table-column label="耗时" width="90"><template slot-scope="s">{{ s.row.durationMs }} ms</template></el-table-column>
+                    </el-table>
+                    <el-timeline v-if="message.result.analysisTrace && message.result.analysisTrace.length" class="analysis-timeline">
+                      <el-timeline-item v-for="step in message.result.analysisTrace" :key="`${message.id}-trace-${step.order}`" :timestamp="`步骤 ${step.order}`" placement="top" type="primary">
+                        <div class="analysis-step-card">
+                          <div class="analysis-step-title">{{ step.title }}</div>
+                          <div><b>我做了什么：</b>{{ step.action }}</div>
+                          <div><b>得到什么：</b>{{ step.result }}</div>
+                          <div class="analysis-boundary"><b>结论边界：</b>{{ step.boundary }}</div>
+                        </div>
+                      </el-timeline-item>
+                    </el-timeline>
+                  </el-collapse-item>
+
+                  <el-collapse-item v-if="message.result.claims && message.result.claims.length" title="逐句证据核验" name="claims">
+                    <div v-for="(claim, claimIndex) in message.result.claims" :key="`${message.id}-claim-${claimIndex}`" class="claim-row">
+                      <div><el-tag type="success" size="mini">已核验</el-tag> {{ claim.claimText }}</div>
+                      <div v-for="(evidence, evidenceIndex) in claim.evidences" :key="`${message.id}-ev-${claimIndex}-${evidenceIndex}`" class="claim-evidence">
+                        <b>[{{ evidence.citationLabel }}]</b>
+                        {{ evidence.sourceName }}<span v-if="evidence.originalName"> · {{ evidence.originalName }}</span><span v-if="evidence.pageStart"> · PDF 第 {{ evidence.pageStart }} 页</span>
+                        · 匹配度 {{ Math.round(evidence.matchScore * 100) }}%
+                        <div class="citation-snippet">原文：{{ evidence.evidenceSnippet }}</div>
+                        <el-button type="text" size="mini" @click="openEvidence(evidence)">精确定位原文</el-button>
+                      </div>
+                    </div>
+                  </el-collapse-item>
+
+                  <el-collapse-item v-if="message.result.citations && message.result.citations.length" title="引用来源" name="citations">
+                    <div v-for="item in message.result.citations" :key="`${message.id}-cite-${item.citationLabel}-${item.id}`" class="citation-row">
+                      <i :class="sourceIcon(item.sourceType)" /><b>[{{ item.citationLabel }}]</b> {{ item.sourceName }} · {{ item.versionNo }}
+                      <span v-if="item.originalName"> · {{ item.originalName }}</span>
+                      <span v-if="item.pageStart"> · PDF 第 {{ item.pageStart }} 页</span>
+                      <span v-if="item.metricId"> · 指标 {{ item.metricId }}</span>
+                      <a v-if="item.sourceUrl" :href="item.sourceUrl" target="_blank" rel="noopener noreferrer"> · 原文链接</a>
+                      <div class="citation-snippet">{{ item.sourceSnippet }}</div>
+                      <el-button v-if="item.sourceType !== 'WEB'" type="text" size="mini" @click="openCitation(item)">点击定位引用段落</el-button>
+                    </div>
+                  </el-collapse-item>
+
+                  <el-collapse-item v-if="message.result.graph && message.result.graph.nodes && message.result.graph.nodes.length" title="知识图谱" name="graph">
+                    <el-form :inline="true" size="mini" class="qa-graph-filter" @submit.native.prevent>
+                      <el-form-item label="时间"><el-input v-model="qaGraphFilter.period" clearable placeholder="例如 2023 Q3" @keyup.enter.native="applyQaGraphFilter" /></el-form-item>
+                      <el-form-item label="类型">
+                        <el-select v-model="qaGraphFilter.dataType" clearable placeholder="全部">
+                          <el-option label="企业" value="COMPANY" /><el-option label="车型" value="MODEL" />
+                          <el-option label="销量" value="SALES" /><el-option label="新闻" value="NEWS" />
+                          <el-option label="财报" value="FINANCIAL" /><el-option label="政策" value="POLICY" />
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button type="primary" icon="el-icon-search" @click="applyQaGraphFilter">筛选</el-button>
+                        <el-button v-if="qaGraphCenterId" icon="el-icon-back" @click="resetQaGraphCenter">返回全图</el-button>
+                      </el-form-item>
+                    </el-form>
+                    <div v-if="activeQaMessageId === message.id">
+                      <div v-if="qaGraphCenterId" class="qa-graph-status">当前下钻：{{ qaGraphCenterName }}</div>
+                      <el-empty v-if="!qaGraphData.nodes.length" description="当前筛选条件下没有匹配的图谱关系" />
+                      <div v-show="qaGraphData.nodes.length" :ref="'qaGraph-' + message.id" class="qa-graph" />
+                      <el-card v-if="selectedQaRelation" shadow="never" class="relation-card">
+                        <b>{{ selectedQaRelation.name }}</b> · {{ selectedQaRelation.sourceName }} · {{ selectedQaRelation.versionNo }}
+                        <div class="citation-snippet">{{ selectedQaRelation.evidenceSnippet }}</div>
+                        <el-button type="text" @click="openEvidence(selectedQaRelation)">定位源文档段落</el-button>
+                      </el-card>
+                    </div>
+                    <div v-else class="qa-graph-hint">展开本条图谱后可交互查看</div>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+            </div>
+
+            <div v-if="asking" class="qa-msg assistant">
+              <div class="qa-msg-meta"><span class="qa-msg-role">助手</span><span class="qa-msg-model">思考中</span></div>
+              <div class="qa-msg-bubble qa-msg-assistant qa-msg-pending">
+                <div class="qa-progress-head"><b>{{ (qaTask && qaTask.currentStage) || '正在理解问题并检索资料' }}</b><span>{{ (qaTask && qaTask.progress) || 0 }}%</span></div>
+                <el-progress :percentage="(qaTask && qaTask.progress) || 0" :status="qaTask && qaTask.status==='FAILED' ? 'exception' : undefined" />
+                <el-collapse v-model="qaRunningPanels" class="qa-msg-panels">
+                  <el-collapse-item title="实时任务拆解" name="running-trace">
+                    <el-steps direction="vertical" :active="runningActiveStep" finish-status="success" process-status="process">
+                      <el-step v-for="step in ((qaTask && qaTask.queryPlan) || [])" :key="`running-${step.order}`" :title="step.name" :description="`${step.action} · ${step.input || ''}`" />
+                    </el-steps>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+            </div>
           </div>
-          <template v-if="qaResult.graph && qaResult.graph.nodes && qaResult.graph.nodes.length">
-            <el-divider content-position="left">本次问答生成的多源知识图谱</el-divider>
-            <el-alert title="图谱仅包含本次回答实际引用的资料。点击节点可下钻查看直接关系，点击连线可查看并定位原文证据。" type="info" :closable="false" class="mb16" />
-            <el-form :inline="true" size="small" class="qa-graph-filter" @submit.native.prevent>
-              <el-form-item label="时间维度"><el-input v-model="qaGraphFilter.period" clearable placeholder="例如 2023 Q3" @keyup.enter.native="applyQaGraphFilter" /></el-form-item>
-              <el-form-item label="资料类型">
-                <el-select v-model="qaGraphFilter.dataType" clearable placeholder="全部资料">
-                  <el-option label="财报" value="FINANCIAL" /><el-option label="新闻" value="NEWS" />
-                  <el-option label="政策" value="POLICY" /><el-option label="生成报告" value="REPORT" />
-                  <el-option label="PDF文档" value="PDF" />
-                </el-select>
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" icon="el-icon-search" @click="applyQaGraphFilter">筛选</el-button>
-                <el-button v-if="qaGraphCenterId" icon="el-icon-back" @click="resetQaGraphCenter">返回本次问答全图</el-button>
-                <el-button icon="el-icon-refresh-left" @click="resetQaGraphFilter">清除筛选</el-button>
-              </el-form-item>
-            </el-form>
-            <div v-if="qaGraphCenterId" class="qa-graph-status">当前正在下钻节点：{{ qaGraphCenterName }}</div>
-            <el-empty v-if="!qaGraphData.nodes.length" description="当前筛选条件下，本次问答没有匹配的图谱关系" />
-            <div v-show="qaGraphData.nodes.length" ref="qaGraph" class="qa-graph" />
-            <el-card v-if="selectedQaRelation" shadow="never" class="relation-card">
-              <b>{{ selectedQaRelation.name }}</b> · {{ selectedQaRelation.sourceName }} · {{ selectedQaRelation.versionNo }}
-              <el-tag v-if="selectedQaRelation.mentionCount > 1" size="mini">{{ selectedQaRelation.mentionCount }} 条证据 / {{ selectedQaRelation.sourceCount }} 个来源</el-tag>
-              <span v-if="selectedQaRelation.pageStart"> · PDF 第 {{ selectedQaRelation.pageStart }} 页</span>
-              <div class="citation-snippet">{{ selectedQaRelation.evidenceSnippet }}</div>
-              <el-button type="text" @click="openEvidence(selectedQaRelation)">定位源文档段落</el-button>
-              <a v-if="selectedQaRelation.sourceUrl" :href="selectedQaRelation.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源原文</a>
-            </el-card>
-          </template>
-        </el-card>
+
+          <div class="qa-chat-composer">
+            <el-input
+              v-model="qaForm.question"
+              type="textarea"
+              :rows="3"
+              resize="none"
+              class="qa-composer-input"
+              placeholder="输入问题，Ctrl + Enter 发送"
+              @keydown.native="onQaComposerKeydown"
+            />
+            <div class="qa-composer-actions">
+              <span class="qa-composer-hint">{{ qaForm.webLlm ? '已开启联网大模型：知识库已有结果时也会联网搜索，用来辅助分析' : '未开启联网大模型：只回答知识库里已有的资料' }}</span>
+              <el-button type="primary" icon="el-icon-s-promotion" :loading="asking" :disabled="!qaForm.question.trim()" @click="doAsk">发送</el-button>
+            </div>
+          </div>
+        </div>
+
+        <el-drawer title="最近问答记录" :visible.sync="qaHistoryDrawer" size="420px" append-to-body>
+          <div class="qa-history-drawer">
+            <el-button size="mini" icon="el-icon-refresh" :loading="qaHistoryLoading" @click="loadQaHistory">刷新</el-button>
+            <el-table :data="qaHistory" size="mini" style="margin-top:12px" @row-click="restoreQaTask">
+              <el-table-column label="问题" prop="question" min-width="200" show-overflow-tooltip />
+              <el-table-column label="状态" prop="status" width="90" />
+              <el-table-column label="时间" prop="createdAt" width="150" />
+            </el-table>
+          </div>
+        </el-drawer>
       </el-tab-pane>
 
     </el-tabs>
@@ -367,9 +404,11 @@ export default {
       editOpen: false, form: {}, rules: { sourceCode: [{ required: true, message: '资料编码不能为空', trigger: 'blur' }], sourceName: [{ required: true, message: '资料名称不能为空', trigger: 'blur' }], sourceType: [{ required: true, message: '请选择类型', trigger: 'change' }], allowedPurpose: [{ required: true, message: '请填写允许使用范围', trigger: 'blur' }] },
       ingestOpen: false, ingestSource: null, ingestForm: {}, pdfFile: null, newsJsonFile: null, submitting: false, currentTask: null, poller: null,
       versionOpen: false, versions: [], searchForm: { q: '', sourceType: '' }, searching: false, searched: false, searchResults: [],
-      qaForm: { question: '', sourceType: '', includeNews: true }, asking: false, qaResult: null,
-      qaTask: null, qaPoller: null, qaRunningPanels: [], qaTracePanels: [],
-      qaHistory: [], qaHistoryLoading: false,
+      qaForm: { question: '', sourceType: '', includeNews: true, webLlm: true }, asking: false, qaResult: null,
+      qaTask: null, qaPoller: null, qaRunningPanels: ['running-trace'], qaTracePanels: [],
+      qaHistory: [], qaHistoryLoading: false, qaHistoryDrawer: false,
+      qaMessages: [], activeQaMessageId: null, qaMessageSeq: 0,
+      qaSuggestions: ['byd 2023 2024 销量', '比亚迪2026年销量', 'Tianma 2025年前三季度 LTPS 出货'],
       qaGraphFilter: { period: '', dataType: '' }, qaGraphData: { nodes: [], links: [], categories: [] },
       qaGraphCenterId: null, selectedQaRelation: null, qaGraphInstance: null,
       evidenceOpen: false, evidenceDetail: null,
@@ -409,33 +448,6 @@ export default {
       if ((this.qaTask.progress || 0) >= 16) return Math.min(3, this.qaTask.queryPlan.length)
       if ((this.qaTask.progress || 0) >= 10) return Math.min(2, this.qaTask.queryPlan.length)
       return Math.min(1, this.qaTask.queryPlan.length)
-    },
-    qaAnswerSegments() {
-      const answer = (this.qaResult && this.qaResult.answer) || ''
-      const citations = ((this.qaResult && this.qaResult.citations) || []).reduce((map, item) => { map[item.citationLabel] = item; return map }, {})
-      const evidenceQueues = {}
-      ;((this.qaResult && this.qaResult.claims) || []).forEach(claim => {
-        ;(claim.evidences || []).forEach(evidence => {
-          if (!evidenceQueues[evidence.citationLabel]) evidenceQueues[evidence.citationLabel] = []
-          evidenceQueues[evidence.citationLabel].push(evidence)
-        })
-      })
-      const evidenceCursors = {}
-      const result = []; const pattern = /\[S(\d+)]/g; let start = 0; let match; let key = 0
-      while ((match = pattern.exec(answer)) !== null) {
-        if (match.index > start) result.push({ key: `text-${key++}`, text: answer.slice(start, match.index) })
-        const label = `S${match[1]}`
-        const queue = evidenceQueues[label] || []; const cursor = evidenceCursors[label] || 0
-        const exactEvidence = queue[Math.min(cursor, Math.max(0, queue.length - 1))]
-        evidenceCursors[label] = cursor + 1
-        const citation = citations[label] && exactEvidence
-          ? { ...citations[label], ...exactEvidence, evidenceLocations: [exactEvidence] }
-          : citations[label]
-        result.push({ key: `citation-${key++}`, text: match[0], citation })
-        start = pattern.lastIndex
-      }
-      if (start < answer.length) result.push({ key: `text-${key++}`, text: answer.slice(start) })
-      return result
     }
   },
   methods: {
@@ -476,35 +488,139 @@ export default {
     showVersions(row) { listKnowledgeVersions(row.id).then(r => { this.versions = r.data || []; this.versionOpen = true }) },
     doSearch() { if (!this.searchForm.q || this.searchForm.q.trim().length < 2) return this.$modal.msgError('检索词至少2个字符'); this.searching = true; this.searched = true; searchKnowledge({ ...this.searchForm, limit: 20 }).then(r => { this.searchResults = r.data || [] }).finally(() => { this.searching = false }) },
     doAsk() {
+      if (this.asking) return
       if (!this.qaForm.question || this.qaForm.question.trim().length < 2) return this.$modal.msgError('问题至少2个字符')
-      this.stopQaPolling(); this.asking = true; this.qaResult = null; this.qaTask = null; this.qaTracePanels = []
+      const question = this.qaForm.question.trim()
+      this.stopQaPolling()
+      this.asking = true
+      this.qaResult = null
+      this.qaTask = null
+      this.qaRunningPanels = ['running-trace']
       this.resetQaGraphState()
-      submitKnowledgeQaTask(this.qaForm).then(r => { this.qaTask = r.data; this.startQaPolling(r.data.taskId) }).catch(() => { this.asking = false })
+      this.qaMessages.push({ id: `u-${++this.qaMessageSeq}`, role: 'user', content: question })
+      this.qaForm.question = ''
+      this.scrollQaChatToBottom()
+      submitKnowledgeQaTask({ ...this.qaForm, question }).then(r => {
+        this.qaTask = r.data
+        this.startQaPolling(r.data.taskId)
+      }).catch(() => { this.asking = false })
     },
     startQaPolling(taskId) {
       const tick = () => {
         getKnowledgeQaTask(taskId).then(r => {
           this.qaTask = r.data
           if (r.data.status === 'SUCCESS') {
-            this.qaResult = r.data.result; this.asking = false; this.stopQaPolling()
-            this.initializeQaGraph()
+            this.appendAssistantResult(r.data.result, r.data.question || '')
+            this.asking = false
+            this.stopQaPolling()
           } else if (r.data.status === 'FAILED') {
-            this.asking = false; this.stopQaPolling(); this.$modal.msgError(r.data.errorMessage || '知识问答处理失败')
-          } else this.qaPoller = setTimeout(tick, 1200)
+            this.asking = false
+            this.stopQaPolling()
+            this.$modal.msgError(r.data.errorMessage || '知识问答处理失败')
+          } else {
+            this.scrollQaChatToBottom()
+            this.qaPoller = setTimeout(tick, 1200)
+          }
         }).catch(() => { this.asking = false; this.stopQaPolling() })
       }
       tick()
     },
     stopQaPolling() { if (this.qaPoller) clearTimeout(this.qaPoller); this.qaPoller = null },
+    appendAssistantResult(result, question) {
+      const message = {
+        id: `a-${++this.qaMessageSeq}`,
+        role: 'assistant',
+        content: (result && result.answer) || '',
+        question: question || '',
+        result: result || null,
+        openPanels: ['citations']
+      }
+      this.qaMessages.push(message)
+      this.qaResult = result
+      this.activeQaMessageId = message.id
+      this.scrollQaChatToBottom()
+      this.$nextTick(() => this.initializeQaGraph())
+    },
+    clearQaChat() {
+      if (this.asking) return this.$modal.msgWarning('请等待当前回答完成')
+      this.stopQaPolling()
+      this.qaMessages = []
+      this.qaResult = null
+      this.qaTask = null
+      this.activeQaMessageId = null
+      this.resetQaGraphState()
+    },
+    useQaSuggestion(text) {
+      this.qaForm.question = text
+      this.$nextTick(() => this.doAsk())
+    },
+    onQaComposerKeydown(event) {
+      if (event.ctrlKey && event.key === 'Enter') {
+        event.preventDefault()
+        this.doAsk()
+      }
+    },
+    scrollQaChatToBottom() {
+      this.$nextTick(() => {
+        const el = this.$refs.qaChatScroll
+        if (el) el.scrollTop = el.scrollHeight
+      })
+    },
+    answerSegments(result) {
+      const answer = (result && result.answer) || ''
+      const citations = ((result && result.citations) || []).reduce((map, item) => { map[item.citationLabel] = item; return map }, {})
+      const evidenceQueues = {}
+      ;((result && result.claims) || []).forEach(claim => {
+        ;(claim.evidences || []).forEach(evidence => {
+          if (!evidenceQueues[evidence.citationLabel]) evidenceQueues[evidence.citationLabel] = []
+          evidenceQueues[evidence.citationLabel].push(evidence)
+        })
+      })
+      const evidenceCursors = {}
+      const segments = [];       const pattern = /\[([SW])(\d+)]/g; let start = 0; let match; let key = 0
+      while ((match = pattern.exec(answer)) !== null) {
+        if (match.index > start) segments.push({ key: `text-${key++}`, text: answer.slice(start, match.index) })
+        const label = `${match[1]}${match[2]}`
+        const queue = evidenceQueues[label] || []; const cursor = evidenceCursors[label] || 0
+        const exactEvidence = queue[Math.min(cursor, Math.max(0, queue.length - 1))]
+        evidenceCursors[label] = cursor + 1
+        const citation = citations[label] && exactEvidence
+          ? { ...citations[label], ...exactEvidence, evidenceLocations: [exactEvidence] }
+          : citations[label]
+        segments.push({ key: `citation-${key++}`, text: match[0], citation })
+        start = pattern.lastIndex
+      }
+      if (start < answer.length) segments.push({ key: `text-${key++}`, text: answer.slice(start) })
+      return segments
+    },
+    onAssistantPanelsChange(message) {
+      if (!message || !message.result) return
+      const panels = message.openPanels || []
+      if (panels.includes('graph')) {
+        this.qaResult = message.result
+        this.activeQaMessageId = message.id
+        this.$nextTick(() => this.initializeQaGraph())
+      }
+    },
     goAiConfig() { this.$router.push('/business/ai') },
     onTabClick(tab) { if (tab.name === 'qa') this.loadQaHistory() },
     loadQaHistory() { this.qaHistoryLoading = true; listKnowledgeQaTasks({ limit: 30 }).then(r => { this.qaHistory = r.data || [] }).finally(() => { this.qaHistoryLoading = false }) },
     restoreQaTask(row) {
       getKnowledgeQaTask(row.taskId).then(r => {
+        this.qaHistoryDrawer = false
         this.qaTask = r.data
-        if (r.data.status === 'SUCCESS') { this.qaResult = r.data.result; this.asking = false; this.initializeQaGraph() }
-        else if (r.data.status === 'QUEUED' || r.data.status === 'RUNNING') { this.asking = true; this.startQaPolling(row.taskId) }
-        else { this.qaResult = null; this.asking = false; this.$modal.msgWarning(r.data.errorMessage || '该任务执行失败') }
+        if (r.data.status === 'SUCCESS') {
+          const question = r.data.question || row.question || ''
+          if (question) this.qaMessages.push({ id: `u-${++this.qaMessageSeq}`, role: 'user', content: question })
+          this.appendAssistantResult(r.data.result, question)
+          this.asking = false
+        } else if (r.data.status === 'QUEUED' || r.data.status === 'RUNNING') {
+          this.asking = true
+          this.startQaPolling(row.taskId)
+        } else {
+          this.asking = false
+          this.$modal.msgWarning(r.data.errorMessage || '该任务执行失败')
+        }
       })
     },
     resetQaGraphState() {
@@ -539,25 +655,30 @@ export default {
       const nodes = allNodes.filter(node => ids.has(String(node.id))).map(node => ({
         ...node, symbolSize: String(node.id) === String(this.qaGraphCenterId) ? 54 : node.symbolSize
       }))
-      this.qaGraphData = { nodes, links, categories: source.categories || [] }; this.selectedQaRelation = null
+      const present = new Set(nodes.map(node => node.entityType))
+      const categories = (source.categories || []).filter(item => present.has(item.entityType))
+      this.qaGraphData = { nodes, links, categories }; this.selectedQaRelation = null
       this.$nextTick(() => {
         if (!nodes.length) {
           if (this.qaGraphInstance) { this.qaGraphInstance.dispose(); this.qaGraphInstance = null }
           return
         }
-        this.renderGraph('qaGraph', this.qaGraphData, 'qaGraphInstance')
+        const refName = this.activeQaMessageId ? (`qaGraph-${this.activeQaMessageId}`) : 'qaGraph'
+        this.renderGraph(refName, this.qaGraphData, 'qaGraphInstance')
       })
     },
     drillQaGraph(nodeId) { this.qaGraphCenterId = String(nodeId); this.applyQaGraphFilter() },
     resetQaGraphCenter() { this.qaGraphCenterId = null; this.applyQaGraphFilter() },
     resetQaGraphFilter() { this.qaGraphFilter = { period: '', dataType: '' }; this.qaGraphCenterId = null; this.applyQaGraphFilter() },
     renderGraph(refName, data, instanceName) {
-      const element = this.$refs[refName]; if (!element || !data || !data.nodes || !data.nodes.length) return
+      let element = this.$refs[refName]
+      if (Array.isArray(element)) element = element[0]
+      if (!element || !data || !data.nodes || !data.nodes.length) return
       if (this[instanceName]) this[instanceName].dispose()
       const chart = echarts.init(element); this[instanceName] = chart
       chart.setOption({ tooltip: { formatter: p => p.dataType === 'edge' ? `${p.data.name}<br/>${p.data.sourceName || ''}` : `${p.data.name}<br/>${p.data.entityType}` }, legend: [{ bottom: 8, data: (data.categories || []).map(c => c.name) }], series: [{ type: 'graph', layout: 'force', roam: true, draggable: true, categories: data.categories || [], data: data.nodes, links: data.links, label: { show: true, position: 'right' }, edgeLabel: { show: true, formatter: p => p.data.name, fontSize: 10 }, edgeSymbol: ['none', 'arrow'], force: { repulsion: 260, edgeLength: [90, 170], gravity: 0.08 }, lineStyle: { color: 'source', curveness: 0.12, opacity: 0.75 } }] })
       chart.on('click', params => {
-        if (params.dataType === 'node' && refName === 'qaGraph') this.drillQaGraph(params.data.id)
+        if (params.dataType === 'node') this.drillQaGraph(params.data.id)
         if (params.dataType === 'edge') this.selectedQaRelation = params.data
       })
     },
@@ -747,7 +868,7 @@ export default {
       this.pptxFullText = ''
     },
     citationPreview(item) { const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : null; return (evidence && evidence.evidenceSnippet) || item.sourceSnippet || '暂无摘要' },
-    sourceIcon(type) { return ({ NEWS: 'el-icon-news', POLICY: 'el-icon-document-checked', PDF: 'el-icon-document', REPORT: 'el-icon-data-analysis' })[type] || 'el-icon-files' },
+    sourceIcon(type) { return ({ NEWS: 'el-icon-news', POLICY: 'el-icon-document-checked', PDF: 'el-icon-document', REPORT: 'el-icon-data-analysis', WEB: 'el-icon-link' })[type] || 'el-icon-files' },
     sourceTypeLabel(type) { const item = this.sourceTypes.find(t => t.value === type); return item ? item.label : (type || '未分类') },
     sourceTypeTag(type) { return ({ NEWS: 'success', REPORT: 'primary', PDF: 'info', POLICY: 'warning' })[type] || 'info' },
     statusText(s) { return ({ '0': '待入库', '1': '入库中', '2': '入库成功', '3': '入库失败' })[s] || s },
@@ -759,8 +880,8 @@ export default {
       if (row.sourceType === 'NEWS' && String(row.sourceCode || '').startsWith('NEWS-ARTICLE-')) return false
       return !row.currentVersionId
     },
-    answerModeText(mode) { return ({ LLM_VERIFIED: 'LLM 已核验', LLM_REPAIRED: 'LLM 引用已修复', EXTRACTIVE_FALLBACK: '原文安全降级' })[mode] || mode || '未知模式' },
-    answerModeType(mode) { return mode === 'EXTRACTIVE_FALLBACK' ? 'warning' : (mode === 'LLM_REPAIRED' ? 'primary' : 'success') },
+    answerModeText(mode) { return ({ LLM_VERIFIED: '分析助手回答', LLM_REPAIRED: '分析助手回答', EXTRACTIVE_FALLBACK: '资料整理回答', WEB_SEARCH: '联网搜索', KB_AND_WEB: '知识库 + 联网辅助' })[mode] || mode || '未知模式' },
+    answerModeType(mode) { return mode === 'WEB_SEARCH' || mode === 'KB_AND_WEB' || mode === 'EXTRACTIVE_FALLBACK' ? 'warning' : 'success' },
     logStatusType(status) { return ({ SUCCESS: 'success', RETRY: 'warning', FALLBACK: 'warning' })[status] || 'info' },
     prettyEvidence(value) { try { return JSON.stringify(JSON.parse(value), null, 2) } catch (e) { return value } }
   }
@@ -768,7 +889,90 @@ export default {
 </script>
 
 <style scoped>
-.mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.is-disabled { opacity: 0.45; cursor: not-allowed; }.form-tip { margin-top: 6px; color: #909399; font-size: 12px; line-height: 1.4; }.ingest-success { color:#67c23a; margin-right: 8px; font-size: 12px; }.ingest-running { color:#e6a23c; margin-right: 8px; font-size: 12px; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.qa-graph { height:500px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph-filter { margin-bottom:4px; }.qa-graph-status { margin:0 0 12px; color:#409eff; font-weight:600; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
+.mb12 { margin-bottom: 12px; }
+.qa-chat-shell {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 168px);
+  min-height: 620px;
+  border: 1px solid #e4e7ed;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f7f9fc 0%, #ffffff 28%);
+  overflow: hidden;
+}
+.qa-chat-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #ebeef5;
+  background: rgba(255,255,255,.92);
+}
+.qa-chat-toolbar-left, .qa-chat-toolbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.qa-source-select { width: 140px; }
+.qa-web-llm { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; color: #606266; font-size: 12px; }
+.qa-chat-messages {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 18px 12px;
+}
+.qa-chat-empty {
+  max-width: 720px;
+  margin: 48px auto 0;
+  text-align: center;
+  color: #606266;
+}
+.qa-chat-empty-title { font-size: 22px; font-weight: 700; color: #303133; margin-bottom: 8px; }
+.qa-chat-empty-desc { line-height: 1.7; margin-bottom: 22px; }
+.qa-chat-suggestions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.qa-suggestion {
+  border: 1px solid #dcdfe6;
+  background: #fff;
+  color: #606266;
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.qa-suggestion:hover { border-color: #409eff; color: #409eff; }
+.qa-msg { display: flex; flex-direction: column; margin-bottom: 18px; max-width: 860px; }
+.qa-msg.user { margin-left: auto; align-items: flex-end; }
+.qa-msg.assistant { margin-right: auto; align-items: flex-start; width: min(860px, 100%); }
+.qa-msg-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: #909399; font-size: 12px; }
+.qa-msg-role { font-weight: 700; color: #606266; }
+.qa-msg-model { color: #909399; }
+.qa-msg-bubble { border-radius: 14px; padding: 14px 16px; line-height: 1.8; white-space: pre-wrap; word-break: break-word; }
+.qa-msg-user { background: #409eff; color: #fff; border-bottom-right-radius: 4px; }
+.qa-msg-assistant { background: #fff; border: 1px solid #ebeef5; box-shadow: 0 8px 24px rgba(31,45,61,.04); border-bottom-left-radius: 4px; width: 100%; }
+.qa-msg-pending { background: #fafbfc; }
+.qa-msg-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.qa-msg-answer { white-space: pre-wrap; line-height: 1.9; color: #303133; }
+.qa-msg-panels { margin-top: 12px; }
+.qa-graph-hint { color: #909399; font-size: 13px; padding: 8px 0; }
+.qa-chat-composer {
+  border-top: 1px solid #ebeef5;
+  background: #fff;
+  padding: 12px 16px 14px;
+}
+.qa-composer-input >>> textarea {
+  border-radius: 10px;
+  padding: 12px 14px;
+  min-height: 84px !important;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.qa-composer-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+.qa-composer-hint { color: #909399; font-size: 12px; }
+.qa-history-drawer { padding: 0 8px 16px; }
+.qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }
+.mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.is-disabled { opacity: 0.45; cursor: not-allowed; }.form-tip { margin-top: 6px; color: #909399; font-size: 12px; line-height: 1.4; }.ingest-success { color:#67c23a; margin-right: 8px; font-size: 12px; }.ingest-running { color:#e6a23c; margin-right: 8px; font-size: 12px; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.qa-graph { height:420px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph-filter { margin-bottom:4px; }.qa-graph-status { margin:0 0 12px; color:#409eff; font-weight:600; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
 .source-meta { align-items:center; }.source-link-button { padding:0; }.external-source-link { margin-left:16px; }
 .pdf-preview-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:14px; margin-bottom:10px; color:#606266; font-size:13px; }
 .pdf-locate-stage { display:flex; gap:16px; align-items:flex-start; min-height:70vh; }

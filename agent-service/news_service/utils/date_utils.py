@@ -24,6 +24,12 @@ _ENGLISH_DATE_FORMATS = (
     "%d %b. %Y",
 )
 
+# Some publishers use ``Sept.`` (four letters) instead of the locale ``Sep``
+# abbreviation that ``strptime`` ``%b`` accepts.
+_ENGLISH_MONTH_ALIASES = (
+    (re.compile(r"\bSept\b", re.IGNORECASE), "Sep"),
+)
+
 # US-based official newsrooms also commonly publish a fully explicit numeric
 # date such as ``05/16/2025``.  Treat it as month/day/year because this branch
 # is intentionally limited to the four-digit-year slash format.
@@ -143,6 +149,14 @@ def normalize_published_at(value: object | None, *, format_hint: str | None = No
     return parsed_date.isoformat() if parsed_date is not None else None
 
 
+def _normalize_english_month_aliases(value: str) -> str:
+    """Map non-locale English month spellings to ``strptime``-friendly forms."""
+    normalized = value
+    for pattern, replacement in _ENGLISH_MONTH_ALIASES:
+        normalized = pattern.sub(replacement, normalized)
+    return normalized
+
+
 def parse_publish_date(value: str | None) -> date | None:
     """Extract an absolute calendar date from a publisher-provided value.
 
@@ -184,23 +198,27 @@ def parse_publish_date(value: str | None) -> date | None:
             return None
     us_numeric = _US_NUMERIC_DATE_FORMAT.search(normalized)
     if us_numeric:
+        month = int(us_numeric.group("month"))
+        day = int(us_numeric.group("day"))
+        # Ambiguous ``04/09/2026`` must not default to US month/day order; a
+        # configured format hint (via ``normalize_published_at``) owns that case.
+        if month <= 12 and day <= 12:
+            return None
         try:
-            return date(
-                int(us_numeric.group("year")),
-                int(us_numeric.group("month")),
-                int(us_numeric.group("day")),
-            )
+            return date(int(us_numeric.group("year")), month, day)
         except ValueError:
             return None
     matched = _DATE_PATTERN.search(normalized)
     if not matched:
-        datetime_with_zone = _ENGLISH_DATETIME_WITH_ZONE.search(normalized)
+        english_normalized = _normalize_english_month_aliases(normalized)
+        datetime_with_zone = _ENGLISH_DATETIME_WITH_ZONE.search(english_normalized)
         if datetime_with_zone:
             candidate = (
                 f"{datetime_with_zone.group('month')} "
                 f"{datetime_with_zone.group('day')}, "
                 f"{datetime_with_zone.group('year')}"
             )
+            candidate = _normalize_english_month_aliases(candidate)
             for date_format in ("%B %d, %Y", "%b %d, %Y", "%b. %d, %Y"):
                 try:
                     return datetime.strptime(candidate, date_format).date()
@@ -211,11 +229,11 @@ def parse_publish_date(value: str | None) -> date | None:
         # relative time phrases from the crawl timestamp.
         english = re.search(
             r"(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2},\s*\d{4})",
-            normalized,
+            english_normalized,
         )
         if not english:
             return None
-        candidate = english.group(0)
+        candidate = _normalize_english_month_aliases(english.group(0))
         for date_format in _ENGLISH_DATE_FORMATS:
             try:
                 return datetime.strptime(candidate, date_format).date()
@@ -257,6 +275,11 @@ def first_parseable_publish_value(value: object | None, *, format_hint: str | No
     normalized = normalize_published_at(text, format_hint=format_hint)
     if normalized is not None:
         return normalized
+    # Slash dates already decided by ``normalize_published_at`` (including the
+    # ambiguous both-parts-<=12 case).  Do not let ``parse_publish_date`` invent
+    # a US month/day reading afterward.
+    if _NUMERIC_SLASH_DATE.fullmatch(text):
+        return None
     parsed = parse_publish_date(text)
     return parsed.isoformat() if parsed is not None else None
 

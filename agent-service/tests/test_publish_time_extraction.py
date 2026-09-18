@@ -1,6 +1,8 @@
 """Publish-time extraction must ignore non-date CSS hits and still find absolute dates."""
 from __future__ import annotations
 
+from datetime import date
+
 from bs4 import BeautifulSoup
 
 from news_service.crawler.link_discovery import _listing_publish_time
@@ -13,6 +15,23 @@ def test_first_parseable_rejects_source_label():
     assert first_parseable_publish_value("学习时报") is None
     assert first_parseable_publish_value("2026-09-11 09:41 北京") == "2026-09-11"
     assert parse_publish_date("2026-09-11 09:41") == parse_publish_date("2026-09-11")
+
+
+def test_parse_publish_date_accepts_sept_abbreviation():
+    # Mazda newsroom uses ``Sept.`` rather than locale ``Sep``.
+    assert parse_publish_date("Sept. 1, 2026") == date(2026, 9, 1)
+    assert parse_publish_date("Sept 1, 2026") == date(2026, 9, 1)
+    assert parse_publish_date("Aug. 28, 2026") == date(2026, 8, 28)
+    assert parse_publish_date("2026.09.01") == date(2026, 9, 1)
+
+
+def test_european_slash_dates_need_format_hint_when_ambiguous():
+    # Renault media cards use DD/MM/YYYY. Ambiguous values must not become US dates.
+    assert parse_publish_date("04/09/2026") is None
+    assert first_parseable_publish_value("04/09/2026") is None
+    assert first_parseable_publish_value("04/09/2026", format_hint="%d/%m/%Y") == "2026-09-04"
+    assert first_parseable_publish_value("17/09/2026") == "2026-09-17"
+    assert first_parseable_publish_value("14/09/2026", format_hint="%d/%m/%Y") == "2026-09-14"
 
 
 def test_published_at_skips_source_label_sibling():

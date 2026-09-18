@@ -191,6 +191,55 @@ def _request_body(
     return body
 
 
+def _parse_rss_document(xml_text: str) -> dict[str, list[dict[str, str | None]]]:
+    """Parse a public RSS/Atom listing into ordinary record dicts.
+
+    Only element text is read.  No feed extensions are executed.
+    """
+    soup = BeautifulSoup(xml_text, "xml")
+    items: list[dict[str, str | None]] = []
+    for item in soup.find_all("item"):
+        def _text(tag_name: str) -> str | None:
+            node = item.find(tag_name)
+            if node is None:
+                return None
+            value = node.get_text(" ", strip=True)
+            return value or None
+
+        items.append(
+            {
+                "link": _text("link"),
+                "title": _text("title"),
+                "pubDate": _text("pubDate"),
+                "description": _text("description"),
+                "guid": _text("guid"),
+            }
+        )
+    if not items:
+        for entry in soup.find_all("entry"):
+            def _entry_text(tag_name: str) -> str | None:
+                node = entry.find(tag_name)
+                if node is None:
+                    return None
+                value = node.get_text(" ", strip=True)
+                return value or None
+
+            link_node = entry.find("link")
+            link = None
+            if link_node is not None:
+                link = link_node.get("href") or link_node.get_text(" ", strip=True) or None
+            items.append(
+                {
+                    "link": link,
+                    "title": _entry_text("title"),
+                    "pubDate": _entry_text("published") or _entry_text("updated"),
+                    "description": _entry_text("summary"),
+                    "guid": _entry_text("id"),
+                }
+            )
+    return {"items": items}
+
+
 def _load_document(
     config: StructuredDiscoveryConfig,
     *,
@@ -200,6 +249,9 @@ def _load_document(
     fetch_request: Callable[[str, str, Mapping[str, object] | None, Mapping[str, str] | None, str], str] | None = None,
     query_overrides: Mapping[str, str | int | float | bool] | None = None,
 ) -> tuple[Any, str]:
+    if config.mode == "rss_endpoint":
+        data_url = _data_url(config, page_url, query_overrides=query_overrides)
+        return _parse_rss_document(fetch_text(data_url)), data_url
     if config.mode in {"json_endpoint", "json_html_fragment"}:
         data_url = _data_url(config, page_url, query_overrides=query_overrides)
         try:
@@ -403,6 +455,7 @@ def discover_structured_articles(
     ) else 1
     offset = pagination.start_offset if isinstance(pagination, StructuredOffsetPaginationConfig) else 0
     visited_page_numbers: set[int] = set()
+    consecutive_empty_kept = 0
     while pages_visited < effective_max_pages and (limit is None or len(output) < limit):
         position = offset if isinstance(pagination, StructuredOffsetPaginationConfig) else page_number
         if pagination is not None and position in visited_page_numbers:
@@ -426,6 +479,7 @@ def discover_structured_articles(
             fetch_request=fetch_request,
             query_overrides=overrides,
         )
+        records: list[Any] = []
         if config.mode in {"json_html_fragment", "html_endpoint"}:
             fragment = _value_at(document, config.html_path) if config.mode == "json_html_fragment" else document
             # Some public JSON APIs return one rendered card per array item.
@@ -466,14 +520,51 @@ def discover_structured_articles(
             )
             record_count = len(records)
         pages_visited += 1
-        if not page_links:
-            # A non-empty API response that contributes no new URLs means a
-            # later numeric offset/page repeated an earlier collection.  It
-            # is not a normal end-of-list signal and must remain observable
-            # to the caller's range-completeness decision.
-            stop_reason = "structured_repeated_page" if record_count else "structured_empty_page"
+        if record_count == 0:
+            stop_reason = "structured_empty_page"
             break
         page_dates = [parse_publish_date(item[3]) for item in page_links]
+        # Official hubs sometimes return a full page of out-of-domain cards
+        # (still dated).  An empty *kept* link list is not end-of-list; keep
+        # paginating, but still honour publish_time_start via raw record dates
+        # when the kept set is empty.
+        if not page_links:
+            consecutive_empty_kept += 1
+            raw_dates: list[date | None] = []
+            if config.article_time_field and records:
+                for record in records:
+                    if isinstance(record, Mapping):
+                        raw_dates.append(
+                            parse_publish_date(str(_value_at(record, config.article_time_field) or ""))
+                        )
+            if (
+                publish_time_start is not None
+                and source.published_time_order == "desc"
+                and raw_dates
+                and all(item is not None and item < publish_time_start for item in raw_dates)
+            ):
+                stop_reason = "publish_time_before_start"
+                break
+            if consecutive_empty_kept >= 2:
+                stop_reason = "structured_repeated_page"
+                break
+            logger.info(
+                "[STRUCTURED_DISCOVERY] source=%s mode=%s origin=%s page=%s records=%s links=0 (continue)",
+                source.name,
+                config.mode,
+                data_origin,
+                position,
+                record_count,
+            )
+            if pagination is None:
+                stop_reason = "structured_single_page"
+                break
+            if isinstance(pagination, StructuredOffsetPaginationConfig):
+                offset += pagination.effective_offset_step
+            else:
+                page_number += pagination.page_step
+            continue
+        consecutive_empty_kept = 0
         discovered_count += len(page_links)
         # The service owns requested-time filtering.  Keep the final
         # all-before-start boundary page in discovery output as well: those

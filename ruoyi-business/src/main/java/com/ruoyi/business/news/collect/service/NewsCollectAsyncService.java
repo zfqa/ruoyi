@@ -168,7 +168,14 @@ public class NewsCollectAsyncService
             resolved = articleMapper.selectByContentHash(article.getContentHash());
             if (resolved == null)
             {
-                requireContentForFirstSync(taskId, article, j.getString("operation"));
+                if (article.getContent() == null || article.getContent().isBlank())
+                {
+                    // One empty detail body must not abort the whole task after
+                    // earlier articles were already staged for preview.
+                    log.error("News first-sync skipped: taskId={} sourceName={} canonicalUrl={} operation={} reason=missing_content",
+                        taskId, article.getSourceName(), article.getCanonicalUrl(), j.getString("operation"));
+                    continue;
+                }
                 articleMapper.insert(article);
                 resolved = article;
                 relationMapper.upsert(taskId, resolved.getId(), j.getString("operation"), PENDING_INSERTED);
@@ -178,13 +185,5 @@ public class NewsCollectAsyncService
                 relationMapper.upsert(taskId, resolved.getId(), j.getString("operation"), PENDING_EXISTING);
             }
         }
-    }
-
-    private void requireContentForFirstSync(Long taskId, NewsArticle article, String operation)
-    {
-        if (article.getContent() != null && !article.getContent().isBlank()) return;
-        log.error("News first-sync rejected: taskId={} sourceName={} canonicalUrl={} operation={} reason=missing_content",
-            taskId, article.getSourceName(), article.getCanonicalUrl(), operation);
-        throw new IllegalStateException("新闻正文缺失，无法首次同步到RuoYi主库");
     }
 }

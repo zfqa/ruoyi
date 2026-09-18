@@ -10,6 +10,7 @@ TARGET_MAKERS = ("Tianma", "AUO", "CSOT", "BOE")
 HISTORY_YEARS = (2022, 2023, 2024, 2025, 2026)
 SUMMARY_YEARS = (2024, 2025)
 SUMMARY_QUARTERS = {1, 2, 3}
+SUMMARY_QUARTERS_FULL_YEAR = {1, 2, 3, 4}
 MAKER_ALIASES = {
     "tianma": "Tianma",
     "auo": "AUO",
@@ -18,6 +19,32 @@ MAKER_ALIASES = {
     "china_star": "CSOT",
     "csot": "CSOT",
 }
+
+
+def _detect_summary_mode(rows: list[dict[str, Any]]) -> tuple[set[int], bool, str, int]:
+    """按解析后的实际季度完备度自动选择汇总口径。
+
+    规则（优先较新年份）：
+    - 某 SUMMARY_YEAR 的 Q1–Q4 全部出现 → 该年全年汇总
+    - 否则若 Q1–Q3 齐全 → 该年前三季度汇总
+    不依赖文件名；文件名仅用于发布滞后说明与列裁剪。
+    """
+    by_year: dict[int, set[int]] = {}
+    for row in rows:
+        year = row.get("year")
+        quarter = row.get("quarter")
+        if year in SUMMARY_YEARS and quarter in SUMMARY_QUARTERS_FULL_YEAR:
+            by_year.setdefault(int(year), set()).add(int(quarter))
+
+    for year in sorted(SUMMARY_YEARS, reverse=True):
+        qs = by_year.get(year, set())
+        yy = year % 100
+        if SUMMARY_QUARTERS_FULL_YEAR <= qs:
+            return set(SUMMARY_QUARTERS_FULL_YEAR), True, f"y{yy}_full_year", year
+        if SUMMARY_QUARTERS <= qs:
+            return set(SUMMARY_QUARTERS), False, f"y{yy}_q1_q3", year
+
+    return set(SUMMARY_QUARTERS), False, "y25_q1_q3", 2025
 
 
 def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any]:
@@ -55,7 +82,11 @@ def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any
     if rows and not any(row.get("display_area") is not None for row in rows):
         gaps.append("源明细缺少显示面积字段，无法计算显示面积指标")
 
-    summary_rows = [row for row in rows if row["year"] in SUMMARY_YEARS and row["quarter"] in SUMMARY_QUARTERS]
+    summary_quarters, full_year, summary_mode, summary_target_year = _detect_summary_mode(rows)
+    summary_rows = [
+        row for row in rows
+        if row["year"] in SUMMARY_YEARS and row["quarter"] in summary_quarters
+    ]
     market = _group(summary_rows, lambda row: (row["year"],))
     maker = _group(summary_rows, lambda row: (row["maker"], row["year"]))
     technology = _group(summary_rows, lambda row: (row["maker"], row["year"], row["technology"]))
@@ -76,11 +107,11 @@ def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any
         lambda row: (row["year"], row["technology"], _size_bucket(row["size"])),
     )
 
-    market_metrics = _market_metrics(market)
+    market_metrics = _market_metrics(market, full_year=full_year)
     makers = {}
     for maker_name in TARGET_MAKERS:
         makers[maker_name] = {
-            "shipment": _maker_shipment_metrics(maker_name, maker, market),
+            "shipment": _maker_shipment_metrics(maker_name, maker, market, full_year=full_year),
             "historical_shipment": _historical_shipment_metrics(maker_name, history_maker, maker),
             "technology": _dimension_metrics(
                 maker_name, technology, maker, "technology", market_groups=market_technology
@@ -99,7 +130,10 @@ def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any
         "scope": {
             "summary_years": list(SUMMARY_YEARS),
             "historical_years": list(HISTORY_YEARS),
-            "quarters": ["Q1", "Q2", "Q3"],
+            "quarters": [f"Q{q}" for q in sorted(summary_quarters)],
+            "summary_mode": summary_mode,
+            "summary_target_year": summary_target_year,
+            "full_year": full_year,
             "original_specification": "Automobile monitor",
             "makers": list(TARGET_MAKERS),
             "market_maker_scope": "all_source_makers",
@@ -123,6 +157,7 @@ def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any
         "summary_matrix": _summary_matrix(
             market, maker, technology, market_technology,
             maker_technology_size, market_technology_size,
+            full_year=full_year,
         ),
         "makers": makers,
         "data_gaps": gaps,
@@ -188,22 +223,26 @@ def _group(rows, key_function):
     return groups
 
 
-def _market_metrics(market):
+def _market_metrics(market, full_year: bool = False):
     values = {year: market.get((year,)) for year in SUMMARY_YEARS}
+    suffix = "y25_full_year" if full_year else "y25q1_q3"
     return {
-        "metric_id": "market.shipment.y25q1_q3",
+        "metric_id": f"market.shipment.{suffix}",
         "unit": "thousand_units",
+        "summary_mode": "full_year" if full_year else "q1_q3",
         "values": {str(year): _metric_value(values[year]) for year in SUMMARY_YEARS},
         "yoy_2025_vs_2024": _ratio(values[2025], values[2024]),
         "evidence": {str(year): _evidence(values[year], "sum") for year in SUMMARY_YEARS},
     }
 
 
-def _maker_shipment_metrics(maker_name, maker, market):
+def _maker_shipment_metrics(maker_name, maker, market, full_year: bool = False):
     values = {year: maker.get((maker_name, year)) for year in SUMMARY_YEARS}
+    suffix = "y25_full_year" if full_year else "y25q1_q3"
     return {
-        "metric_id": f"maker.{_slug(maker_name)}.shipment.y25q1_q3",
+        "metric_id": f"maker.{_slug(maker_name)}.shipment.{suffix}",
         "unit": "thousand_units",
+        "summary_mode": "full_year" if full_year else "q1_q3",
         "values": {str(year): _metric_value(values[year]) for year in SUMMARY_YEARS},
         "yoy_2025_vs_2024": _ratio(values[2025], values[2024]),
         "market_share": {
@@ -292,8 +331,8 @@ def _technology_size_metrics(
     return result
 
 
-def _summary_matrix(market, maker, maker_technology, market_technology, maker_segments, market_segments):
-    """Build the fixed Y25前三季度 Summary matrix shown in the report template."""
+def _summary_matrix(market, maker, maker_technology, market_technology, maker_segments, market_segments, full_year: bool = False):
+    """Build the Y25 Summary matrix (Q1-Q3 or full year depending on data through)."""
     rows = []
     size_labels = (("<8", '8”以下'), ("[8,12)", '8”-12”'), ("[12,15)", '12”-15”'), (">=15", '15”以上'))
     for technology_name in ("LTPS", "a-Si"):
@@ -339,9 +378,12 @@ def _summary_matrix(market, maker, maker_technology, market_technology, maker_se
         "All", "all", "All", True, market_values, maker_values,
         market, maker, market_technology, maker_technology, market_values,
     ))
+    suffix = "y25_full_year" if full_year else "y25q1_q3"
+    title = "Y25全年 Summary" if full_year else "Y25前三季度 Summary"
     return {
-        "metric_id": "market.y25q1_q3.summary_matrix",
-        "title": "Y25前三季度 Summary",
+        "metric_id": f"market.{suffix}.summary_matrix",
+        "title": title,
+        "summary_mode": "full_year" if full_year else "q1_q3",
         "row_order": [row["row_key"] for row in rows],
         "rows": rows,
     }

@@ -17,6 +17,7 @@ from app.llm.client import ArkChatClient
 from app.llm.interpreter import interpret_table
 from app.report.metrics import calculate_competitive_metrics
 from app.report.record_merge import merge_records_by_year_quarter, period_coverage
+from app.report.periods import latest_omdia_data_through, parse_omdia_tracker_meta
 from app.report.tianma_history import calculate_tianma_history_metrics
 from app.report.tianma_product import calculate_tianma_product_metrics
 from app.report.tianma_growth import calculate_tianma_application_metrics, calculate_tianma_customer_metrics
@@ -36,6 +37,11 @@ def parse_workbook(
     supply_chain_file_path: str | None = None,
     extra_history_file_paths: list[str] | None = None,
     extra_supply_chain_file_paths: list[str] | None = None,
+    file_label: str | None = None,
+    baseline_file_label: str | None = None,
+    supply_chain_file_label: str | None = None,
+    extra_history_file_labels: list[str] | None = None,
+    extra_supply_chain_file_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     pivot_cache = extract_shipment_share_cache(file_path)
     if pivot_cache is not None:
@@ -46,6 +52,11 @@ def parse_workbook(
             baseline_file_path, baseline_cache, supply_chain_file_path, supply_chain_cache,
             extra_history_file_paths=extra_history_file_paths or [],
             extra_supply_chain_file_paths=extra_supply_chain_file_paths or [],
+            file_label=file_label,
+            baseline_file_label=baseline_file_label,
+            supply_chain_file_label=supply_chain_file_label,
+            extra_history_file_labels=extra_history_file_labels or [],
+            extra_supply_chain_file_labels=extra_supply_chain_file_labels or [],
         )
     wb_formula, wb_value = load_workbooks(file_path)
     workbook_id = _file_hash(file_path)
@@ -223,6 +234,28 @@ def _confidence(table: dict[str, Any], errors: list[str]) -> float:
     return 0.75
 
 
+def _source_workbook_entry(
+    workbook_id: str,
+    file_name: str,
+    role: str,
+    original_file_name: str | None = None,
+) -> dict[str, Any]:
+    display_name = original_file_name or file_name
+    entry = {
+        "workbook_id": workbook_id,
+        "file_name": display_name,
+        "stored_file_name": file_name,
+        "original_file_name": display_name,
+        "role": role,
+    }
+    meta = parse_omdia_tracker_meta(display_name)
+    if meta:
+        entry["omdia_publication"] = meta["publication_label"]
+        entry["omdia_data_through"] = meta["data_through_label"]
+        entry["omdia_lag_quarters"] = meta["lag_quarters"]
+    return entry
+
+
 def _file_hash(file_path: str) -> str:
     sha = hashlib.sha256()
     with open(file_path, "rb") as handle:
@@ -285,30 +318,37 @@ def _parse_shipment_share_cache(
     baseline_file_path=None, baseline_cache=None,
     supply_chain_file_path=None, supply_chain_cache=None,
     extra_history_file_paths=None, extra_supply_chain_file_paths=None,
+    file_label=None, baseline_file_label=None, supply_chain_file_label=None,
+    extra_history_file_labels=None, extra_supply_chain_file_labels=None,
 ):
     workbook_id = f"sha256:{_file_hash(file_path)}"
-    file_name = os.path.basename(file_path)
+    stored_name = os.path.basename(file_path)
+    file_name = file_label or stored_name
     primary_records = _pivot_cache_records(cache, file_name, workbook_id)
 
     history_groups: list[tuple[str, list[dict[str, Any]]]] = []
     history_sources = []
-    for extra_path in list(extra_history_file_paths or []):
+    extra_history_labels = list(extra_history_file_labels or [])
+    for index, extra_path in enumerate(list(extra_history_file_paths or [])):
         if not extra_path:
             continue
         extra_cache = extract_shipment_share_cache(extra_path)
         if extra_cache is None:
             continue
         extra_id = f"sha256:{_file_hash(extra_path)}"
-        extra_name = os.path.basename(extra_path)
+        extra_stored = os.path.basename(extra_path)
+        extra_name = (
+            extra_history_labels[index]
+            if index < len(extra_history_labels) and extra_history_labels[index]
+            else extra_stored
+        )
         extra_records = _pivot_cache_records(
             extra_cache, extra_name, extra_id, "Shipment share (extra history)"
         )
         history_groups.append((extra_name, extra_records))
-        history_sources.append({
-            "workbook_id": extra_id,
-            "file_name": extra_name,
-            "role": "extra history",
-        })
+        history_sources.append(_source_workbook_entry(
+            extra_id, extra_stored, "extra history", original_file_name=extra_name,
+        ))
     # Primary current workbook is applied last so its Year/Quarter wins on overlap.
     history_groups.append((file_name, primary_records))
     records = merge_records_by_year_quarter(history_groups) if len(history_groups) > 1 else primary_records
@@ -317,51 +357,54 @@ def _parse_shipment_share_cache(
     baseline_source = None
     if baseline_file_path and baseline_cache:
         baseline_id = f"sha256:{_file_hash(baseline_file_path)}"
-        baseline_name = os.path.basename(baseline_file_path)
+        baseline_stored = os.path.basename(baseline_file_path)
+        baseline_name = baseline_file_label or baseline_stored
         baseline_records = _pivot_cache_records(
             baseline_cache, baseline_name, baseline_id, "Shipment share (Y22 baseline)"
         )
-        baseline_source = {
-            "workbook_id": baseline_id,
-            "file_name": baseline_name,
-            "role": "Y22 baseline",
-        }
+        baseline_source = _source_workbook_entry(
+            baseline_id, baseline_stored, "Y22 baseline", original_file_name=baseline_name,
+        )
 
     supply_groups: list[tuple[str, list[dict[str, Any]]]] = []
     supply_sources = []
-    for extra_path in list(extra_supply_chain_file_paths or []):
+    extra_supply_labels = list(extra_supply_chain_file_labels or [])
+    for index, extra_path in enumerate(list(extra_supply_chain_file_paths or [])):
         if not extra_path:
             continue
         extra_cache = extract_supply_chain_cache(extra_path)
         if extra_cache is None:
             continue
         extra_id = f"sha256:{_file_hash(extra_path)}"
-        extra_name = os.path.basename(extra_path)
+        extra_stored = os.path.basename(extra_path)
+        extra_name = (
+            extra_supply_labels[index]
+            if index < len(extra_supply_labels) and extra_supply_labels[index]
+            else extra_stored
+        )
         extra_records = _pivot_cache_records(
             extra_cache, extra_name, extra_id,
             "Panel maker to client pivot", "panel-maker-client-pivot-cache",
         )
         supply_groups.append((extra_name, extra_records))
-        supply_sources.append({
-            "workbook_id": extra_id,
-            "file_name": extra_name,
-            "role": "extra supply chain",
-        })
+        supply_sources.append(_source_workbook_entry(
+            extra_id, extra_stored, "extra supply chain", original_file_name=extra_name,
+        ))
 
     supply_chain_records = []
     supply_chain_source = None
     if supply_chain_file_path and supply_chain_cache:
         supply_chain_id = f"sha256:{_file_hash(supply_chain_file_path)}"
-        supply_chain_name = os.path.basename(supply_chain_file_path)
+        supply_stored = os.path.basename(supply_chain_file_path)
+        supply_chain_name = supply_chain_file_label or supply_stored
         supply_chain_records = _pivot_cache_records(
             supply_chain_cache, supply_chain_name, supply_chain_id,
             "Panel maker to client pivot", "panel-maker-client-pivot-cache",
         )
-        supply_chain_source = {
-            "workbook_id": supply_chain_id,
-            "file_name": supply_chain_name,
-            "role": "Supply Chain customer/region",
-        }
+        supply_chain_source = _source_workbook_entry(
+            supply_chain_id, supply_stored, "Supply Chain customer/region",
+            original_file_name=supply_chain_name,
+        )
         supply_groups.append((supply_chain_name, supply_chain_records))
     if len(supply_groups) > 1:
         supply_chain_records = merge_records_by_year_quarter(supply_groups)
@@ -370,11 +413,10 @@ def _parse_shipment_share_cache(
 
     metric_table = {**cache, "records": records}
     preview_records = records if max_records_per_table is None else records[:max_records_per_table]
-    source_workbooks = [item for item in [{
-        "workbook_id": workbook_id,
-        "file_name": file_name,
-        "role": "current history",
-    }, *history_sources, baseline_source, supply_chain_source, *supply_sources] if item]
+    source_workbooks = [item for item in [
+        _source_workbook_entry(workbook_id, stored_name, "current history", original_file_name=file_name),
+        *history_sources, baseline_source, supply_chain_source, *supply_sources,
+    ] if item]
     result = {
         "workbook_id": workbook_id,
         "file_name": file_name,
@@ -455,12 +497,48 @@ def _parse_shipment_share_cache(
     maker_details = {}
     detail_gaps = []
     maker_names = _report_maker_names(records, supply_chain_records)
+    through = latest_omdia_data_through(
+        [item.get("original_file_name") or item.get("file_name") for item in source_workbooks]
+    )
+    data_through_year = through.get("data_through_year") if through else None
+    data_through_quarter = through.get("data_through_quarter") if through else None
+    if through:
+        result["omdia_publication_lag"] = through
+    metrics_scope = (result["computed_metrics"].get("scope") or {})
+    full_year = bool(metrics_scope.get("full_year"))
+    if (
+        not full_year
+        and data_through_year is not None
+        and data_through_quarter is not None
+        and (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
+    ):
+        full_year = True
     for maker in maker_names:
         detail = {
-            "history": calculate_tianma_history_metrics(records, baseline_records, maker),
-            "product": calculate_tianma_product_metrics(records, baseline_records, maker),
-            "customer": calculate_tianma_customer_metrics(supply_chain_records, maker),
-            "application": calculate_tianma_application_metrics(records, baseline_records, maker),
+            "history": calculate_tianma_history_metrics(
+                records, baseline_records, maker,
+                data_through_year=data_through_year,
+                data_through_quarter=data_through_quarter,
+                full_year=full_year,
+            ),
+            "product": calculate_tianma_product_metrics(
+                records, baseline_records, maker,
+                data_through_year=data_through_year,
+                data_through_quarter=data_through_quarter,
+                full_year=full_year,
+            ),
+            "customer": calculate_tianma_customer_metrics(
+                supply_chain_records, maker,
+                data_through_year=data_through_year,
+                data_through_quarter=data_through_quarter,
+                full_year=full_year,
+            ),
+            "application": calculate_tianma_application_metrics(
+                records, baseline_records, maker,
+                data_through_year=data_through_year,
+                data_through_quarter=data_through_quarter,
+                full_year=full_year,
+            ),
         }
         maker_details[maker] = detail
         for section in detail.values():

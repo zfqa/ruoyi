@@ -65,6 +65,19 @@ class KnowledgeMetricQueryRouterTest
         assertEquals("{\"periods\":{\"Y25Q1-Q3\":10323},\"yoy", first.getContent());
     }
 
+    @Test
+    void dropsDisplayShipmentWhenQuestionNamesVehicleSales()
+    {
+        KnowledgeChunk hud = metric(1L, "market.hud.shipment.y25f", "HUD Y25F shipment 1801");
+        KnowledgeChunk byd = metric(2L, "oem.byd.sales.y26", "比亚迪 2026 销量 440293");
+
+        List<KnowledgeChunk> result = new KnowledgeMetricQueryRouter().rank(
+            "比亚迪2026年销量", List.of(hud, byd), 5);
+
+        assertEquals(1, result.size());
+        assertEquals(2L, result.get(0).getId());
+    }
+
     private KnowledgeChunk metric(Long id, String metricId, String content)
     {
         KnowledgeChunk chunk = new KnowledgeChunk();

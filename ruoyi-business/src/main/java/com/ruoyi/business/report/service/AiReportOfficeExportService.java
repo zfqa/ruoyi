@@ -298,7 +298,8 @@ public class AiReportOfficeExportService
     {
         Map<String, String> map = new LinkedHashMap<>();
         map.put("methodology", "数据口径与计算说明"); map.put("data_scope", "数据范围");
-        map.put("executive_summary", "管理层摘要"); map.put("market_summary", "Y25前三季度总览");
+        map.put("executive_summary", "管理层摘要");
+        map.put("market_summary", "Y25总览（三文件=前三季度；五文件=全年）");
         map.put("tianma_history", "Tianma前装出货、面积及市占率"); map.put("tianma_product", "Tianma增长点分析一：产品线");
         map.put("tianma_customer", "Tianma增长点分析二：客户/区域"); map.put("tianma_application", "Tianma增长点分析三：应用");
         map.put("maker_sections", "各厂商结构化分析"); map.put("makers", "厂商洞察");

@@ -4,11 +4,21 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.report.periods import BASE_PERIODS, SUPPORTED_YEARS, periods_for_years
+from app.report.periods import (
+    BASE_PERIODS,
+    SUPPORTED_YEARS,
+    clip_periods_to_data_through,
+    parse_period_key,
+    periods_for_year_quarters,
+    periods_for_years,
+    prior_year_quarter_period,
+    quarter_period,
+    year_quarters_from_rows,
+)
 
 
 YEARS = SUPPORTED_YEARS
-PERIODS = BASE_PERIODS + ("Y26Q1",)
+PERIODS = BASE_PERIODS
 TECHNOLOGIES = ("LTPS", "a-Si")
 SIZE_BUCKETS = (
     ("<8", '8”以下'),
@@ -16,19 +26,44 @@ SIZE_BUCKETS = (
     ("[12,15)", '12”-15”'),
     (">=15", '15”以上'),
 )
+Q1_Q3 = {1, 2, 3}
+FULL_YEAR_QUARTERS = {1, 2, 3, 4}
+
+
+def _is_full_year_2025(rows, data_through_year=None, data_through_quarter=None) -> bool:
+    qs = {int(row["quarter"]) for row in rows if int(row.get("year") or 0) == 2025}
+    if FULL_YEAR_QUARTERS <= qs:
+        return True
+    if data_through_year is None or data_through_quarter is None:
+        return False
+    return (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
 
 
 def calculate_tianma_product_metrics(
     current_records: list[dict[str, Any]],
     baseline_records: list[dict[str, Any]] | None = None,
     maker: str = "Tianma",
+    data_through_year: int | None = None,
+    data_through_quarter: int | None = None,
+    full_year: bool | None = None,
 ) -> dict[str, Any]:
     """Calculate one maker's technology and size section without LLM arithmetic."""
     current = [_normalize(record, "current", maker) for record in current_records]
     baseline = [_normalize(record, "baseline", maker) for record in (baseline_records or [])]
     rows = [row for row in current if row is not None and row["year"] in set(YEARS) - {2022}]
     rows.extend(row for row in baseline if row is not None and row["year"] == 2022)
-    active_periods = periods_for_years(row["year"] for row in rows)
+    active_periods = clip_periods_to_data_through(
+        periods_for_year_quarters(year_quarters_from_rows(rows)),
+        data_through_year,
+        data_through_quarter,
+    )
+    if full_year is None:
+        full_year = _is_full_year_2025(rows, data_through_year, data_through_quarter)
+    else:
+        full_year = bool(full_year)
+    size_quarters = FULL_YEAR_QUARTERS if full_year else Q1_Q3
+    maker_key = _slug(maker)
+    size_distribution = _exact_size_distribution(rows, maker_key, size_quarters, full_year=full_year)
 
     gaps = []
     if not baseline_records:
@@ -37,8 +72,6 @@ def calculate_tianma_product_metrics(
         gaps.append(f"基准文件Pivot Cache中未找到符合筛选条件的{maker}技术别2022数据")
     if not any(row.get("size") is not None for row in rows):
         gaps.append(f"符合筛选条件的{maker}记录缺少Size，无法生成尺寸分布与尺寸别增长")
-
-    maker_key = _slug(maker)
 
     return {
         "engine": "python_deterministic_v1",
@@ -49,25 +82,29 @@ def calculate_tianma_product_metrics(
             "excluded_application": "Automobile monitor (Others)",
             "maker": maker,
             "technologies": list(TECHNOLOGIES),
-            "years": list(YEARS),
+            "years": sorted({row["year"] for row in rows}),
             "period_order": list(active_periods),
+            "full_year": full_year,
+            "primary_period": "Y25F" if full_year else "Y25Q1-Q3",
             "y25q1_q3_quarters": ["Q1", "Q2", "Q3"],
+            "summary_quarters": [f"Q{q}" for q in sorted(size_quarters)],
             "y22_source": "baseline_workbook",
-            "y23_y26_source": "merged_current_workbooks",
+            "y23_plus_source": "merged_current_workbooks",
             "source_row_count": len(rows),
         },
         "formulas": {
             "yoy": "current comparable period / previous comparable period - 1",
             "y25f_yoy": "Y25F / Y24 - 1",
             "y25q1_q3_yoy": "Y25 Q1-Q3 / Y24 Q1-Q3 - 1",
-            "y26q1_yoy": "Y26 Q1 / Y25 Q1 - 1",
+            "quarter_yoy": "YxxQn / prior-year same quarter - 1",
             "size_buckets": ["Size < 8", "8 <= Size < 12", "12 <= Size < 15", "Size >= 15"],
         },
         "technology_history": {
             technology: _technology_metric(rows, technology, maker_key, active_periods)
             for technology in TECHNOLOGIES
         },
-        "y25q1_q3_size_distribution": _exact_size_distribution(rows, maker_key),
+        "size_distribution": size_distribution,
+        "y25q1_q3_size_distribution": size_distribution,
         "technology_size_growth": {
             technology: _technology_size_metric(rows, technology, maker_key) for technology in TECHNOLOGIES
         },
@@ -118,7 +155,9 @@ def _technology_metric(rows, technology, maker_key, periods):
 
 def _technology_size_metric(rows, technology, maker_key):
     selected = [row for row in rows if row["technology"] == technology and row["size"] is not None]
-    periods = periods_for_years(row["year"] for row in rows)
+    periods = periods_for_year_quarters(year_quarters_from_rows(rows)) or periods_for_years(
+        row["year"] for row in rows
+    )
     series = []
     for bucket_name, label in SIZE_BUCKETS:
         bucket_rows = [row for row in selected if _size_bucket(row["size"]) == bucket_name]
@@ -143,10 +182,11 @@ def _technology_size_metric(rows, technology, maker_key):
     }
 
 
-def _exact_size_distribution(rows, maker_key):
+def _exact_size_distribution(rows, maker_key, quarters=None, full_year: bool = False):
+    quarters = set(quarters or Q1_Q3)
     selected = [
         row for row in rows
-        if row["year"] == 2025 and row["quarter"] in {1, 2, 3} and row["size"] is not None
+        if row["year"] == 2025 and row["quarter"] in quarters and row["size"] is not None
     ]
     grouped: dict[Decimal, dict[str, Any]] = {}
     for row in selected:
@@ -161,9 +201,12 @@ def _exact_size_distribution(rows, maker_key):
         bucket["count"] += 1
         if row["source_ref"] and len(bucket["refs"]) < 12:
             bucket["refs"].append(row["source_ref"])
+    suffix = "y25_full_year" if full_year else "y25q1_q3"
     return {
-        "metric_id": f"{maker_key}.size_distribution.y25q1_q3",
+        "metric_id": f"{maker_key}.size_distribution.{suffix}",
         "unit": "thousand_units",
+        "primary_period": "Y25F" if full_year else "Y25Q1-Q3",
+        "label": "Y25全年尺寸别分布" if full_year else "Y25 Q1-Q3尺寸别分布",
         "points": [{
             "size": _number(size),
             "shipment": _number(bucket["shipment"]),

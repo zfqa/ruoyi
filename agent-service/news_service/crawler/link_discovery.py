@@ -20,7 +20,12 @@ class LinkDiscoveryResult:
     article_links: list[tuple[str, str, str | None, str | None]]
 
 
-def _listing_publish_time(anchor, selector: str | None) -> str | None:
+def _listing_publish_time(
+    anchor,
+    selector: str | None,
+    *,
+    format_hint: str | None = None,
+) -> str | None:
     """Read a configured listing-card date only.
 
     Without an explicit ``article_time_selector``, return ``None``.  Heuristic
@@ -37,12 +42,14 @@ def _listing_publish_time(anchor, selector: str | None) -> str | None:
         text = " ".join(str(raw or "").split())
         if not text:
             return None
-        if usable := first_parseable_publish_value(text):
+        if usable := first_parseable_publish_value(text, format_hint=format_hint):
             return usable
         # Allow a short absolute date embedded in a slightly longer label.
         if len(text) <= 80:
             from news_service.utils.date_utils import parse_publish_date
 
+            if format_hint:
+                return None
             if parse_publish_date(text) is not None:
                 return first_parseable_publish_value(text)
         return None
@@ -55,6 +62,11 @@ def _listing_publish_time(anchor, selector: str | None) -> str | None:
         if current is None:
             break
         for node in current.select(selector):
+            # Prefer an explicit machine-readable datetime attribute when the
+            # publisher exposes one (e.g. Mazda ``time datetime="2026.09.01"``).
+            attr = node.get("datetime")
+            if usable := _usable(attr):
+                return usable
             if usable := _usable(node.get_text(" ", strip=True)):
                 return usable
         current = current.parent
@@ -87,9 +99,14 @@ def normalize_article_url(source: NewsSourceConfig, value: str, base_url: str) -
 def discover_article_links(source: NewsSourceConfig, column_url: str, html: str, *, limit: int | None) -> LinkDiscoveryResult:
     soup = BeautifulSoup(html, "html.parser")
     anchors = soup.select(source.selectors.article_link_selector) if source.selectors.article_link_selector else soup.select("a[href]")
+    format_hint = (
+        source.structured_discovery.article_time_format
+        if source.structured_discovery is not None
+        else None
+    )
     links: list[tuple[str, str, str | None, str | None]] = []
     for anchor in anchors:
-        href = str(anchor.get("href") or "").strip()
+        href = re.sub(r"\s+", "", str(anchor.get("href") or "").strip())
         if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
             continue
         original = urljoin(column_url, href)
@@ -99,7 +116,18 @@ def discover_article_links(source: NewsSourceConfig, column_url: str, html: str,
             continue
         if canonical not in {item[1] for item in links}:
             title = " ".join(anchor.get_text(" ", strip=True).split()) or None
-            links.append((original, canonical, title, _listing_publish_time(anchor, source.selectors.article_time_selector)))
+            links.append(
+                (
+                    original,
+                    canonical,
+                    title,
+                    _listing_publish_time(
+                        anchor,
+                        source.selectors.article_time_selector,
+                        format_hint=format_hint,
+                    ),
+                )
+            )
         if limit is not None and len(links) >= limit:
             break
     return LinkDiscoveryResult(article_links=links)

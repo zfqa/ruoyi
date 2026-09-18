@@ -33,6 +33,17 @@ def main() -> int:
         "--extra-supply-chain-file", action="append", default=[],
         help="Additional Supply Chain workbook(s); Year/Quarter overlap is overridden by later files and --supply-chain-file",
     )
+    parser.add_argument("--file-label", default=None, help="Original Omdia file name for --file (publication lag)")
+    parser.add_argument("--baseline-file-label", default=None, help="Original Omdia file name for baseline")
+    parser.add_argument("--supply-chain-file-label", default=None, help="Original Omdia file name for supply chain")
+    parser.add_argument(
+        "--extra-history-file-label", action="append", default=[],
+        help="Original Omdia names aligned with --extra-history-file order",
+    )
+    parser.add_argument(
+        "--extra-supply-chain-file-label", action="append", default=[],
+        help="Original Omdia names aligned with --extra-supply-chain-file order",
+    )
     args = parser.parse_args()
 
     result = parse_workbook(
@@ -46,6 +57,11 @@ def main() -> int:
         supply_chain_file_path=args.supply_chain_file,
         extra_history_file_paths=args.extra_history_file,
         extra_supply_chain_file_paths=args.extra_supply_chain_file,
+        file_label=args.file_label,
+        baseline_file_label=args.baseline_file_label,
+        supply_chain_file_label=args.supply_chain_file_label,
+        extra_history_file_labels=args.extra_history_file_label,
+        extra_supply_chain_file_labels=args.extra_supply_chain_file_label,
     )
     print(to_json(result))
     return 0

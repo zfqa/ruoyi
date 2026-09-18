@@ -388,12 +388,21 @@ public class KnowledgeCitationValidator
         private final List<Map<String, Object>> claims;
         private final Map<Integer, List<Map<String, Object>>> evidenceBySource;
 
-        ValidationResult(List<Integer> citedIndexes, List<Map<String, Object>> claims,
+        public ValidationResult(List<Integer> citedIndexes, List<Map<String, Object>> claims,
             Map<Integer, List<Map<String, Object>>> evidenceBySource)
         {
             this.citedIndexes = citedIndexes;
             this.claims = claims;
             this.evidenceBySource = evidenceBySource;
+        }
+
+        /** 市面 agent 风格回答：不强制逐句 [S#]，把检索到的资料挂到引用来源区。 */
+        public static ValidationResult attachRetrieved(List<KnowledgeChunk> chunks)
+        {
+            List<Integer> indexes = new ArrayList<>();
+            if (chunks != null)
+                for (int i = 1; i <= chunks.size(); i++) indexes.add(i);
+            return new ValidationResult(indexes, List.of(), Map.of());
         }
 
         public List<Integer> getCitedIndexes() { return citedIndexes; }

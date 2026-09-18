@@ -279,8 +279,9 @@ public class KnowledgeBaseController extends BaseController
                 : getLoginUser().getUser().getRoles().stream().map(role -> role.getRoleId()).collect(Collectors.toList());
             boolean includeNews = payload.get("includeNews") == null
                 || Boolean.parseBoolean(string(payload.get("includeNews")));
+            boolean webLlm = payload.get("webLlm") != null && Boolean.parseBoolean(string(payload.get("webLlm")));
             return success(knowledgeQaService.ask(string(payload.get("question")), string(payload.get("sourceType")),
-                roleIds, getLoginUser().getUser().isAdmin(), includeNews));
+                roleIds, getLoginUser().getUser().isAdmin(), includeNews, webLlm));
         }
         catch (Exception e)
         {
@@ -296,8 +297,9 @@ public class KnowledgeBaseController extends BaseController
         {
             boolean includeNews = payload.get("includeNews") == null
                 || Boolean.parseBoolean(string(payload.get("includeNews")));
+            boolean webLlm = payload.get("webLlm") != null && Boolean.parseBoolean(string(payload.get("webLlm")));
             return success(knowledgeQaTaskService.submit(string(payload.get("question")),
-                string(payload.get("sourceType")), includeNews, roleIds(),
+                string(payload.get("sourceType")), includeNews, webLlm, roleIds(),
                 getLoginUser().getUser().isAdmin(), getUsername()));
         }
         catch (Exception e)

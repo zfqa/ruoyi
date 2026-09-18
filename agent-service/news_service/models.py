@@ -47,15 +47,24 @@ class StructuredRequestValueFromPageConfig(BaseModel):
 class StructuredDiscoveryConfig(BaseModel):
     """Configuration for safely reading public structured article listings.
 
-    The data is parsed as JSON only.  JavaScript is never evaluated or run.
+    Supported modes parse JSON, HTML fragments, or RSS/Atom XML only.
+    JavaScript is never evaluated or run.
     """
 
-    mode: Literal["json_endpoint", "json_html_fragment", "html_endpoint", "script_json", "js_data_file"]
+    mode: Literal[
+        "json_endpoint",
+        "json_html_fragment",
+        "html_endpoint",
+        "rss_endpoint",
+        "script_json",
+        "js_data_file",
+    ]
     # When true, structured data is authoritative and is evaluated before
     # generic HTML anchors (which may contain navigation/product links).
     prefer: bool = False
-    # For ``json_endpoint`` and ``js_data_file`` this is the public resource
-    # URL.  Relative URLs are resolved against the configured column page.
+    # For ``json_endpoint``, ``rss_endpoint`` and ``js_data_file`` this is the
+    # public resource URL.  Relative URLs are resolved against the configured
+    # column page.
     data_url: str | None = None
     # Optional static query parameters for a public JSON endpoint.
     query_params: dict[str, str | int | float | bool] = Field(default_factory=dict)
@@ -133,7 +142,13 @@ class StructuredDiscoveryConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_data_source(self) -> "StructuredDiscoveryConfig":
-        if self.mode in {"json_endpoint", "json_html_fragment", "html_endpoint", "js_data_file"} and not self.data_url:
+        if self.mode in {
+            "json_endpoint",
+            "json_html_fragment",
+            "html_endpoint",
+            "rss_endpoint",
+            "js_data_file",
+        } and not self.data_url:
             raise ValueError("structured_discovery 的 endpoint/js_data_file 必须配置 data_url")
         if self.mode == "script_json" and not self.script_selector:
             raise ValueError("structured_discovery 的 script_json 必须配置 script_selector")
@@ -141,6 +156,8 @@ class StructuredDiscoveryConfig(BaseModel):
             raise ValueError("structured_discovery 的 js_data_file 必须配置 json_assignment_prefix")
         if self.mode == "json_html_fragment" and not self.html_path:
             raise ValueError("structured_discovery.json_html_fragment 必须配置 html_path")
+        if self.mode == "rss_endpoint" and not self.records_path:
+            raise ValueError("structured_discovery.rss_endpoint 必须配置 records_path")
         if self.pagination is not None and self.mode not in {"json_endpoint", "json_html_fragment", "html_endpoint"}:
             raise ValueError("structured_discovery.pagination 当前仅支持公开 endpoint 分页模式")
         if self.mode not in {"json_html_fragment", "html_endpoint"} and not self.article_url_field and not self.article_url_template:

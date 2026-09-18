@@ -5,14 +5,30 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.report.periods import BASE_PERIODS, SUPPORTED_YEARS, periods_for_years
+from app.report.periods import BASE_PERIODS, SUPPORTED_YEARS, clip_periods_to_data_through, periods_for_years
 
 
 PERIODS = BASE_PERIODS + ("Y26Q1",)
-CLIENT_PERIODS = ("Y22", "Y23", "Y24", "Y25Q1-Q3", "Y26Q1")
+CLIENT_PERIODS = ("Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3", "Y26Q1")
 TECHNOLOGIES = ("LTPS", "a-Si")
 REGION_ORDER = ("日系", "欧系", "中系", "美系", "韩系", "其他")
 APPLICATION_ORDER = ("仪表", "中控", "HUD", "控制屏", "后视镜", "娱乐屏")
+Q1_Q3 = {1, 2, 3}
+FULL_YEAR_QUARTERS = {1, 2, 3, 4}
+
+
+def _is_full_year_2025(
+    rows: list[dict[str, Any]],
+    data_through_year: int | None = None,
+    data_through_quarter: int | None = None,
+) -> bool:
+    """四季齐全（或 data_through 已到 4Q25）时切全年口径。"""
+    qs = {int(row["quarter"]) for row in rows if int(row.get("year") or 0) == 2025}
+    if FULL_YEAR_QUARTERS <= qs:
+        return True
+    if data_through_year is None or data_through_quarter is None:
+        return False
+    return (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
 
 REGION_CLIENTS = {
     "日系": {
@@ -111,7 +127,11 @@ REFERENCE_APPLICATION_SIZE_ROWS = {
 
 
 def calculate_tianma_customer_metrics(
-    records: list[dict[str, Any]], maker: str = "Tianma"
+    records: list[dict[str, Any]],
+    maker: str = "Tianma",
+    data_through_year: int | None = None,
+    data_through_quarter: int | None = None,
+    full_year: bool | None = None,
 ) -> dict[str, Any]:
     rows = [row for row in (_normalize_supply(record, maker) for record in records) if row is not None]
     gaps = []
@@ -120,7 +140,17 @@ def calculate_tianma_customer_metrics(
     elif not rows:
         gaps.append(f"Supply Chain文件中未找到符合{maker}前装筛选条件的记录")
 
-    top_sums = _sum_rows([row for row in rows if row["year"] == 2025 and row["quarter"] in {1, 2, 3}], lambda row: (row["client"],))
+    if full_year is None:
+        full_year = _is_full_year_2025(rows, data_through_year, data_through_quarter)
+    else:
+        full_year = bool(full_year)
+    summary_quarters = FULL_YEAR_QUARTERS if full_year else Q1_Q3
+    primary_period = "Y25F" if full_year else "Y25Q1-Q3"
+
+    top_sums = _sum_rows(
+        [row for row in rows if row["year"] == 2025 and row["quarter"] in summary_quarters],
+        lambda row: (row["client"],),
+    )
     top_clients = sorted(
         (key[0] for key in top_sums if key[0] not in {"Others", "Not Defined", "GM"}),
         key=lambda client: (-top_sums[(client,)]["value"], client),
@@ -129,38 +159,61 @@ def calculate_tianma_customer_metrics(
         name: index for index, name in enumerate(REFERENCE_CLIENT_ORDER.get(maker, ()))
     }
     top_clients.sort(key=lambda client: (reference_order.get(client, 99), -top_sums[(client,)]["value"]))
-    current_total = _selected_bucket(rows, 2025, {1, 2, 3})
-    prior_total = _selected_bucket(rows, 2024, {1, 2, 3})
-    client_periods = tuple(
-        period for period in CLIENT_PERIODS
-        if period != "Y26Q1" or any(row["year"] == 2026 for row in rows)
+    current_total = _selected_bucket(rows, 2025, summary_quarters)
+    prior_total = _selected_bucket(rows, 2024, summary_quarters)
+    current_q1_q3_total = _selected_bucket(rows, 2025, Q1_Q3)
+    prior_q1_q3_total = _selected_bucket(rows, 2024, Q1_Q3)
+    client_periods = clip_periods_to_data_through(
+        tuple(
+            period for period in CLIENT_PERIODS
+            if period != "Y26Q1" or any(row["year"] == 2026 for row in rows)
+        ),
+        data_through_year,
+        data_through_quarter,
     )
     client_series = []
     for client in top_clients:
         client_rows = [row for row in rows if row["client"] == client]
-        buckets = _period_buckets(client_rows, client_periods, include_y25f=False)
-        current = _selected_bucket(client_rows, 2025, {1, 2, 3})
-        prior = _selected_bucket(client_rows, 2024, {1, 2, 3})
+        buckets = _period_buckets(client_rows, client_periods, include_y25f=True)
+        current = _selected_bucket(client_rows, 2025, summary_quarters)
+        prior = _selected_bucket(client_rows, 2024, summary_quarters)
+        current_q1_q3 = _selected_bucket(client_rows, 2025, Q1_Q3)
+        prior_q1_q3 = _selected_bucket(client_rows, 2024, Q1_Q3)
+        share_primary = _share(current, current_total)
+        share_prior = _share(prior, prior_total)
         client_series.append({
             "metric_id": f"{_slug(maker)}.client.{_slug(client)}.shipment",
             "client": client,
             "unit": "thousand_units",
             "periods": {period: _bucket_value(buckets.get(period)) for period in client_periods},
-            "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(current, prior),
-            "share_y25_q1_q3": _share(current, current_total),
-            "share_y24_q1_q3": _share(prior, prior_total),
-            "share_change_points": _difference(
-                _share(current, current_total), _share(prior, prior_total)
-            ),
-            "growth_contribution_y25_q1_q3": _growth_contribution(
+            "primary_period": primary_period,
+            "yoy_primary": _yoy(current, prior),
+            "share_primary": share_primary,
+            "growth_contribution_primary": _growth_contribution(
                 current, prior, current_total, prior_total
+            ),
+            "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(current_q1_q3, prior_q1_q3),
+            "share_y25_q1_q3": _share(current_q1_q3, current_q1_q3_total),
+            "share_y24_q1_q3": _share(prior_q1_q3, prior_q1_q3_total),
+            "yoy_2025_full_vs_2024_full": _yoy(current, prior) if full_year else None,
+            "share_y25_full": share_primary if full_year else None,
+            "share_change_points": _difference(share_primary, share_prior),
+            "growth_contribution_y25_q1_q3": _growth_contribution(
+                current_q1_q3, prior_q1_q3, current_q1_q3_total, prior_q1_q3_total
+            ),
+            "growth_contribution_y25_full": (
+                _growth_contribution(current, prior, current_total, prior_total)
+                if full_year else None
             ),
             "evidence": {period: _bucket_evidence(buckets.get(period)) for period in client_periods},
         })
 
     region_rows = [row for row in rows if not row.get("excluded_from_region")]
     unknown_clients = sorted({row["client"] for row in region_rows if _region(row["client"]) == "其他" and row["client"] not in {"Not Defined", "Others"}})
-    region_metrics = [_region_metric(region_rows, region, maker) for region in REGION_ORDER]
+    region_metrics = [
+        _region_metric(region_rows, region, maker, full_year=full_year)
+        for region in REGION_ORDER
+    ]
     return {
         "engine": "python_deterministic_v1",
         "title": f"{maker}增长点分析二：客户/区域",
@@ -170,15 +223,24 @@ def calculate_tianma_customer_metrics(
             "excluded_product": "Automobile monitor (Others)",
             "panel_maker": maker,
             "years": list(SUPPORTED_YEARS),
-            "top_client_basis": "Y25 Q1-Q3 Qty descending",
+            "full_year": full_year,
+            "summary_quarters": [f"Q{q}" for q in sorted(summary_quarters)],
+            "primary_period": primary_period,
+            "top_client_basis": (
+                "Y25 full-year Qty descending" if full_year else "Y25 Q1-Q3 Qty descending"
+            ),
             "top_client_exclusions": ["Others", "Not Defined", "GM"],
             "region_technology_exclusions": ["Oxide"],
             "source_row_count": len(rows),
         },
         "top_clients": {
-            "metric_id": f"{_slug(maker)}.clients.top6.y25q1_q3",
+            "metric_id": (
+                f"{_slug(maker)}.clients.top6.y25_full_year"
+                if full_year else f"{_slug(maker)}.clients.top6.y25q1_q3"
+            ),
             "unit": "thousand_units",
             "period_order": list(client_periods),
+            "primary_period": primary_period,
             "clients": client_series,
         },
         "regions": {
@@ -199,6 +261,9 @@ def calculate_tianma_application_metrics(
     current_records: list[dict[str, Any]],
     baseline_records: list[dict[str, Any]] | None = None,
     maker: str = "Tianma",
+    data_through_year: int | None = None,
+    data_through_quarter: int | None = None,
+    full_year: bool | None = None,
 ) -> dict[str, Any]:
     current = [_normalize_application(record, "current", maker) for record in current_records]
     baseline = [_normalize_application(record, "baseline", maker) for record in (baseline_records or [])]
@@ -208,21 +273,39 @@ def calculate_tianma_application_metrics(
     if not baseline_records:
         gaps.append(f"未提供1Q25 with 4Q24 Results基准文件，{maker}应用别Y22指标暂缺")
 
-    active_periods = periods_for_years(row["year"] for row in rows)
+    active_periods = clip_periods_to_data_through(
+        periods_for_years(row["year"] for row in rows),
+        data_through_year,
+        data_through_quarter,
+    )
+    if full_year is None:
+        full_year = _is_full_year_2025(rows, data_through_year, data_through_quarter)
+    else:
+        full_year = bool(full_year)
+    summary_quarters = FULL_YEAR_QUARTERS if full_year else Q1_Q3
+    primary_period = "Y25F" if full_year else "Y25Q1-Q3"
     series = []
-    current_total = _selected_bucket(rows, 2025, {1, 2, 3})
-    prior_total = _selected_bucket(rows, 2024, {1, 2, 3})
-    current_area_total = _selected_measure_bucket(rows, 2025, {1, 2, 3}, "display_area")
-    prior_area_total = _selected_measure_bucket(rows, 2024, {1, 2, 3}, "display_area")
+    current_total = _selected_bucket(rows, 2025, summary_quarters)
+    prior_total = _selected_bucket(rows, 2024, summary_quarters)
+    current_q1_q3_total = _selected_bucket(rows, 2025, Q1_Q3)
+    prior_q1_q3_total = _selected_bucket(rows, 2024, Q1_Q3)
+    current_area_total = _selected_measure_bucket(rows, 2025, summary_quarters, "display_area")
+    prior_area_total = _selected_measure_bucket(rows, 2024, summary_quarters, "display_area")
+    current_area_q1_q3_total = _selected_measure_bucket(rows, 2025, Q1_Q3, "display_area")
+    prior_area_q1_q3_total = _selected_measure_bucket(rows, 2024, Q1_Q3, "display_area")
     for application in APPLICATION_ORDER:
         selected = [row for row in rows if row["application"] == application]
         buckets = _period_buckets(selected, active_periods, include_y25f=True)
-        prior_q1_q3 = _selected_bucket(selected, 2024, {1, 2, 3})
-        current_q1_q3 = _selected_bucket(selected, 2025, {1, 2, 3})
+        prior_q1_q3 = _selected_bucket(selected, 2024, Q1_Q3)
+        current_q1_q3 = _selected_bucket(selected, 2025, Q1_Q3)
+        current = _selected_bucket(selected, 2025, summary_quarters)
+        prior = _selected_bucket(selected, 2024, summary_quarters)
         prior_q1 = _selected_bucket(selected, 2025, {1})
         area_buckets = _measure_period_buckets(selected, "display_area")
-        prior_area_q1_q3 = _selected_measure_bucket(selected, 2024, {1, 2, 3}, "display_area")
-        current_area_q1_q3 = _selected_measure_bucket(selected, 2025, {1, 2, 3}, "display_area")
+        prior_area_q1_q3 = _selected_measure_bucket(selected, 2024, Q1_Q3, "display_area")
+        current_area_q1_q3 = _selected_measure_bucket(selected, 2025, Q1_Q3, "display_area")
+        current_area = _selected_measure_bucket(selected, 2025, summary_quarters, "display_area")
+        prior_area = _selected_measure_bucket(selected, 2024, summary_quarters, "display_area")
         yoy_periods = {
             "Y22": None,
             "Y23": _yoy(buckets.get("Y23"), buckets.get("Y22")),
@@ -237,9 +320,19 @@ def calculate_tianma_application_metrics(
             "application": application,
             "unit": "thousand_units",
             "periods": {period: _bucket_value(buckets.get(period)) for period in active_periods},
-            "share_y25_q1_q3": _share(current_q1_q3, current_total),
+            "primary_period": primary_period,
+            "share_primary": _share(current, current_total),
+            "growth_contribution_primary": _growth_contribution(
+                current, prior, current_total, prior_total
+            ),
+            "share_y25_q1_q3": _share(current_q1_q3, current_q1_q3_total),
             "growth_contribution_y25_q1_q3": _growth_contribution(
-                current_q1_q3, prior_q1_q3, current_total, prior_total
+                current_q1_q3, prior_q1_q3, current_q1_q3_total, prior_q1_q3_total
+            ),
+            "share_y25_full": _share(current, current_total) if full_year else None,
+            "growth_contribution_y25_full": (
+                _growth_contribution(current, prior, current_total, prior_total)
+                if full_year else None
             ),
             "yoy_periods": yoy_periods,
             "display_area": {
@@ -249,10 +342,14 @@ def calculate_tianma_application_metrics(
                     if period in area_buckets
                 },
                 "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(current_area_q1_q3, prior_area_q1_q3),
-                "share_y25_q1_q3": _share(current_area_q1_q3, current_area_total),
+                "share_y25_q1_q3": _share(current_area_q1_q3, current_area_q1_q3_total),
                 "growth_contribution_y25_q1_q3": _growth_contribution(
                     current_area_q1_q3, prior_area_q1_q3,
-                    current_area_total, prior_area_total,
+                    current_area_q1_q3_total, prior_area_q1_q3_total,
+                ),
+                "share_primary": _share(current_area, current_area_total),
+                "growth_contribution_primary": _growth_contribution(
+                    current_area, prior_area, current_area_total, prior_area_total
                 ),
                 "evidence": {
                     period: _bucket_evidence(area_buckets.get(period))
@@ -262,11 +359,11 @@ def calculate_tianma_application_metrics(
             "evidence": {period: _bucket_evidence(buckets.get(period)) for period in active_periods},
         })
 
-    q1_q3_rows = [row for row in rows if row["year"] == 2025 and row["quarter"] in {1, 2, 3}]
-    prior_rows = [row for row in rows if row["year"] == 2024 and row["quarter"] in {1, 2, 3}]
-    total = _bucket(q1_q3_rows)
+    summary_rows = [row for row in rows if row["year"] == 2025 and row["quarter"] in summary_quarters]
+    prior_rows = [row for row in rows if row["year"] == 2024 and row["quarter"] in summary_quarters]
+    total = _bucket(summary_rows)
     grouped_by_technology = _sum_rows(
-        [row for row in q1_q3_rows if row["size"] is not None and row["technology"]],
+        [row for row in summary_rows if row["size"] is not None and row["technology"]],
         lambda row: (row["application"], row["size"], row["technology"]),
     )
     prior_by_technology = _sum_rows(
@@ -288,6 +385,7 @@ def calculate_tianma_application_metrics(
             "technology": technology_label or "/".join(techs),
             "shipment": _bucket_value(value_bucket),
             "share": _share(value_bucket, total),
+            "yoy_primary": _yoy(value_bucket, prior_bucket),
             "yoy_2025_q1_q3_vs_2024_q1_q3": _yoy(value_bucket, prior_bucket),
             "evidence": _bucket_evidence(value_bucket),
         })
@@ -301,6 +399,9 @@ def calculate_tianma_application_metrics(
             "excluded_application": "Automobile monitor (Others)",
             "maker": maker,
             "applications": list(APPLICATION_ORDER),
+            "full_year": full_year,
+            "summary_quarters": [f"Q{q}" for q in sorted(summary_quarters)],
+            "primary_period": primary_period,
             "key_size_threshold_kpcs": 1000,
             "key_size_rule": "final-report-v1 field-based application/size/technology scope; values are summed from matching records and never depend on worksheet coordinates",
             "key_size_profile": "final_report_v1" if profile else "threshold_fallback",
@@ -310,11 +411,16 @@ def calculate_tianma_application_metrics(
             "metric_id": f"{_slug(maker)}.applications.shipment.history",
             "unit": "thousand_units",
             "period_order": list(active_periods),
+            "primary_period": primary_period,
             "series": series,
         },
         "key_sizes": {
-            "metric_id": f"{_slug(maker)}.application_sizes.y25q1_q3",
+            "metric_id": (
+                f"{_slug(maker)}.application_sizes.y25_full_year"
+                if full_year else f"{_slug(maker)}.application_sizes.y25q1_q3"
+            ),
             "unit": "thousand_units",
+            "primary_period": primary_period,
             "total_shipment": _bucket_value(total),
             "rows": key_rows,
         },
@@ -322,17 +428,21 @@ def calculate_tianma_application_metrics(
     }
 
 
-def _region_metric(rows, region, maker):
+def _region_metric(rows, region, maker, full_year: bool = False):
     selected = [row for row in rows if _region(row["client"]) == region]
     annual_2023 = _bucket([row for row in selected if row["year"] == 2023])
     annual_2024 = _bucket([row for row in selected if row["year"] == 2024])
-    q1q3_2024 = _bucket([row for row in selected if row["year"] == 2024 and row["quarter"] in {1, 2, 3}])
-    q1q3_2025 = _bucket([row for row in selected if row["year"] == 2025 and row["quarter"] in {1, 2, 3}])
+    annual_2025 = _bucket([row for row in selected if row["year"] == 2025])
+    q1q3_2024 = _bucket([row for row in selected if row["year"] == 2024 and row["quarter"] in Q1_Q3])
+    q1q3_2025 = _bucket([row for row in selected if row["year"] == 2025 and row["quarter"] in Q1_Q3])
     technology = {}
-    for period, year, quarters, prior_year, prior_quarters in (
-        ("Y24", 2024, {1, 2, 3, 4}, 2023, {1, 2, 3, 4}),
-        ("Y25Q1-Q3", 2025, {1, 2, 3}, 2024, {1, 2, 3}),
-    ):
+    period_defs = [
+        ("Y24", 2024, FULL_YEAR_QUARTERS, 2023, FULL_YEAR_QUARTERS),
+        ("Y25Q1-Q3", 2025, Q1_Q3, 2024, Q1_Q3),
+    ]
+    if full_year:
+        period_defs.append(("Y25F", 2025, FULL_YEAR_QUARTERS, 2024, FULL_YEAR_QUARTERS))
+    for period, year, quarters, prior_year, prior_quarters in period_defs:
         technology[period] = {}
         for tech in TECHNOLOGIES:
             current = _bucket([row for row in selected if row["year"] == year and row["quarter"] in quarters and row["technology"] == tech])
@@ -341,20 +451,29 @@ def _region_metric(rows, region, maker):
     return {
         "metric_id": f"{_slug(maker)}.region.{_slug(region)}.shipment",
         "region": region,
+        "primary_period": "Y25F" if full_year else "Y25Q1-Q3",
         "annual": {
             "Y23": _bucket_value(annual_2023),
             "Y24": _bucket_value(annual_2024),
+            "Y25": _bucket_value(annual_2025) if full_year else None,
             "yoy_2024_vs_2023": _yoy(annual_2024, annual_2023),
+            "yoy_2025_vs_2024": _yoy(annual_2025, annual_2024) if full_year else None,
         },
         "q1_q3": {
             "Y24Q1-Q3": _bucket_value(q1q3_2024),
             "Y25Q1-Q3": _bucket_value(q1q3_2025),
             "yoy_2025_vs_2024": _yoy(q1q3_2025, q1q3_2024),
         },
+        "full_year": {
+            "Y24": _bucket_value(annual_2024),
+            "Y25": _bucket_value(annual_2025),
+            "yoy_2025_vs_2024": _yoy(annual_2025, annual_2024),
+        } if full_year else None,
         "technology": technology,
         "evidence": {
             "Y23": _bucket_evidence(annual_2023),
             "Y24": _bucket_evidence(annual_2024),
+            "Y25": _bucket_evidence(annual_2025) if full_year else None,
             "Y24Q1-Q3": _bucket_evidence(q1q3_2024),
             "Y25Q1-Q3": _bucket_evidence(q1q3_2025),
         },

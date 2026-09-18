@@ -10,18 +10,126 @@ from typing import Any
 
 from app.llm.client import ArkChatClient, LlmError
 from app.report.metrics import calculate_competitive_metrics
+from app.report.periods import (
+    clip_periods_to_data_through,
+    latest_omdia_data_through,
+    publication_label,
+    report_horizon_from_data_through,
+)
 
 
 REPORT_TYPE = "competitive_insight_v1"
 MAKERS = ("Tianma", "AUO", "CSOT", "BOE")
 TARGET_SHEETS = ("shipment", "shipment share", "display area", "display area share")
+# Backward-compatible aliases used by existing exporters.
+HORIZON_Q1_Q3 = "y25_q1_q3"
+HORIZON_FULL_YEAR = "y25_full_year"
 
-SYSTEM_PROMPT = """你是车载显示行业报告撰写员。当前生成Y25前三季度Summary，以及Tianma、AUO、CSOT、BOE四家公司的前装历史、产品线、客户/区域和应用增长分析。computed_metrics中的筛选、汇总、同比和占比均已由Python计算完成。
+SYSTEM_PROMPT_Q1_Q3 = """你是车载显示行业报告撰写员。当前生成Y25前三季度Summary，以及Tianma、AUO、CSOT、BOE四家公司的前装历史、产品线、客户/区域和应用增长分析。computed_metrics中的筛选、汇总、同比和占比均已由Python计算完成。
 你只负责解释和组织已有指标，严禁重新计算、修改数值、从原始记录推导新指标或补写常识数据。
+注意：Omdia文件名中的nQyy是网站发布季，实际更新数据截止到上一季度；不得把发布季当成数据截止季。
 每条包含数字的文字必须引用已有metric_id。数据缺口由Python确定，不得新增客户、区域、应用或其他未要求部分。只输出JSON对象，不要Markdown。"""
+
+SYSTEM_PROMPT_FULL_YEAR = """你是车载显示行业报告撰写员。当前输入已从Y25前三季度口径扩充至Y25全年：主叙事必须以Y25F（2025全年预测/跟踪）及相对Y24的全年同比为核心，前三季度实际（Y25Q1-Q3）与完成率作为过程补充。若表中出现Y26Qn，那是发布季之后的展望/预测列，不是本次实际更新截止季，不得喧宾夺主。依次撰写Tianma、AUO、CSOT、BOE的前装历史、产品线、客户/区域和应用增长分析。computed_metrics中的筛选、汇总、同比和占比均已由Python计算完成。
+你只负责解释和组织已有指标，严禁重新计算、修改数值、从原始记录推导新指标或补写常识数据。
+注意：例如1Q26文件表示Omdia在1Q26发布，实际更新内容到4Q25（Y25全年）。正文必须明确写出各厂Y25F全年出货及同比；可对照Y25Q1-Q3实际。每条包含数字的文字必须引用已有metric_id。数据缺口由Python确定，不得新增客户、区域、应用或其他未要求部分。只输出JSON对象，不要Markdown。"""
 
 METRIC_REF_PATTERN = re.compile(r"\s*\[(.+)\]\s*$")
 METRIC_REF_TOKEN_PATTERN = re.compile(r"\[([A-Za-z0-9_.-]+)\]")
+
+
+def _history_period_order(metrics: dict[str, Any]) -> list[str]:
+    details = metrics.get("maker_details") or {}
+    for detail in details.values():
+        order = (((detail or {}).get("history") or {}).get("scope") or {}).get("period_order") or []
+        if order:
+            return list(order)
+    return list((((metrics.get("tianma_history") or {}).get("scope") or {}).get("period_order")) or [])
+
+
+def _source_file_names(parsed: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for item in parsed.get("source_workbooks") or []:
+        name = (
+            (item or {}).get("original_file_name")
+            or (item or {}).get("file_name")
+            or (item or {}).get("stored_file_name")
+        )
+        if name:
+            names.append(str(name))
+    if parsed.get("file_name"):
+        names.append(str(parsed.get("file_name")))
+    return names
+
+
+def _resolve_horizon_meta(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
+    """报告口径优先按解析后的季度完备度自动判断。
+
+    1) computed_metrics.scope：某年四季齐全 → 全年；仅齐 Q1–Q3 → 前三季度
+    2) 无指标时再看 period_coverage / Omdia 发布滞后
+    Omdia 文件名仍写入 notes，并用于裁掉截止季之后的预测列。
+    """
+    scope = (metrics or {}).get("scope") or {}
+    summary_mode = str(scope.get("summary_mode") or "")
+    target_year = int(scope.get("summary_target_year") or 2025)
+    framing: dict[str, Any] | None = None
+
+    if scope.get("full_year") is True or summary_mode.endswith("full_year"):
+        framing = report_horizon_from_data_through(target_year, 4)
+    elif summary_mode.endswith("q1_q3") or scope.get("full_year") is False:
+        framing = report_horizon_from_data_through(target_year, 3)
+
+    latest = latest_omdia_data_through(_source_file_names(parsed))
+    if framing is None:
+        if latest:
+            framing = report_horizon_from_data_through(
+                latest["data_through_year"], latest["data_through_quarter"]
+            )
+        else:
+            coverage = parsed.get("period_coverage") or []
+            by_year: dict[int, set[int]] = {}
+            for item in coverage:
+                year = int(item.get("year") or 0)
+                quarter = int(item.get("quarter") or 0)
+                if year > 0 and quarter in {1, 2, 3, 4}:
+                    by_year.setdefault(year, set()).add(quarter)
+            for year in sorted(by_year, reverse=True):
+                qs = by_year[year]
+                if {1, 2, 3, 4} <= qs:
+                    framing = report_horizon_from_data_through(year, 4)
+                    break
+                if {1, 2, 3} <= qs:
+                    framing = report_horizon_from_data_through(year, 3)
+                    break
+            if framing is None:
+                framing = {
+                    **report_horizon_from_data_through(2025, 3),
+                    "report_horizon": HORIZON_Q1_Q3,
+                }
+
+    framing["summary_target_year"] = target_year if scope.get("summary_target_year") else framing.get(
+        "data_through_year", 2025
+    )
+    framing["omdia"] = latest
+    # 列裁剪截止：取「指标口径」与「Omdia 滞后」中较新者，避免漏裁预测列
+    if latest:
+        metric_through = (
+            int(framing["data_through_year"]),
+            int(framing["data_through_quarter"]),
+        )
+        omdia_through = (
+            int(latest["data_through_year"]),
+            int(latest["data_through_quarter"]),
+        )
+        through_year, through_quarter = max(metric_through, omdia_through)
+        framing["data_through_year"] = through_year
+        framing["data_through_quarter"] = through_quarter
+        framing["data_through_label"] = publication_label(through_year, through_quarter)
+    return framing
+
+
+def _report_horizon(parsed: dict[str, Any], metrics: dict[str, Any]) -> str:
+    return _resolve_horizon_meta(parsed, metrics)["report_horizon"]
 
 
 def generate_competitive_insight_report(
@@ -32,6 +140,9 @@ def generate_competitive_insight_report(
     """Build a traceable first report, with deterministic narratives as fallback."""
     metrics = parsed.get("computed_metrics") or calculate_competitive_metrics(_metric_tables(parsed))
     report = _empty_report(parsed, metrics)
+    horizon_meta = ((report.get("methodology") or {}).get("scope") or {})
+    horizon = horizon_meta.get("report_horizon") or HORIZON_Q1_Q3
+    full_year = bool(horizon_meta.get("full_year") or horizon == HORIZON_FULL_YEAR)
     client = llm_client or (
         ArkChatClient(timeout_seconds=float(os.getenv("ARK_REPORT_TIMEOUT_SECONDS", "180")))
         if use_llm else None
@@ -45,14 +156,33 @@ def generate_competitive_insight_report(
         )
         return _finalize_narrative_traceability(_populate_rule_narratives(report))
 
+    if full_year:
+        task = (
+            "仅依据Python已计算的指标，按终稿顺序撰写Y25全年Summary（以Y25F及相对Y24同比为主，Y25Q1-Q3为过程补充）；"
+            "再依次撰写Tianma、AUO、CSOT、BOE的主要驱动力、前装历史、产品线、客户/区域和应用分析；"
+            "不执行任何计算；所有YoY采用标准同比current/previous-1；必须写出各厂Y25F全年出货"
+        )
+        system_prompt = SYSTEM_PROMPT_FULL_YEAR
+    else:
+        task = (
+            "仅依据Python已计算的指标，按终稿顺序撰写Y25前三季度Summary，并依次撰写Tianma、AUO、CSOT、BOE的主要驱动力、前装历史、产品线、客户/区域和应用分析；"
+            "不执行任何计算；所有YoY采用标准同比current/previous-1"
+        )
+        system_prompt = SYSTEM_PROMPT_Q1_Q3
+    focus_periods = list(
+        ((report.get("methodology") or {}).get("scope") or {}).get("focus_periods")
+        or ["Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3"]
+    )
     request = {
-        "task": "仅依据Python已计算的指标，按终稿顺序撰写Y25前三季度Summary，并依次撰写Tianma、AUO、CSOT、BOE的主要驱动力、前装历史、产品线、客户/区域和应用分析；不执行任何计算；所有YoY采用标准同比current/previous-1",
+        "task": task,
         "required_schema": _llm_schema(),
         "methodology": report["methodology"],
         "computed_metrics": _compact_metrics_for_llm(metrics),
+        "focus_periods": focus_periods,
+        "report_horizon": horizon,
     }
     try:
-        candidate = client.complete_json(SYSTEM_PROMPT, json.dumps(request, ensure_ascii=False), max_tokens=7000)
+        candidate = client.complete_json(system_prompt, json.dumps(request, ensure_ascii=False), max_tokens=7000)
     except LlmError as exc:
         message = str(exc)
         if "SetLimitExceeded" in message or "HTTP 429" in message:
@@ -115,12 +245,14 @@ def _compact_metrics_for_llm(metrics: dict[str, Any]) -> dict[str, Any]:
     strip(compact)
     for detail in (compact.get("maker_details") or {}).values():
         product = detail.get("product") or {}
-        distribution = product.get("y25q1_q3_size_distribution") or {}
+        distribution = product.get("size_distribution") or product.get("y25q1_q3_size_distribution") or {}
         points = distribution.get("points") or []
         if len(points) > 18:
             distribution["points"] = sorted(
                 points, key=lambda item: float(item.get("shipment") or 0), reverse=True
             )[:18]
+            product["size_distribution"] = distribution
+            product["y25q1_q3_size_distribution"] = distribution
     for maker in (compact.get("makers") or {}).values():
         if isinstance(maker, dict):
             maker["clients"] = (maker.get("clients") or [])[:5]
@@ -130,22 +262,109 @@ def _compact_metrics_for_llm(metrics: dict[str, Any]) -> dict[str, Any]:
 
 def _empty_report(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
     maker_names = _template_makers(metrics)
+    horizon_meta = _resolve_horizon_meta(parsed, metrics)
+    horizon = horizon_meta["report_horizon"]
+    full_year = bool(horizon_meta.get("full_year"))
+    period_order = _history_period_order(metrics)
+    focus_periods = list(dict.fromkeys([*["Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3"], *period_order]))
+    focus_periods = list(
+        clip_periods_to_data_through(
+            focus_periods,
+            horizon_meta.get("data_through_year"),
+            horizon_meta.get("data_through_quarter"),
+        )
+    )
+    source_workbooks = parsed.get("source_workbooks") or []
+    omdia = horizon_meta.get("omdia") or {}
+    pub_label = omdia.get("publication_label")
+    through_label = omdia.get("data_through_label") or publication_label(
+        horizon_meta.get("data_through_year") or 2025,
+        horizon_meta.get("data_through_quarter") or 3,
+    )
+    notes = [
+        "Omdia Tracker文件名中的nQyy（如1Q26）是网站发布季；实际更新数据固定滞后一个季度"
+        f"（发布{pub_label or 'nQyy'} → 数据截止{through_label}）。该规则后续各季均适用。",
+        "Y25F为数据源中的2025全年预测/跟踪值，Y25 Q1-Q3为前三季度实际值。",
+        "LTPS口径同时包含LTPS LCD与OLED；厂商出货和面积不计Oxide，市场份额分母保留全技术市场。",
+        "前装口径为Original specification=Automobile monitor，并排除Application=Automobile monitor (Others)。",
+        "市场汇总覆盖全部Maker；China Star统一展示为CSOT。",
+        "尺寸段依次为<8、[8,12)、[12,15)、>=15，边界值归入右侧区间。",
+        "Y22来自1Q25 with 4Q24 Results基准文件；Y23及以后来自当前History，多份History/Supply按Year/Quarter后写覆盖合并。",
+        "客户区域按客户决策地映射；未命中的客户归为其他并保留清单。",
+        "应用重点尺寸先跨Technology合并，同一应用×尺寸超过1,000K或为该应用第一大尺寸时入选。",
+        "所有数值、同比、份额、完成率及增长贡献均由Python计算；LLM仅组织文字，不执行算术。",
+    ]
+    if full_year:
+        notes.insert(
+            1,
+            f"解析结果：{horizon_meta.get('summary_target_year') or horizon_meta.get('data_through_year') or 2025}"
+            f"年四季齐全，已自动切换为{horizon_meta.get('summary_name') or '全年'}汇总"
+            f"（Y25F）；Y25Q1-Q3 作为过程实际与完成率补充。"
+            + (
+                f" Omdia 发布滞后：截止{through_label}。"
+                if through_label
+                else ""
+            ),
+        )
+    else:
+        notes.insert(
+            1,
+            f"解析结果：{horizon_meta.get('summary_target_year') or 2025}"
+            f"年尚未四季齐全，当前按{horizon_meta.get('summary_name') or '前三季度'}汇总。",
+        )
+    summary_label = horizon_meta.get("summary_name") or ("Y25全年" if full_year else "Y25前三季度")
+    flow = ["口径说明", f"{summary_label}Summary"]
+    flow.extend(
+        item for maker in maker_names for item in (
+            f"{maker}洞察", f"{maker}前装出货与市占率", f"{maker}产品线",
+            f"{maker}客户/区域", f"{maker}应用",
+        )
+    )
+    title_suffix = horizon_meta.get("title_suffix") or ("Y25全年" if full_year else "Y25前三季度")
+    title = f"竞争社对标分析 - Tianma、AUO、CSOT、BOE（{title_suffix}）"
     return {
         "schema_version": "1.0",
         "report_type": REPORT_TYPE,
         "report_order": 1,
-        "title": "竞争社对标分析 - Tianma、AUO、CSOT、BOE",
+        "title": title,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": {
             "workbook_id": parsed.get("workbook_id"),
             "file_name": parsed.get("file_name"),
+            "source_workbooks": source_workbooks,
+            "period_coverage": parsed.get("period_coverage"),
+            "omdia_publication_lag": {
+                "rule": "publication_quarter_minus_one",
+                "publication_label": pub_label,
+                "data_through_label": through_label,
+                "latest": omdia or None,
+            },
         },
         "methodology": {
             "scope": {
                 "original_specification": "Automobile monitor",
                 "excluded_application": "Automobile monitor (Others)",
                 "summary_years": [2024, 2025],
-                "summary_quarters": ["Q1", "Q2", "Q3"],
+                "summary_quarters": ["Q1", "Q2", "Q3"] if not full_year else ["Q1", "Q2", "Q3", "Q4"],
+                "focus_periods": focus_periods,
+                "report_horizon": horizon,
+                "horizon_kind": horizon_meta.get("horizon_kind"),
+                "summary_mode": ((metrics or {}).get("scope") or {}).get("summary_mode")
+                or horizon_meta.get("report_horizon"),
+                "summary_target_year": horizon_meta.get("summary_target_year")
+                or ((metrics or {}).get("scope") or {}).get("summary_target_year")
+                or 2025,
+                "full_year": full_year,
+                "full_year_2025": full_year and int(
+                    horizon_meta.get("summary_target_year")
+                    or horizon_meta.get("data_through_year")
+                    or 2025
+                ) == 2025,
+                "data_through_year": horizon_meta.get("data_through_year"),
+                "data_through_quarter": horizon_meta.get("data_through_quarter"),
+                "omdia_publication_label": pub_label,
+                "omdia_data_through_label": through_label,
+                "has_y26q1": any(str(p).startswith("Y26") for p in focus_periods),
                 "makers": list(maker_names),
                 "maker_aliases": {"China Star": "CSOT"},
                 "technologies": ["LTPS", "a-Si"],
@@ -159,29 +378,18 @@ def _empty_report(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, 
                 "technology_market_share": "maker segment shipment / market technology total shipment",
                 "same_size_market_share": "maker segment shipment / market same-size segment shipment",
                 "forecast_completion": "Y25 Q1-Q3 actual shipment / Y25F shipment",
+                "y25f_yoy": "Y25F / Y24 - 1",
+                "y26q1_yoy": "Y26 Q1 / Y25 Q1 - 1",
+                "omdia_lag": "data_through = publication_quarter - 1 quarter",
                 "growth_contribution": "segment shipment change / maker total shipment change",
             },
-            "notes": [
-                "Y25F为数据源中的2025全年预测值，Y25 Q1-Q3为前三季度实际值。",
-                "LTPS口径同时包含LTPS LCD与OLED；厂商出货和面积不计Oxide，市场份额分母保留全技术市场。",
-                "前装口径为Original specification=Automobile monitor，并排除Application=Automobile monitor (Others)。",
-                "市场汇总覆盖全部Maker；China Star统一展示为CSOT。",
-                "尺寸段依次为<8、[8,12)、[12,15)、>=15，边界值归入右侧区间。",
-                "Y22来自1Q25 with 4Q24 Results基准文件，Y23-Y25来自4Q25 with 3Q25 Results当前文件。",
-                "客户区域按客户决策地映射；未命中的客户归为其他并保留清单。",
-                "应用重点尺寸先跨Technology合并，同一应用×尺寸超过1,000K或为该应用第一大尺寸时入选。",
-                "所有数值、同比、份额、完成率及增长贡献均由Python计算；LLM仅组织文字，不执行算术。",
-            ],
+            "notes": notes,
             "limitations": [
                 "当前基准文件不含2021年数据，因此Y22同比不计算。",
                 "参考PDF个别图表与源数据存在内部不一致时，以Excel源表和统一公式的可复算结果为准。",
+                "Pivot中可能含有晚于“数据截止季”的预测列；报告叙事以Omdia发布滞后规则确定的截止季为准。",
             ],
-                "report_flow": [
-                "口径说明", "Y25前三季度Summary",
-                *[item for maker in maker_names for item in (
-                    f"{maker}洞察", f"{maker}前装出货与市占率", f"{maker}产品线",
-                    f"{maker}客户/区域", f"{maker}应用")],
-            ],
+            "report_flow": flow,
         },
         "data_scope": {
             **(metrics.get("scope") or {}),
@@ -306,7 +514,12 @@ def _maker_with_metrics(
     shipment = metrics.get("shipment") or {}
     result["global_trend"]["market_share"] = [history.get("shipment_share") or shipment.get("market_share")] if (history or shipment) else []
     result["product_line"]["technology"] = product.get("technology_history") or metrics.get("technology") or []
-    result["product_line"]["size_distribution"] = product.get("y25q1_q3_size_distribution") or metrics.get("sizes") or []
+    result["product_line"]["size_distribution"] = (
+        product.get("size_distribution")
+        or product.get("y25q1_q3_size_distribution")
+        or metrics.get("sizes")
+        or []
+    )
     result["product_line"]["size_growth"] = product.get("technology_size_growth") or metrics.get("technology_sizes") or []
     result["customer_region"]["top_customers"] = customer.get("top_clients") or metrics.get("clients") or []
     result["customer_region"]["regions"] = customer.get("regions") or []
@@ -559,14 +772,27 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
     """Produce useful source-grounded prose when the narrative model is unavailable."""
     result = deepcopy(report)
     metrics = result.get("computed_metrics") or {}
+    full_year = bool(
+        ((result.get("methodology") or {}).get("scope") or {}).get("full_year")
+        or ((result.get("methodology") or {}).get("scope") or {}).get("report_horizon")
+        == HORIZON_FULL_YEAR
+    )
     market = metrics.get("market") or {}
     market_values = market.get("values") or {}
     market_y25 = market_values.get("2025")
     market_yoy = market.get("yoy_2025_vs_2024")
     if market_y25 is not None:
-        result["executive_summary"].append(
-            _with_metric(f"Y25前三季度市场总出货{_format_number(market_y25)}K，同比{_format_percent(market_yoy)}", market)
-        )
+        if full_year:
+            result["executive_summary"].append(
+                _with_metric(
+                    f"Y25全年市场总出货{_format_number(market_y25)}K，同比{_format_percent(market_yoy)}",
+                    market,
+                )
+            )
+        else:
+            result["executive_summary"].append(
+                _with_metric(f"Y25前三季度市场总出货{_format_number(market_y25)}K，同比{_format_percent(market_yoy)}", market)
+            )
 
     matrix_rows = ((metrics.get("summary_matrix") or {}).get("rows") or [])
     ltps_total = next((row for row in matrix_rows if row.get("row_key") == "ltps.total"), None)
@@ -627,6 +853,24 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
         shipment = history.get("shipment") or {}
         shipment_periods = shipment.get("periods") or {}
         shipment_yoy = shipment.get("yoy_periods") or {}
+
+        y25f = shipment_periods.get("Y25F")
+        if full_year and y25f is not None:
+            y25f_text = (
+                f"Y25全年（Y25F）出货{_format_number(y25f)}K，同比"
+                f"{_format_percent(shipment_yoy.get('Y25F'))}"
+            )
+            y25f_text = _with_metric(y25f_text, shipment)
+            maker_result["overview"].append(y25f_text)
+            maker_result["global_trend"]["insights"].append(y25f_text)
+            history.setdefault("insights", {}).setdefault("shipment", []).append(y25f_text)
+            result["executive_summary"].append(
+                _with_metric(
+                    f"{maker} Y25全年出货{_format_number(y25f)}K，同比{_format_percent(shipment_yoy.get('Y25F'))}",
+                    shipment,
+                )
+            )
+
         y25_shipment = shipment_periods.get("Y25Q1-Q3")
         if y25_shipment is not None:
             shipment_text = (
@@ -646,7 +890,36 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
                 maker_result["global_trend"]["insights"].append(completion_text)
                 history.setdefault("insights", {}).setdefault("shipment", []).append(completion_text)
 
+        # Extended quarters (e.g. Y26Q1) only as outlook when full-year mode.
+        for period in shipment_periods:
+            if period in {"Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3"}:
+                continue
+            if not str(period).startswith("Y") or "Q" not in str(period):
+                continue
+            qty = shipment_periods.get(period)
+            if qty is None:
+                continue
+            outlook = (
+                f"{period}展望出货{_format_number(qty)}K，同比"
+                f"{_format_percent(shipment_yoy.get(period))}"
+            )
+            outlook = _with_metric(outlook, shipment)
+            maker_result["overview"].append(outlook)
+            maker_result["global_trend"]["insights"].append(outlook)
+            history.setdefault("insights", {}).setdefault("shipment", []).append(outlook)
+
         share_periods = (history.get("shipment_share") or {}).get("periods") or {}
+        if full_year:
+            y25f_share = share_periods.get("Y25F")
+            y24_share = share_periods.get("Y24")
+            if y25f_share is not None:
+                share_text = f"Y25全年出货市占率{_format_percent(y25f_share)}"
+                if y24_share is not None:
+                    share_text += f"，较Y24变化{_format_points(y25f_share - y24_share)}个百分点"
+                share_text = _with_metric(share_text, history.get("shipment_share"))
+                maker_result["overview"].append(share_text)
+                maker_result["global_trend"]["insights"].append(share_text)
+                history.setdefault("insights", {}).setdefault("shipment_share", []).append(share_text)
         y25_share = share_periods.get("Y25Q1-Q3")
         y24_share = share_periods.get("Y24")
         if y25_share is not None:
@@ -659,6 +932,16 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
             history.setdefault("insights", {}).setdefault("shipment_share", []).append(share_text)
 
         area = history.get("display_area") or {}
+        if full_year:
+            area_y25f = (area.get("periods") or {}).get("Y25F")
+            area_yoy_f = (area.get("yoy_periods") or {}).get("Y25F")
+            if area_y25f is not None:
+                area_text = _with_metric(
+                    f"Y25全年出货面积{_format_number(area_y25f)}㎡，同比{_format_percent(area_yoy_f)}",
+                    area,
+                )
+                maker_result["overview"].append(area_text)
+                history.setdefault("insights", {}).setdefault("display_area", []).append(area_text)
         area_yoy = (area.get("yoy_periods") or {}).get("Y25Q1-Q3")
         area_y25 = (area.get("periods") or {}).get("Y25Q1-Q3")
         if area_y25 is not None:
@@ -725,9 +1008,12 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
         technology_items = []
         for technology, value in technologies.items():
             periods = (value or {}).get("periods") or {}
-            current = periods.get("Y25Q1-Q3")
+            current = periods.get("Y25F") if full_year else periods.get("Y25Q1-Q3")
+            if current is None and full_year:
+                current = periods.get("Y25Q1-Q3")
             if current is not None:
-                technology_items.append((technology, current, ((value or {}).get("yoy_periods") or {}).get("Y25Q1-Q3")))
+                yoy = ((value or {}).get("yoy_periods") or {}).get("Y25F" if full_year else "Y25Q1-Q3")
+                technology_items.append((technology, current, yoy))
         technology_items.sort(
             key=lambda item: (float("-inf") if item[2] is None else item[2], item[1]),
             reverse=True,
@@ -740,68 +1026,162 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
             product.setdefault("insights", {}).setdefault("technology_history", []).append(text)
 
         clients = ((customer.get("top_clients") or {}).get("clients") or [])
-        clients = [item for item in clients if ((item.get("periods") or {}).get("Y25Q1-Q3")) is not None]
+        primary_period = "Y25F" if full_year else "Y25Q1-Q3"
+        clients = [
+            item for item in clients
+            if ((item.get("periods") or {}).get(primary_period)
+                if (item.get("periods") or {}).get(primary_period) is not None
+                else (item.get("periods") or {}).get("Y25Q1-Q3")) is not None
+        ]
         if clients:
-            top_client = max(clients, key=lambda item: (item.get("periods") or {}).get("Y25Q1-Q3"))
-            text = f"第一大客户{top_client.get('client')}出货{_format_number((top_client.get('periods') or {}).get('Y25Q1-Q3'))}K"
+            def _client_primary_qty(item):
+                periods = item.get("periods") or {}
+                if full_year and periods.get("Y25F") is not None:
+                    return periods.get("Y25F")
+                return periods.get("Y25Q1-Q3")
+
+            top_client = max(clients, key=_client_primary_qty)
+            text = (
+                f"第一大客户{top_client.get('client')}出货"
+                f"{_format_number(_client_primary_qty(top_client))}K"
+            )
             text = _with_metric(text, top_client)
             maker_result["customer_region"]["insights"].append(text)
             maker_result["drivers"]["customer"].append(text)
             customer.setdefault("insights", {}).setdefault("top_clients", []).append(text)
             contribution_clients = [
-                item for item in clients if item.get("growth_contribution_y25_q1_q3") is not None
+                item for item in clients
+                if (item.get("growth_contribution_primary")
+                    if item.get("growth_contribution_primary") is not None
+                    else item.get("growth_contribution_y25_q1_q3")) is not None
             ]
             if contribution_clients:
-                driver = max(contribution_clients, key=lambda item: item["growth_contribution_y25_q1_q3"])
+                driver = max(
+                    contribution_clients,
+                    key=lambda item: (
+                        item.get("growth_contribution_primary")
+                        if item.get("growth_contribution_primary") is not None
+                        else item.get("growth_contribution_y25_q1_q3")
+                    ),
+                )
+                share = (
+                    driver.get("share_primary")
+                    if driver.get("share_primary") is not None
+                    else driver.get("share_y25_q1_q3")
+                )
+                growth = (
+                    driver.get("growth_contribution_primary")
+                    if driver.get("growth_contribution_primary") is not None
+                    else driver.get("growth_contribution_y25_q1_q3")
+                )
+                period_label = "Y25全年" if full_year else "Y25前三季度"
                 driver_text = (
-                    f"{driver.get('client')}占Y25前三季度出货{_format_percent(driver.get('share_y25_q1_q3'))}，"
+                    f"{driver.get('client')}占{period_label}出货{_format_percent(share)}，"
                     f"份额变化{_format_points(driver.get('share_change_points'))}个百分点，"
-                    f"增长贡献{_format_percent(driver.get('growth_contribution_y25_q1_q3'))}"
+                    f"增长贡献{_format_percent(growth)}"
                 )
                 driver_text = _with_metric(driver_text, driver)
                 maker_result["customer_region"]["insights"].append(driver_text)
                 maker_result["drivers"]["customer"].append(driver_text)
                 customer.setdefault("insights", {}).setdefault("top_clients", []).append(driver_text)
         regions = ((customer.get("regions") or {}).get("rows") or [])
-        regions = [
-            item for item in regions
-            if item.get("region") != "其他" and ((item.get("q1_q3") or {}).get("Y25Q1-Q3")) is not None
-        ]
+        if full_year:
+            regions = [
+                item for item in regions
+                if item.get("region") != "其他"
+                and (((item.get("full_year") or {}).get("Y25")) is not None
+                     or ((item.get("q1_q3") or {}).get("Y25Q1-Q3")) is not None)
+            ]
+        else:
+            regions = [
+                item for item in regions
+                if item.get("region") != "其他" and ((item.get("q1_q3") or {}).get("Y25Q1-Q3")) is not None
+            ]
         if regions:
-            top_region = max(regions, key=lambda item: (item.get("q1_q3") or {}).get("Y25Q1-Q3"))
-            text = (
-                f"{top_region.get('region')}区域出货{_format_number((top_region.get('q1_q3') or {}).get('Y25Q1-Q3'))}K，"
-                f"同比{_format_percent((top_region.get('q1_q3') or {}).get('yoy_2025_vs_2024'))}"
-            )
+            def _region_primary_qty(item):
+                if full_year and ((item.get("full_year") or {}).get("Y25")) is not None:
+                    return (item.get("full_year") or {}).get("Y25")
+                return (item.get("q1_q3") or {}).get("Y25Q1-Q3")
+
+            top_region = max(regions, key=_region_primary_qty)
+            if full_year and (top_region.get("full_year") or {}).get("Y25") is not None:
+                fy = top_region.get("full_year") or {}
+                text = (
+                    f"{top_region.get('region')}区域全年出货{_format_number(fy.get('Y25'))}K，"
+                    f"同比{_format_percent(fy.get('yoy_2025_vs_2024'))}"
+                )
+            else:
+                text = (
+                    f"{top_region.get('region')}区域出货{_format_number((top_region.get('q1_q3') or {}).get('Y25Q1-Q3'))}K，"
+                    f"同比{_format_percent((top_region.get('q1_q3') or {}).get('yoy_2025_vs_2024'))}"
+                )
             text = _with_metric(text, top_region)
             maker_result["customer_region"]["insights"].append(text)
             maker_result["drivers"]["customer"].append(text)
             customer.setdefault("insights", {}).setdefault("regions", []).append(text)
 
         applications = ((application.get("application_history") or {}).get("series") or [])
-        applications = [item for item in applications if ((item.get("periods") or {}).get("Y25Q1-Q3")) is not None]
+        applications = [
+            item for item in applications
+            if ((item.get("periods") or {}).get(primary_period)
+                if (item.get("periods") or {}).get(primary_period) is not None
+                else (item.get("periods") or {}).get("Y25Q1-Q3")) is not None
+        ]
         if applications:
-            top_application = max(applications, key=lambda item: (item.get("periods") or {}).get("Y25Q1-Q3"))
+            def _app_primary_qty(item):
+                periods = item.get("periods") or {}
+                if full_year and periods.get("Y25F") is not None:
+                    return periods.get("Y25F")
+                return periods.get("Y25Q1-Q3")
+
+            top_application = max(applications, key=_app_primary_qty)
+            yoy_key = "Y25F" if full_year else "Y25Q1-Q3"
             text = (
-                f"{top_application.get('application')}出货{_format_number((top_application.get('periods') or {}).get('Y25Q1-Q3'))}K，"
-                f"同比{_format_percent((top_application.get('yoy_periods') or {}).get('Y25Q1-Q3'))}"
+                f"{top_application.get('application')}出货{_format_number(_app_primary_qty(top_application))}K，"
+                f"同比{_format_percent((top_application.get('yoy_periods') or {}).get(yoy_key))}"
             )
             text = _with_metric(text, top_application)
             maker_result["application"]["insights"].append(text)
             maker_result["drivers"]["application"].append(text)
             application.setdefault("insights", {}).setdefault("application_history", []).append(text)
             contribution_apps = [
-                item for item in applications if item.get("growth_contribution_y25_q1_q3") is not None
+                item for item in applications
+                if (item.get("growth_contribution_primary")
+                    if item.get("growth_contribution_primary") is not None
+                    else item.get("growth_contribution_y25_q1_q3")) is not None
             ]
             if contribution_apps:
-                driver = max(contribution_apps, key=lambda item: item["growth_contribution_y25_q1_q3"])
-                area = driver.get("display_area") or {}
-                driver_text = (
-                    f"{driver.get('application')}占Y25前三季度出货{_format_percent(driver.get('share_y25_q1_q3'))}，"
-                    f"增长贡献{_format_percent(driver.get('growth_contribution_y25_q1_q3'))}"
+                driver = max(
+                    contribution_apps,
+                    key=lambda item: (
+                        item.get("growth_contribution_primary")
+                        if item.get("growth_contribution_primary") is not None
+                        else item.get("growth_contribution_y25_q1_q3")
+                    ),
                 )
-                if area.get("share_y25_q1_q3") is not None:
-                    driver_text += f"，面积占比{_format_percent(area.get('share_y25_q1_q3'))}"
+                area = driver.get("display_area") or {}
+                share = (
+                    driver.get("share_primary")
+                    if driver.get("share_primary") is not None
+                    else driver.get("share_y25_q1_q3")
+                )
+                growth = (
+                    driver.get("growth_contribution_primary")
+                    if driver.get("growth_contribution_primary") is not None
+                    else driver.get("growth_contribution_y25_q1_q3")
+                )
+                period_label = "Y25全年" if full_year else "Y25前三季度"
+                driver_text = (
+                    f"{driver.get('application')}占{period_label}出货{_format_percent(share)}，"
+                    f"增长贡献{_format_percent(growth)}"
+                )
+                area_share = (
+                    area.get("share_primary")
+                    if area.get("share_primary") is not None
+                    else area.get("share_y25_q1_q3")
+                )
+                if area_share is not None:
+                    driver_text += f"，面积占比{_format_percent(area_share)}"
                 driver_text = _with_metric(driver_text, driver)
                 maker_result["application"]["insights"].append(driver_text)
                 maker_result["drivers"]["application"].append(driver_text)

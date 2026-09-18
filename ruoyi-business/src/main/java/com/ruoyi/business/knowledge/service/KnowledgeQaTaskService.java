@@ -47,6 +47,12 @@ public class KnowledgeQaTaskService
     public Map<String, Object> submit(String question, String sourceType, boolean includeNews,
         List<Long> roleIds, boolean admin, String owner)
     {
+        return submit(question, sourceType, includeNews, false, roleIds, admin, owner);
+    }
+
+    public Map<String, Object> submit(String question, String sourceType, boolean includeNews, boolean webLlm,
+        List<Long> roleIds, boolean admin, String owner)
+    {
         if (question == null || question.trim().length() < 2) throw new IllegalArgumentException("问题至少2个字符");
         cleanup();
         String taskId = UUID.randomUUID().toString().replace("-", "");
@@ -60,7 +66,7 @@ public class KnowledgeQaTaskService
         }
         try
         {
-            executor.execute(() -> run(task, question.trim(), sourceType, includeNews,
+            executor.execute(() -> run(task, question.trim(), sourceType, includeNews, webLlm,
                 roleIds == null ? List.of() : List.copyOf(roleIds), admin));
         }
         catch (RuntimeException e)
@@ -86,14 +92,14 @@ public class KnowledgeQaTaskService
         return mapper.selectQaSessions(owner == null ? "" : owner, admin, Math.max(1, Math.min(limit, 100)));
     }
 
-    private void run(QaTask task, String question, String sourceType, boolean includeNews,
+    private void run(QaTask task, String question, String sourceType, boolean includeNews, boolean webLlm,
         List<Long> roleIds, boolean admin)
     {
         task.start();
         persist(task);
         try
         {
-            Map<String, Object> result = qaService.ask(question, sourceType, roleIds, admin, includeNews,
+            Map<String, Object> result = qaService.ask(question, sourceType, roleIds, admin, includeNews, webLlm,
                 (value, stage, logs) -> { task.progress(value, stage, logs); persist(task); });
             task.complete(result);
             if (auditService != null)

@@ -130,11 +130,11 @@
         </el-collapse>
         <h3>管理层摘要</h3>
         <ul><li v-for="(item, index) in reportData.executive_summary || []" :key="`summary-${index}`">{{ cleanNarrative(item) }}</li></ul>
-        <h3>Y25前三季度总览</h3>
+        <h3>{{ marketSummaryTitle }}</h3>
         <el-table v-if="marketMetricRows.length" :data="marketMetricRows" size="mini" border class="metric-table">
           <el-table-column label="范围" min-width="120"><template>市场合计</template></el-table-column>
-          <el-table-column label="Y24 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2024') }}</template></el-table-column>
-          <el-table-column label="Y25 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2025') }}</template></el-table-column>
+          <el-table-column :label="marketPriorColumnLabel" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2024') }}</template></el-table-column>
+          <el-table-column :label="marketCurrentColumnLabel" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2025') }}</template></el-table-column>
           <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_vs_2024) }}</template></el-table-column>
         </el-table>
         <el-table v-if="summaryMatrixDisplayRows.length" :data="summaryMatrixDisplayRows" size="mini" border class="summary-matrix" :span-method="summarySpanMethod" :row-class-name="summaryRowClassName">
@@ -157,13 +157,13 @@
           <h3>{{ activeMaker }}前装出货、面积及市占率</h3>
           <el-table :data="tianmaHistoryRows" size="mini" border class="metric-table">
             <el-table-column label="指标" prop="label" min-width="160" fixed />
-            <el-table-column v-for="period in historyPeriods" :key="period" :label="period" min-width="105" align="right">
+            <el-table-column v-for="period in historyPeriods" :key="period" :label="periodDisplayLabel(period)" min-width="105" align="right">
               <template slot-scope="scope">{{ historyValue(scope.row, period) }}</template>
             </el-table-column>
-            <el-table-column label="Y25F YoY" min-width="130" align="right">
+            <el-table-column label="Y25F YoY（全年）" min-width="130" align="right">
               <template slot-scope="scope">{{ formatPercent(scope.row.metric.standard_y25f_yoy, 1) }}</template>
             </el-table-column>
-            <el-table-column label="前三季度/全年预测" min-width="145" align="right">
+            <el-table-column :label="isFullYearReport ? '前三季度完成率' : '前三季度/全年预测'" min-width="145" align="right">
               <template slot-scope="scope">{{ formatPercent(scope.row.metric.forecast_completion_y25_q1_q3, 1) }}</template>
             </el-table-column>
           </el-table>
@@ -199,11 +199,11 @@
               <div ref="customerChart" class="growth-chart" />
               <el-table :data="customerClientRows" size="mini" border class="metric-table compact-table">
                 <el-table-column label="客户" prop="client" min-width="105" />
-                <el-table-column label="Y25 Q1-Q3" align="right"><template slot-scope="scope">{{ formatQty((scope.row.periods || {})['Y25Q1-Q3']) }}</template></el-table-column>
-                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_q1_q3_vs_2024_q1_q3, 0) }}</template></el-table-column>
-                <el-table-column label="内部占比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.share_y25_q1_q3, 0) }}</template></el-table-column>
+                <el-table-column :label="summaryPeriodLabel" align="right"><template slot-scope="scope">{{ formatQty(clientPrimaryQty(scope.row)) }}</template></el-table-column>
+                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(clientPrimaryYoy(scope.row), 0) }}</template></el-table-column>
+                <el-table-column label="内部占比" align="right"><template slot-scope="scope">{{ formatPercent(clientPrimaryShare(scope.row), 0) }}</template></el-table-column>
                 <el-table-column label="份额变化" align="right"><template slot-scope="scope">{{ formatPoints(scope.row.share_change_points) }}</template></el-table-column>
-                <el-table-column label="增长贡献" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.growth_contribution_y25_q1_q3, 0) }}</template></el-table-column>
+                <el-table-column label="增长贡献" align="right"><template slot-scope="scope">{{ formatPercent(clientPrimaryGrowth(scope.row), 0) }}</template></el-table-column>
               </el-table>
             </el-col>
             <el-col :span="12">
@@ -212,15 +212,15 @@
                 <el-table-column label="区域" prop="region" width="72" />
                 <el-table-column label="Y24出货量" align="right"><template slot-scope="scope">{{ formatQty((scope.row.annual || {}).Y24) }}</template></el-table-column>
                 <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.annual || {}).yoy_2024_vs_2023, 0) }}</template></el-table-column>
-                <el-table-column label="Y25 Q1-Q3" align="right"><template slot-scope="scope">{{ formatQty((scope.row.q1_q3 || {})['Y25Q1-Q3']) }}</template></el-table-column>
-                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.q1_q3 || {}).yoy_2025_vs_2024, 0) }}</template></el-table-column>
+                <el-table-column :label="summaryPeriodLabel" align="right"><template slot-scope="scope">{{ formatQty(regionPrimaryQty(scope.row)) }}</template></el-table-column>
+                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(regionPrimaryYoy(scope.row), 0) }}</template></el-table-column>
               </el-table>
               <el-table :data="customerRegionRows" size="mini" border class="metric-table compact-table">
                 <el-table-column label="区域" prop="region" width="72" />
                 <el-table-column label="Y24 LTPS" align="right"><template slot-scope="scope">{{ directionValue(scope.row, 'Y24', 'LTPS') }}</template></el-table-column>
                 <el-table-column label="Y24 a-Si" align="right"><template slot-scope="scope">{{ directionValue(scope.row, 'Y24', 'a-Si') }}</template></el-table-column>
-                <el-table-column label="Y25 Q1-Q3 LTPS" align="right"><template slot-scope="scope">{{ directionValue(scope.row, 'Y25Q1-Q3', 'LTPS') }}</template></el-table-column>
-                <el-table-column label="Y25 Q1-Q3 a-Si" align="right"><template slot-scope="scope">{{ directionValue(scope.row, 'Y25Q1-Q3', 'a-Si') }}</template></el-table-column>
+                <el-table-column :label="`${summaryPeriodLabel} LTPS`" align="right"><template slot-scope="scope">{{ directionValue(scope.row, regionTechPeriodKey, 'LTPS') }}</template></el-table-column>
+                <el-table-column :label="`${summaryPeriodLabel} a-Si`" align="right"><template slot-scope="scope">{{ directionValue(scope.row, regionTechPeriodKey, 'a-Si') }}</template></el-table-column>
               </el-table>
             </el-col>
           </el-row>
@@ -235,23 +235,23 @@
               <div ref="applicationChart" class="growth-chart" />
               <el-table :data="applicationSeries" size="mini" border class="metric-table compact-table">
                 <el-table-column label="YoY" prop="application" width="82" />
-                <el-table-column v-for="period in historyPeriods" :key="`app-yoy-${period}`" :label="period" align="right">
+                <el-table-column v-for="period in historyPeriods" :key="`app-yoy-${period}`" :label="periodDisplayLabel(period)" align="right">
                   <template slot-scope="scope">{{ formatPercent((scope.row.yoy_periods || {})[period], 0) }}</template>
                 </el-table-column>
-                <el-table-column label="Y25占比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.share_y25_q1_q3, 0) }}</template></el-table-column>
-                <el-table-column label="增长贡献" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.growth_contribution_y25_q1_q3, 0) }}</template></el-table-column>
-                <el-table-column label="面积占比" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.display_area || {}).share_y25_q1_q3, 0) }}</template></el-table-column>
+                <el-table-column :label="isFullYearReport ? 'Y25全年占比' : 'Y25占比'" align="right"><template slot-scope="scope">{{ formatPercent(appPrimaryShare(scope.row), 0) }}</template></el-table-column>
+                <el-table-column label="增长贡献" align="right"><template slot-scope="scope">{{ formatPercent(appPrimaryGrowth(scope.row), 0) }}</template></el-table-column>
+                <el-table-column label="面积占比" align="right"><template slot-scope="scope">{{ formatPercent(appAreaPrimaryShare(scope.row), 0) }}</template></el-table-column>
               </el-table>
             </el-col>
             <el-col :span="12">
-              <h4>{{ activeMaker }} 应用别重点尺寸 Y25 Q1-Q3出货占比情况</h4>
+              <h4>{{ activeMaker }} 应用别重点尺寸 {{ summaryPeriodLabel }}出货占比情况</h4>
               <el-table :data="applicationKeySizeRows" size="mini" border class="metric-table compact-table">
                 <el-table-column label="应用" prop="application" width="72" />
                 <el-table-column label="尺寸" prop="size" width="68" align="right" />
                 <el-table-column label="技术" prop="technology" width="92" />
                 <el-table-column label="出货量" align="right"><template slot-scope="scope">{{ formatQty(scope.row.shipment) }}</template></el-table-column>
                 <el-table-column label="占比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.share, 0) }}</template></el-table-column>
-                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_q1_q3_vs_2024_q1_q3, 0) }}</template></el-table-column>
+                <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_primary != null ? scope.row.yoy_primary : scope.row.yoy_2025_q1_q3_vs_2024_q1_q3, 0) }}</template></el-table-column>
               </el-table>
               <div class="table-note">*展示口径：按终稿约定的应用、尺寸及Technology组合，从字段匹配记录汇总；不依赖工作表单元格位置。</div>
             </el-col>
@@ -261,10 +261,10 @@
           <div slot="header"><strong>{{ maker.maker }} 洞察</strong></div>
           <p v-for="(item, index) in maker.overview || []" :key="`overview-${index}`">{{ cleanNarrative(item) }}</p>
           <el-table v-if="makerShipmentRows(maker).length" :data="makerShipmentRows(maker)" size="mini" border class="metric-table">
-            <el-table-column label="Y24 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2024') }}</template></el-table-column>
-            <el-table-column label="Y25 Q1-Q3（千片）" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2025') }}</template></el-table-column>
+            <el-table-column :label="isFullYearReport ? 'Y24全年（千片）' : 'Y24 Q1-Q3（千片）'" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2024') }}</template></el-table-column>
+            <el-table-column :label="marketCurrentColumnLabel" align="right"><template slot-scope="scope">{{ metricValue(scope.row, '2025') }}</template></el-table-column>
             <el-table-column label="同比" align="right"><template slot-scope="scope">{{ formatPercent(scope.row.yoy_2025_vs_2024) }}</template></el-table-column>
-            <el-table-column label="Y25市场份额" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.market_share || {})['2025']) }}</template></el-table-column>
+            <el-table-column :label="isFullYearReport ? 'Y25全年市场份额' : 'Y25市场份额'" align="right"><template slot-scope="scope">{{ formatPercent((scope.row.market_share || {})['2025']) }}</template></el-table-column>
           </el-table>
           <el-row :gutter="16" class="insight-row">
             <el-col :span="6"><h4>全局态势</h4><ul><li v-for="(item, index) in (maker.global_trend || {}).insights || []" :key="`g-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
@@ -370,6 +370,83 @@ export default {
     methodologyLimitations() {
       return (((this.reportData || {}).methodology || {}).limitations || []);
     },
+    reportScope() {
+      return (((this.reportData || {}).methodology || {}).scope || {});
+    },
+    isFullYearReport() {
+      const scope = this.reportScope;
+      const makerScopes = [
+        ((this.activeMakerDetail || {}).history || {}).scope,
+        ((this.activeMakerDetail || {}).product || {}).scope,
+        ((this.activeMakerDetail || {}).customer || {}).scope,
+        ((this.activeMakerDetail || {}).application || {}).scope
+      ].filter(Boolean);
+      const makerFullYear = makerScopes.some(item => item.full_year || String(item.primary_period || '') === 'Y25F');
+      const quarters = scope.summary_quarters || [];
+      return Boolean(
+        scope.full_year
+        || scope.full_year_2025
+        || makerFullYear
+        || String(scope.report_horizon || '').endsWith('_full_year')
+        || String(scope.summary_mode || '').endsWith('full_year')
+        || quarters.includes('Q4')
+        || String((this.reportData || {}).title || '').includes('全年')
+      );
+    },
+    summaryPeriodLabel() {
+      return this.isFullYearReport ? 'Y25全年' : 'Y25 Q1-Q3';
+    },
+    summaryPeriodKey() {
+      return this.isFullYearReport ? 'Y25F' : 'Y25Q1-Q3';
+    },
+    regionTechPeriodKey() {
+      return this.isFullYearReport ? 'Y25F' : 'Y25Q1-Q3';
+    },
+    makerChartPeriods() {
+      const candidates = [
+        (((this.tianmaHistory || {}).scope || {}).period_order) || [],
+        (((this.tianmaProduct || {}).scope || {}).period_order) || [],
+        (((this.tianmaCustomer.top_clients || {}).period_order) || []),
+        (((this.tianmaApplication.application_history || {}).period_order) || []),
+        this.reportScope.focus_periods || []
+      ];
+      let periods = [];
+      candidates.forEach(list => {
+        (list || []).forEach(period => {
+          if (period && !periods.includes(period)) periods.push(period);
+        });
+      });
+      if (!periods.length) {
+        periods = ['Y22', 'Y23', 'Y24', 'Y25F', 'Y25Q1-Q3'];
+      }
+      if (this.isFullYearReport) {
+        periods = periods.filter(period => period !== 'Y25F');
+        const q1q3Index = periods.findIndex(period => period === 'Y25Q1-Q3');
+        if (q1q3Index >= 0) periods.splice(q1q3Index, 0, 'Y25F');
+        else {
+          const y24Index = periods.findIndex(period => period === 'Y24');
+          if (y24Index >= 0) periods.splice(y24Index + 1, 0, 'Y25F');
+          else periods.push('Y25F');
+        }
+      }
+      return periods;
+    },
+    historyPeriods() {
+      return this.makerChartPeriods;
+    },
+    marketSummaryTitle() {
+      if (this.reportScope.omdia_data_through_label && this.isFullYearReport) {
+        return `Y25全年总览（数据截止 ${this.reportScope.omdia_data_through_label}）`;
+      }
+      if (this.isFullYearReport) return 'Y25全年总览';
+      return 'Y25前三季度总览';
+    },
+    marketPriorColumnLabel() {
+      return this.isFullYearReport ? 'Y24全年（千片）' : 'Y24 Q1-Q3（千片）';
+    },
+    marketCurrentColumnLabel() {
+      return this.isFullYearReport ? 'Y25全年（千片）' : 'Y25 Q1-Q3（千片）';
+    },
     marketMetricRows() {
       const rows = ((this.reportData || {}).market_summary || {}).rows || [];
       return rows.filter(Boolean);
@@ -424,7 +501,11 @@ export default {
       return this.activeMakerDetail.product || {};
     },
     tianmaProductAvailable() {
-      return Boolean(this.tianmaProduct.technology_history || this.tianmaProduct.y25q1_q3_size_distribution);
+      return Boolean(
+        this.tianmaProduct.technology_history
+        || this.tianmaProduct.size_distribution
+        || this.tianmaProduct.y25q1_q3_size_distribution
+      );
     },
     tianmaCustomer() {
       return this.activeMakerDetail.customer || {};
@@ -450,9 +531,6 @@ export default {
     applicationKeySizeRows() {
       return ((this.tianmaApplication.key_sizes || {}).rows || []);
     },
-    historyPeriods() {
-      return ['Y22', 'Y23', 'Y24', 'Y25F', 'Y25Q1-Q3'];
-    },
     tianmaHistoryRows() {
       const history = this.tianmaHistory;
       return [
@@ -462,6 +540,11 @@ export default {
     }
   },
   methods: {
+    periodDisplayLabel(period) {
+      if (period === 'Y25F') return this.isFullYearReport ? 'Y25全年' : 'Y25F';
+      if (period === 'Y25Q1-Q3') return this.isFullYearReport ? 'Y25 Q1-Q3（过程）' : 'Y25 Q1-Q3';
+      return period;
+    },
     cleanNarrative(value) {
       if (typeof value !== 'string') return value;
       const text = value.replace(/\s*\[.*\]\s*$/, '').trim();
@@ -526,7 +609,22 @@ export default {
       if (!rows.length || !rows[0]) return [];
       const shipment = rows[0];
       const comparison = shipment.comparison_periods || {};
+      const periods = (shipment.periods || {});
       const share = (((maker || {}).global_trend || {}).shipment_share || {}).periods || {};
+      if (this.isFullYearReport) {
+        return [{
+          values: {
+            '2024': comparison.Y24 || periods.Y24 || comparison['Y24Q1-Q3'],
+            '2025': comparison.Y25F || periods.Y25F || comparison['Y25Q1-Q3']
+          },
+          yoy_2025_vs_2024: shipment.standard_y25f_yoy != null
+            ? shipment.standard_y25f_yoy
+            : ((shipment.yoy_periods || {}).Y25F != null
+              ? (shipment.yoy_periods || {}).Y25F
+              : shipment.yoy_2025_q1_q3_vs_2024_q1_q3),
+          market_share: { '2025': share.Y25F != null ? share.Y25F : share['Y25Q1-Q3'] }
+        }];
+      }
       return [{
         values: {
           '2024': comparison['Y24Q1-Q3'],
@@ -535,6 +633,63 @@ export default {
         yoy_2025_vs_2024: shipment.yoy_2025_q1_q3_vs_2024_q1_q3,
         market_share: { '2025': share['Y25Q1-Q3'] }
       }];
+    },
+    clientPrimaryQty(row) {
+      const periods = (row || {}).periods || {};
+      if (this.isFullYearReport && periods.Y25F != null) return periods.Y25F;
+      return periods['Y25Q1-Q3'];
+    },
+    clientPrimaryYoy(row) {
+      if (this.isFullYearReport) {
+        return row.yoy_primary != null ? row.yoy_primary
+          : (row.yoy_2025_full_vs_2024_full != null ? row.yoy_2025_full_vs_2024_full : row.yoy_2025_q1_q3_vs_2024_q1_q3);
+      }
+      return row.yoy_2025_q1_q3_vs_2024_q1_q3;
+    },
+    clientPrimaryShare(row) {
+      if (this.isFullYearReport) {
+        return row.share_primary != null ? row.share_primary
+          : (row.share_y25_full != null ? row.share_y25_full : row.share_y25_q1_q3);
+      }
+      return row.share_y25_q1_q3;
+    },
+    clientPrimaryGrowth(row) {
+      if (this.isFullYearReport) {
+        return row.growth_contribution_primary != null ? row.growth_contribution_primary
+          : (row.growth_contribution_y25_full != null ? row.growth_contribution_y25_full : row.growth_contribution_y25_q1_q3);
+      }
+      return row.growth_contribution_y25_q1_q3;
+    },
+    regionPrimaryQty(row) {
+      if (this.isFullYearReport && ((row.full_year || {}).Y25 != null)) return (row.full_year || {}).Y25;
+      return ((row.q1_q3 || {})['Y25Q1-Q3']);
+    },
+    regionPrimaryYoy(row) {
+      if (this.isFullYearReport && ((row.full_year || {}).yoy_2025_vs_2024 != null)) {
+        return (row.full_year || {}).yoy_2025_vs_2024;
+      }
+      return ((row.q1_q3 || {}).yoy_2025_vs_2024);
+    },
+    appPrimaryShare(row) {
+      if (this.isFullYearReport) {
+        return row.share_primary != null ? row.share_primary
+          : (row.share_y25_full != null ? row.share_y25_full : row.share_y25_q1_q3);
+      }
+      return row.share_y25_q1_q3;
+    },
+    appPrimaryGrowth(row) {
+      if (this.isFullYearReport) {
+        return row.growth_contribution_primary != null ? row.growth_contribution_primary
+          : (row.growth_contribution_y25_full != null ? row.growth_contribution_y25_full : row.growth_contribution_y25_q1_q3);
+      }
+      return row.growth_contribution_y25_q1_q3;
+    },
+    appAreaPrimaryShare(row) {
+      const area = (row || {}).display_area || {};
+      if (this.isFullYearReport) {
+        return area.share_primary != null ? area.share_primary : area.share_y25_q1_q3;
+      }
+      return area.share_y25_q1_q3;
     },
     summaryMakerMetric(row, makerName) {
       return (((row || {}).makers || {})[makerName]) || {};
@@ -644,7 +799,7 @@ export default {
         title: { text: title, left: 'center', textStyle: { fontSize: 15 } },
         tooltip: { trigger: 'axis', valueFormatter: value => value === null ? '--' : `${Number(value).toFixed(2)}%` },
         grid: { left: 55, right: 24, top: 55, bottom: 40 },
-        xAxis: { type: 'category', data: this.historyPeriods },
+        xAxis: { type: 'category', data: this.historyPeriods.map(period => this.periodDisplayLabel(period)) },
         yAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
         series: [{
           name: this.activeMaker,
@@ -677,7 +832,7 @@ export default {
         tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
         legend: { bottom: 0, itemWidth: 12, textStyle: { fontSize: 10 } },
         grid: { left: 52, right: 48, top: 48, bottom: 54 },
-        xAxis: { type: 'category', data: this.historyPeriods, axisLabel: { interval: 0, fontSize: 10 } },
+        xAxis: { type: 'category', data: this.historyPeriods.map(period => this.periodDisplayLabel(period)), axisLabel: { interval: 0, fontSize: 10 } },
         yAxis: [
           { type: 'value', name: 'Kpcs', axisLabel: { fontSize: 9 } },
           { type: 'value', name: 'YoY', axisLabel: { formatter: '{value}%', fontSize: 9 }, splitLine: { show: false } }
@@ -715,13 +870,14 @@ export default {
     },
     renderSizeDistributionChart() {
       const element = this.$refs.sizeDistributionChart;
-      const metric = this.tianmaProduct.y25q1_q3_size_distribution || {};
+      const metric = this.tianmaProduct.size_distribution || this.tianmaProduct.y25q1_q3_size_distribution || {};
       const points = metric.points || [];
       if (!element || !points.length) return null;
       const maxShipment = Math.max(...points.map(point => Number(point.shipment || 0)), 1);
       const chart = echarts.init(element, 'macarons');
+      const title = metric.label || `${this.activeMaker} ${this.summaryPeriodLabel}尺寸别分布情况`;
       chart.setOption({
-        title: { text: `${this.activeMaker} Y25 Q1-Q3尺寸别分布情况`, left: 'center', textStyle: { fontSize: 14 } },
+        title: { text: title.startsWith(this.activeMaker) ? title : `${this.activeMaker} ${title}`, left: 'center', textStyle: { fontSize: 14 } },
         tooltip: {
           formatter: params => `${params.data[0]}英寸<br/>Shipment：${Number(params.data[1]).toLocaleString('zh-CN')} 千片`
         },
@@ -750,7 +906,7 @@ export default {
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
         legend: { bottom: 0, itemWidth: 10, textStyle: { fontSize: 9 } },
         grid: { left: 52, right: 18, top: 48, bottom: 48 },
-        xAxis: { type: 'category', data: this.historyPeriods, axisLabel: { interval: 0, fontSize: 9 } },
+        xAxis: { type: 'category', data: this.historyPeriods.map(period => this.periodDisplayLabel(period)), axisLabel: { interval: 0, fontSize: 9 } },
         yAxis: { type: 'value', name: 'Kpcs', axisLabel: { fontSize: 9 } },
         series: series.map(item => ({
           name: item.label,
@@ -770,15 +926,24 @@ export default {
       const element = this.$refs.customerChart;
       const metric = this.tianmaCustomer.top_clients || {};
       const clients = metric.clients || [];
-      const periods = metric.period_order || ['Y22', 'Y23', 'Y24', 'Y25Q1-Q3'];
+      let periods = (this.makerChartPeriods || []).slice();
+      (metric.period_order || []).forEach(period => {
+        if (period && !periods.includes(period)) periods.push(period);
+      });
+      if (!periods.length) periods = ['Y22', 'Y23', 'Y24', 'Y25F', 'Y25Q1-Q3'];
+      if (this.isFullYearReport && !periods.includes('Y25F')) {
+        const idx = periods.findIndex(period => period === 'Y25Q1-Q3');
+        if (idx >= 0) periods.splice(idx, 0, 'Y25F');
+        else periods.push('Y25F');
+      }
       if (!element || !clients.length) return null;
       const chart = echarts.init(element, 'macarons');
       chart.setOption({
-        title: { text: `${this.activeMaker} 前三季度出货前六大客户年度别出货情况（Kpcs）`, left: 'center', textStyle: { fontSize: 14 } },
+        title: { text: `${this.activeMaker} ${this.isFullYearReport ? '客户年度别出货（Y25全年）' : '前三季度出货前六大客户年度别出货情况'}（Kpcs）`, left: 'center', textStyle: { fontSize: 14 } },
         tooltip: { trigger: 'axis' },
         legend: { top: 30, type: 'scroll', textStyle: { fontSize: 10 } },
         grid: { left: 58, right: 24, top: 76, bottom: 42 },
-        xAxis: { type: 'category', data: periods },
+        xAxis: { type: 'category', data: periods.map(period => this.periodDisplayLabel(period)) },
         yAxis: { type: 'value', name: 'Kpcs' },
         series: clients.map(client => ({
           name: client.client,
@@ -797,15 +962,15 @@ export default {
       const element = this.$refs.applicationChart;
       const metric = this.tianmaApplication.application_history || {};
       const series = metric.series || [];
-      const periods = metric.period_order || this.historyPeriods;
+      const periods = this.makerChartPeriods;
       if (!element || !series.length) return null;
       const chart = echarts.init(element, 'macarons');
       chart.setOption({
-        title: { text: `${this.activeMaker} 应用别出货情况（Kpcs）`, left: 'center', textStyle: { fontSize: 14 } },
+        title: { text: `${this.activeMaker} ${this.isFullYearReport ? '应用别出货（含Y25全年）' : '应用别出货情况'}（Kpcs）`, left: 'center', textStyle: { fontSize: 14 } },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
         legend: { bottom: 0, itemWidth: 12, textStyle: { fontSize: 10 } },
         grid: { left: 58, right: 22, top: 52, bottom: 54 },
-        xAxis: { type: 'category', data: periods, axisLabel: { interval: 0 } },
+        xAxis: { type: 'category', data: periods.map(period => this.periodDisplayLabel(period)), axisLabel: { interval: 0 } },
         yAxis: { type: 'value', name: 'Kpcs' },
         series: series.map(item => ({
           name: item.application,

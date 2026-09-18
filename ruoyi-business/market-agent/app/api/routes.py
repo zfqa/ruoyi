@@ -4,12 +4,14 @@ import uuid
 import hashlib
 import asyncio
 import json
+import math
+import numbers
 import threading
 from datetime import datetime, timezone
-import pandas as pd
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
+import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -71,6 +73,29 @@ _job_lock = threading.Lock()
 def _json_preview(df: pd.DataFrame, limit: int = 40) -> list[dict]:
     """Return strict-JSON records (NaN/NaT become null)."""
     return json.loads(df.head(limit).to_json(orient="records", force_ascii=False, date_format="iso"))
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert NaN/Inf and pandas NA into JSON-safe nulls before FastAPI serialization."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, numbers.Integral) and not isinstance(value, bool):
+        return int(value)
+    if isinstance(value, numbers.Real):
+        number = float(value)
+        return None if not math.isfinite(number) else number
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, pd.Timestamp):
+        return None if pd.isna(value) else value.isoformat()
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
 
 
 def _job_file(job_id: str) -> Path:
@@ -434,7 +459,7 @@ def _run_analysis(
             "sheet_name": sheet_name or "全部工作表（综合分析）",
             "strict_sheet": bool(sheet_name),
         }
-        return result
+        return _json_safe(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -489,14 +514,14 @@ def dashboard_components(
     try:
         df = load_sheet_dataset(dataset_id, sheet_name) if sheet_name else load_dataset(dataset_id)
         capabilities = MarketComponentEngine(df, _period_kwargs(period_mode, start_period, end_period, year)).capabilities()
-        return {
+        return _json_safe({
             "dataset_id": dataset_id,
             "period": capabilities.get("period"),
             "components": capabilities.get("dashboard_components", []),
             "dimensions": capabilities.get("dimensions", {}),
             "indicator_capabilities": capabilities.get("indicator_capabilities", {}),
             "power_group_capabilities": capabilities.get("power_group_capabilities", {}),
-        }
+        })
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:

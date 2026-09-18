@@ -265,15 +265,27 @@ export default {
         const item = this.selectedFiles.find(file => file.role === role && file.storedName)
         return item ? item.storedName : ""
       }
+      const byRoleOriginal = role => {
+        const item = this.selectedFiles.find(file => file.role === role && file.storedName)
+        return item ? (item.originalName || item.name || "") : ""
+      }
       const many = role => this.selectedFiles
         .filter(file => file.role === role && file.storedName)
         .map(file => file.storedName)
+      const manyOriginal = role => this.selectedFiles
+        .filter(file => file.role === role && file.storedName)
+        .map(file => file.originalName || file.name || "")
       return {
         fileName: byRole('current'),
         baselineFileName: byRole('baseline'),
         supplyChainFileName: byRole('supply'),
         extraHistoryFileNames: many('extra_history'),
-        extraSupplyChainFileNames: many('extra_supply')
+        extraSupplyChainFileNames: many('extra_supply'),
+        fileOriginalName: byRoleOriginal('current'),
+        baselineOriginalName: byRoleOriginal('baseline'),
+        supplyChainOriginalName: byRoleOriginal('supply'),
+        extraHistoryOriginalNames: manyOriginal('extra_history'),
+        extraSupplyChainOriginalNames: manyOriginal('extra_supply')
       }
     },
     canParseUploaded() {
@@ -281,7 +293,7 @@ export default {
     },
     roleHint() {
       if (!this.selectedFiles.length) {
-        return "三文件对标终稿；五文件=三文件+1Q26 History/Supply，对标 1Q26 Analysis。"
+        return "三文件=发布季数据截止前一季（如4Q25→3Q25/前三季度）；五文件并入1Q26发布包后截止4Q25（Y25全年）。Omdia发布季与数据截止始终差一个季度。"
       }
       const labels = this.selectedFiles.map(file => {
         const role = ROLE_OPTIONS.find(item => item.value === file.role)
@@ -508,13 +520,18 @@ export default {
       const payload = {
         ...DEFAULT_PARSE_OPTIONS,
         baselineFileName: this.uploadForm.baselineFileName || undefined,
-        supplyChainFileName: this.uploadForm.supplyChainFileName || undefined
+        supplyChainFileName: this.uploadForm.supplyChainFileName || undefined,
+        fileOriginalName: this.uploadForm.fileOriginalName || undefined,
+        baselineOriginalName: this.uploadForm.baselineOriginalName || undefined,
+        supplyChainOriginalName: this.uploadForm.supplyChainOriginalName || undefined
       }
       if (this.uploadForm.extraHistoryFileNames && this.uploadForm.extraHistoryFileNames.length) {
         payload.extraHistoryFileNames = this.uploadForm.extraHistoryFileNames
+        payload.extraHistoryOriginalNames = this.uploadForm.extraHistoryOriginalNames
       }
       if (this.uploadForm.extraSupplyChainFileNames && this.uploadForm.extraSupplyChainFileNames.length) {
         payload.extraSupplyChainFileNames = this.uploadForm.extraSupplyChainFileNames
+        payload.extraSupplyChainOriginalNames = this.uploadForm.extraSupplyChainOriginalNames
       }
       parseUploadExcel(this.uploadForm.fileName, payload).then(response => {
         this.$modal.msgSuccess("解析任务已提交");

@@ -43,7 +43,22 @@ public final class KnowledgeMetricQueryRouter
         group(3, new String[] {"y25", "2025"}, "y25", "2025"),
         group(3, new String[] {"y24", "2024"}, "y24", "2024"),
         group(3, new String[] {"y23", "2023"}, "y23", "2023"),
-        group(3, new String[] {"y22", "2022"}, "y22", "2022")
+        group(3, new String[] {"y22", "2022"}, "y22", "2022"),
+        group(3, new String[] {"y26", "2026"}, "y26", "2026")
+    );
+
+    /** 整车品牌不在车载面板指标库里。问到这些主体时，指标正文必须出现该品牌。 */
+    private static final List<TermGroup> VEHICLE_BRANDS = List.of(
+        group(8, new String[] {"byd", "比亚迪"}, "byd", "比亚迪"),
+        group(8, new String[] {"xpeng", "小鹏"}, "xpeng", "小鹏"),
+        group(8, new String[] {"nio", "蔚来"}, "nio", "蔚来"),
+        group(8, new String[] {"li auto", "理想汽车", "理想"}, "li auto", "理想"),
+        group(8, new String[] {"tesla", "特斯拉"}, "tesla", "特斯拉"),
+        group(8, new String[] {"geely", "吉利"}, "geely", "吉利"),
+        group(8, new String[] {"saic", "上汽"}, "saic", "上汽"),
+        group(8, new String[] {"gac", "广汽"}, "gac", "广汽"),
+        group(8, new String[] {"changan", "长安汽车", "长安"}, "changan", "长安"),
+        group(8, new String[] {"great wall", "长城汽车", "长城"}, "great wall", "长城")
     );
 
     public boolean isMetricQuestion(String question)
@@ -65,6 +80,10 @@ public final class KnowledgeMetricQueryRouter
         addCandidate(query, terms, List.of("面积", "area"), "area");
         addCandidate(query, terms, List.of("出货", "shipment", "销量"), "shipment");
         addCandidate(query, terms, List.of("市占", "市场份额"), "share");
+        for (TermGroup brand : VEHICLE_BRANDS)
+            if (containsAny(query, brand.queryTerms()))
+                for (String term : brand.documentTerms()) terms.add(normalize(term));
+        addCandidate(query, terms, List.of("fact_pack", "monthly_trend"), "fact_pack");
         for (String application : List.of("仪表", "中控", "hud", "控制屏", "后视镜", "娱乐屏"))
             addCandidate(query, terms, List.of(application), application);
         return new ArrayList<>(terms);
@@ -75,11 +94,14 @@ public final class KnowledgeMetricQueryRouter
         if (!isMetricQuestion(question) || candidates == null || candidates.isEmpty()) return List.of();
         String query = normalize(question);
         List<String> candidateTerms = candidateTerms(question);
+        boolean vehicleSales = namesVehicleBrand(query)
+            && (query.contains(normalize("销量")) || query.contains(normalize("销售")) || query.contains("sales"));
         List<ScoredChunk> scored = new ArrayList<>();
         for (KnowledgeChunk chunk : candidates)
         {
             String haystack = normalize(String.join(" ", safe(chunk.getMetricId()), safe(chunk.getTitlePath()),
-                safe(chunk.getContent())));
+                safe(chunk.getSourceName()), safe(chunk.getOriginalName()), safe(chunk.getContent())));
+            if (namesVehicleBrand(query) && !containsAny(haystack, matchedVehicleBrands(query))) continue;
             int score = 0;
             int matchedGroups = 0;
             for (TermGroup group : GROUPS)
@@ -93,12 +115,23 @@ public final class KnowledgeMetricQueryRouter
                 else score -= Math.max(1, group.weight() / 2);
             }
             String metricId = normalize(chunk.getMetricId());
-            for (String term : candidateTerms) if (metricId.contains(term)) score += 4;
+            for (String term : candidateTerms)
+                if (metricId.contains(normalize(term)) || haystack.contains(normalize(term))) score += 4;
             if (metricId.startsWith("dataset")) score -= 12;
-            if (matchedGroups > 0 && score > 0)
+            if (vehicleSales)
+            {
+                if (metricId.contains("marketfactpack") || haystack.contains("monthlytrend")
+                    || haystack.contains("销量数值") || (haystack.contains("时间20") && haystack.contains("数值")))
+                    score += 20;
+                if (metricId.contains("linechart") || metricId.contains("allavailableline"))
+                    score += 12;
+                if (metricId.equals("marketmeta") || metricId.endsWith("meta"))
+                    score -= 18;
+            }
+            if ((matchedGroups > 0 && score > 0) || (vehicleSales && score > 0))
             {
                 chunk.setScore((double) score);
-                scored.add(new ScoredChunk(chunk, score, matchedGroups));
+                scored.add(new ScoredChunk(chunk, score, Math.max(matchedGroups, vehicleSales ? 1 : 0)));
             }
         }
         scored.sort(Comparator.comparingInt(ScoredChunk::matchedGroups).reversed()
@@ -163,6 +196,21 @@ public final class KnowledgeMetricQueryRouter
         for (int size = max; size > 0; size--)
             if (target.substring(target.length() - size).equals(next.substring(0, size))) { overlap = size; break; }
         target.append(next.substring(overlap));
+    }
+
+    private static boolean namesVehicleBrand(String query)
+    {
+        for (TermGroup brand : VEHICLE_BRANDS)
+            if (containsAny(query, brand.queryTerms())) return true;
+        return false;
+    }
+
+    private static List<String> matchedVehicleBrands(String query)
+    {
+        List<String> terms = new ArrayList<>();
+        for (TermGroup brand : VEHICLE_BRANDS)
+            if (containsAny(query, brand.queryTerms())) terms.addAll(brand.documentTerms());
+        return terms;
     }
 
     private static TermGroup group(int weight, String[] queryTerms, String... documentTerms)

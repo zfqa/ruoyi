@@ -45,11 +45,203 @@ final class StructuredReportOfficeRenderer
     private static final Color BLUE = new Color(0x18, 0x67, 0x9B);
     private static final Color PALE = new Color(0xF2, 0xF7, 0xFA);
     private static final Color GRID = new Color(0xD9, 0xE1, 0xE8);
-    private static final List<String> PERIODS = List.of("Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3");
+    private static final List<String> BASE_PERIODS = List.of("Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3");
+    private static final ThreadLocal<List<String>> ACTIVE_PERIODS = ThreadLocal.withInitial(() -> BASE_PERIODS);
+    private static final ThreadLocal<Boolean> FULL_YEAR = ThreadLocal.withInitial(() -> Boolean.FALSE);
     private static final List<String> DEFAULT_MAKERS = List.of("Tianma", "AUO", "CSOT", "BOE");
     private static final DecimalFormat NUMBER = new DecimalFormat("#,##0.##");
 
     private StructuredReportOfficeRenderer() {}
+
+    private static List<String> periods()
+    {
+        return ACTIVE_PERIODS.get();
+    }
+
+    private static boolean fullYear()
+    {
+        return Boolean.TRUE.equals(FULL_YEAR.get());
+    }
+
+    private static void bindPeriods(JSONObject root)
+    {
+        boolean fy = detectFullYear(root);
+        FULL_YEAR.set(fy);
+        ACTIVE_PERIODS.set(resolvePeriods(root));
+    }
+
+    private static void clearPeriods()
+    {
+        ACTIVE_PERIODS.remove();
+        FULL_YEAR.remove();
+    }
+
+    private static List<String> resolvePeriods(JSONObject root)
+    {
+        LinkedHashSet<String> ordered = new LinkedHashSet<>(BASE_PERIODS);
+        JSONObject methodology = root == null ? null : root.getJSONObject("methodology");
+        JSONObject scope = methodology == null ? null : methodology.getJSONObject("scope");
+        JSONArray focus = scope == null ? null : scope.getJSONArray("focus_periods");
+        if (focus != null)
+        {
+            for (Object item : focus)
+            {
+                if (item != null && !String.valueOf(item).isBlank())
+                {
+                    ordered.add(String.valueOf(item));
+                }
+            }
+        }
+        JSONObject sections = makerSections(root);
+        for (String maker : sections.keySet())
+        {
+            JSONObject detail = sections.getJSONObject(maker);
+            JSONObject history = detail == null ? null : detail.getJSONObject("history");
+            JSONObject historyScope = history == null ? null : history.getJSONObject("scope");
+            JSONArray order = historyScope == null ? null : historyScope.getJSONArray("period_order");
+            if (order != null)
+            {
+                for (Object item : order)
+                {
+                    if (item != null && !String.valueOf(item).isBlank())
+                    {
+                        ordered.add(String.valueOf(item));
+                    }
+                }
+            }
+        }
+        Integer throughYear = scope == null ? null : scope.getInteger("data_through_year");
+        Integer throughQuarter = scope == null ? null : scope.getInteger("data_through_quarter");
+        if (throughYear == null || throughQuarter == null)
+        {
+            return new ArrayList<>(ordered);
+        }
+        List<String> clipped = new ArrayList<>();
+        for (String key : ordered)
+        {
+            if (withinDataThrough(key, throughYear, throughQuarter))
+            {
+                clipped.add(key);
+            }
+        }
+        return clipped.isEmpty() ? new ArrayList<>(ordered) : clipped;
+    }
+
+    private static boolean withinDataThrough(String key, int throughYear, int throughQuarter)
+    {
+        if (key == null || key.isBlank())
+        {
+            return false;
+        }
+        String text = key.trim().toUpperCase();
+        if (BASE_PERIODS.contains(key) || text.endsWith("F") || text.contains("Q1-Q3"))
+        {
+            Integer year = periodYear(text);
+            return year == null || year <= throughYear;
+        }
+        Integer year = periodYear(text);
+        Integer quarter = periodQuarter(text);
+        if (year == null)
+        {
+            return true;
+        }
+        if (quarter == null)
+        {
+            return year <= throughYear;
+        }
+        if (year < throughYear)
+        {
+            return true;
+        }
+        if (year > throughYear)
+        {
+            return false;
+        }
+        return quarter <= throughQuarter;
+    }
+
+    private static Integer periodYear(String text)
+    {
+        if (text == null || text.length() < 3 || text.charAt(0) != 'Y')
+        {
+            return null;
+        }
+        String body = text.substring(1);
+        int end = 0;
+        while (end < body.length() && Character.isDigit(body.charAt(end)))
+        {
+            end++;
+        }
+        if (end == 0)
+        {
+            return null;
+        }
+        return 2000 + Integer.parseInt(body.substring(0, end));
+    }
+
+    private static Integer periodQuarter(String text)
+    {
+        int index = text.indexOf('Q');
+        if (index < 0 || index + 1 >= text.length())
+        {
+            return null;
+        }
+        if (text.contains("Q1-Q3"))
+        {
+            return null;
+        }
+        char digit = text.charAt(index + 1);
+        if (!Character.isDigit(digit))
+        {
+            return null;
+        }
+        return digit - '0';
+    }
+
+    private static boolean detectFullYear(JSONObject root)
+    {
+        if (root == null)
+        {
+            return false;
+        }
+        JSONObject methodology = root.getJSONObject("methodology");
+        JSONObject scope = methodology == null ? null : methodology.getJSONObject("scope");
+        if (scope != null)
+        {
+            if (Boolean.TRUE.equals(scope.getBoolean("full_year"))
+                || Boolean.TRUE.equals(scope.getBoolean("full_year_2025")))
+            {
+                return true;
+            }
+            String horizon = scope.getString("report_horizon");
+            if (horizon != null && horizon.toLowerCase().endsWith("_full_year"))
+            {
+                return true;
+            }
+            if ("y25_full_year".equalsIgnoreCase(horizon))
+            {
+                return true;
+            }
+            if (Boolean.TRUE.equals(scope.getBoolean("has_y26q1")))
+            {
+                return true;
+            }
+            JSONArray focus = scope.getJSONArray("focus_periods");
+            if (focus != null)
+            {
+                for (Object item : focus)
+                {
+                    String key = String.valueOf(item);
+                    if (key.startsWith("Y26") || key.startsWith("Y27"))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        String title = root.getString("title");
+        return title != null && title.contains("全年");
+    }
 
     static boolean supports(JSONObject root)
     {
@@ -59,10 +251,13 @@ final class StructuredReportOfficeRenderer
 
     static void writeWord(AiReport report, JSONObject root, OutputStream output) throws IOException
     {
+        bindPeriods(root);
         try (XWPFDocument document = new XWPFDocument())
         {
             wordTitle(document, reportTitle(report, root));
-            wordSubtitle(document, "车载显示市场结构化分析报告");
+            wordSubtitle(document, fullYear()
+                ? "车载显示市场结构化分析报告（Y25全年）"
+                : "车载显示市场结构化分析报告（Y25前三季度）");
             wordMetadata(document, report, root);
             wordNarratives(document, "管理层摘要", root.getJSONArray("executive_summary"));
             wordMarketSummary(document, root);
@@ -76,10 +271,15 @@ final class StructuredReportOfficeRenderer
             wordQuality(document, root);
             document.write(output);
         }
+        finally
+        {
+            clearPeriods();
+        }
     }
 
     static void writePowerPoint(AiReport report, JSONObject root, OutputStream output) throws IOException
     {
+        bindPeriods(root);
         try (XMLSlideShow show = new XMLSlideShow())
         {
             show.setPageSize(new Dimension(960, 540));
@@ -95,6 +295,10 @@ final class StructuredReportOfficeRenderer
             pptSources(show, root);
             pptQuality(show, root);
             show.write(output);
+        }
+        finally
+        {
+            clearPeriods();
         }
     }
 
@@ -122,7 +326,7 @@ final class StructuredReportOfficeRenderer
 
     private static void wordMarketSummary(XWPFDocument document, JSONObject root)
     {
-        wordHeading(document, "Y25前三季度总览", 1);
+        wordHeading(document, fullYear() ? "Y25全年总览" : "Y25前三季度总览", 1);
         JSONObject summary = root.getJSONObject("market_summary");
         JSONArray marketRows = summary == null ? null : summary.getJSONArray("rows");
         List<String[]> totalRows = new ArrayList<>();
@@ -134,7 +338,12 @@ final class StructuredReportOfficeRenderer
                 totalRows.add(new String[] {"市场合计", metricValue(metric, "2024"), metricValue(metric, "2025"), pct(metric.get("yoy_2025_vs_2024"), 1)});
             }
         }
-        if (!totalRows.isEmpty()) wordTable(document, new String[] {"范围", "Y24 Q1-Q3（千片）", "Y25 Q1-Q3（千片）", "同比"}, totalRows, 9);
+        if (!totalRows.isEmpty())
+        {
+            wordTable(document, fullYear()
+                ? new String[] {"范围", "Y24全年（千片）", "Y25全年（千片）", "同比"}
+                : new String[] {"范围", "Y24 Q1-Q3（千片）", "Y25 Q1-Q3（千片）", "同比"}, totalRows, 9);
+        }
         JSONObject matrix = summary == null ? null : summary.getJSONObject("summary_matrix");
         JSONArray rows = matrix == null ? null : matrix.getJSONArray("rows");
         if (rows != null && !rows.isEmpty())
@@ -243,14 +452,15 @@ final class StructuredReportOfficeRenderer
             if (metric != null) technologyRows.add(periodRow(name, metric, false));
         }
         if (!technologyRows.isEmpty()) wordTable(document, periodHeaders("技术"), technologyRows, 8);
-        JSONObject distribution = product.getJSONObject("y25q1_q3_size_distribution");
+        JSONObject distribution = product.getJSONObject("size_distribution");
+        if (distribution == null) distribution = product.getJSONObject("y25q1_q3_size_distribution");
         JSONArray points = distribution == null ? null : distribution.getJSONArray("points");
         if (points != null && !points.isEmpty())
         {
             List<JSONObject> sorted = objects(points); sorted.sort(Comparator.comparingDouble(v -> doubleValue(v.get("size"))));
             List<String[]> rows = new ArrayList<>();
             for (JSONObject point : sorted) rows.add(new String[] {number(point.get("size")), number(point.get("shipment"))});
-            wordHeading(document, maker + " Y25 Q1 Q3尺寸别分布", 3);
+            wordHeading(document, maker + (fullYear() ? " Y25全年尺寸别分布" : " Y25 Q1-Q3尺寸别分布"), 3);
             wordTable(document, new String[] {"Size（英寸）", "Shipment（千片）"}, rows, 9);
         }
         JSONObject growth = product.getJSONObject("technology_size_growth");
@@ -283,10 +493,29 @@ final class StructuredReportOfficeRenderer
             for (Object item : clients)
             {
                 JSONObject client = object(item); JSONObject periods = client.getJSONObject("periods");
-                rows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"),
-                    value(periods, "Y25Q1-Q3"), pct(client.get("yoy_2025_q1_q3_vs_2024_q1_q3"), 0), pct(client.get("share_y25_q1_q3"), 0), pct(client.get("growth_contribution_y25_q1_q3"), 0)});
+                if (fullYear())
+                {
+                    rows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"),
+                        value(periods, "Y25F"), value(periods, "Y25Q1-Q3"),
+                        pct(primaryNumber(client, "yoy_primary", "yoy_2025_full_vs_2024_full", "yoy_2025_q1_q3_vs_2024_q1_q3"), 0),
+                        pct(primaryNumber(client, "share_primary", "share_y25_full", "share_y25_q1_q3"), 0),
+                        pct(primaryNumber(client, "growth_contribution_primary", "growth_contribution_y25_full", "growth_contribution_y25_q1_q3"), 0)});
+                }
+                else
+                {
+                    rows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"),
+                        value(periods, "Y25Q1-Q3"),
+                        pct(client.get("yoy_2025_q1_q3_vs_2024_q1_q3"), 0), pct(client.get("share_y25_q1_q3"), 0), pct(client.get("growth_contribution_y25_q1_q3"), 0)});
+                }
             }
-            wordTable(document, new String[] {"客户", "Y22", "Y23", "Y24", "Y25 Q1-Q3", "同比", "内部占比", "增长贡献"}, rows, 8);
+            if (fullYear())
+            {
+                wordTable(document, new String[] {"客户", "Y22", "Y23", "Y24", "Y25F", "Y25 Q1-Q3", "同比", "内部占比", "增长贡献"}, rows, 7);
+            }
+            else
+            {
+                wordTable(document, new String[] {"客户", "Y22", "Y23", "Y24", "Y25 Q1-Q3", "同比", "内部占比", "增长贡献"}, rows, 8);
+            }
         }
         JSONObject regions = customer.getJSONObject("regions"); JSONArray regionRows = regions == null ? null : regions.getJSONArray("rows");
         if (regionRows != null && !regionRows.isEmpty())
@@ -294,11 +523,23 @@ final class StructuredReportOfficeRenderer
             List<String[]> rows = new ArrayList<>();
             for (Object item : regionRows)
             {
-                JSONObject region = object(item); JSONObject annual = region.getJSONObject("annual"); JSONObject q = region.getJSONObject("q1_q3");
-                rows.add(new String[] {safe(region.getString("region")), value(annual, "Y24"), pct(annual == null ? null : annual.get("yoy_2024_vs_2023"), 0),
-                    value(q, "Y25Q1-Q3"), pct(q == null ? null : q.get("yoy_2025_vs_2024"), 0)});
+                JSONObject region = object(item); JSONObject annual = region.getJSONObject("annual");
+                JSONObject q = region.getJSONObject("q1_q3");
+                JSONObject fy = region.getJSONObject("full_year");
+                if (fullYear() && fy != null)
+                {
+                    rows.add(new String[] {safe(region.getString("region")), value(annual, "Y24"), pct(annual == null ? null : annual.get("yoy_2024_vs_2023"), 0),
+                        value(fy, "Y25"), pct(fy.get("yoy_2025_vs_2024"), 0)});
+                }
+                else
+                {
+                    rows.add(new String[] {safe(region.getString("region")), value(annual, "Y24"), pct(annual == null ? null : annual.get("yoy_2024_vs_2023"), 0),
+                        value(q, "Y25Q1-Q3"), pct(q == null ? null : q.get("yoy_2025_vs_2024"), 0)});
+                }
             }
-            wordTable(document, new String[] {"区域", "Y24出货量", "Y24同比", "Y25 Q1-Q3", "前三季度同比"}, rows, 8);
+            wordTable(document, new String[] {"区域", "Y24出货量", "Y24同比",
+                fullYear() ? "Y25全年" : "Y25 Q1-Q3",
+                fullYear() ? "全年同比" : "前三季度同比"}, rows, 8);
         }
     }
 
@@ -314,10 +555,13 @@ final class StructuredReportOfficeRenderer
             {
                 JSONObject metric = object(item); String[] base = periodRow(safe(metric.getString("application")), metric, false);
                 String[] row = new String[base.length + 2]; System.arraycopy(base, 0, row, 0, base.length);
-                row[base.length] = pct(metric.get("share_y25_q1_q3"), 0); row[base.length + 1] = pct(metric.get("growth_contribution_y25_q1_q3"), 0);
+                row[base.length] = pct(primaryNumber(metric, "share_primary", "share_y25_full", "share_y25_q1_q3"), 0);
+                row[base.length + 1] = pct(primaryNumber(metric, "growth_contribution_primary", "growth_contribution_y25_full", "growth_contribution_y25_q1_q3"), 0);
                 rows.add(row);
             }
-            List<String> headers = new ArrayList<>(List.of(periodHeaders("应用"))); headers.add("Y25占比"); headers.add("增长贡献");
+            List<String> headers = new ArrayList<>(List.of(periodHeaders("应用")));
+            headers.add(fullYear() ? "Y25全年占比" : "Y25占比");
+            headers.add("增长贡献");
             wordTable(document, headers.toArray(String[]::new), rows, 8);
         }
         JSONObject sizes = application.getJSONObject("key_sizes"); JSONArray sizeRows = sizes == null ? null : sizes.getJSONArray("rows");
@@ -328,8 +572,9 @@ final class StructuredReportOfficeRenderer
             {
                 JSONObject row = object(item);
                 rows.add(new String[] {safe(row.getString("application")), number(row.get("size")), safe(row.getString("technology")), number(row.get("shipment")),
-                    pct(row.get("share"), 0), pct(row.get("yoy_2025_q1_q3_vs_2024_q1_q3"), 0)});
+                    pct(row.get("share"), 0), pct(primaryNumber(row, "yoy_primary", "yoy_2025_q1_q3_vs_2024_q1_q3"), 0)});
             }
+            wordHeading(document, maker + " 应用别重点尺寸 " + (fullYear() ? "Y25全年" : "Y25 Q1-Q3") + "出货占比", 3);
             wordTable(document, new String[] {"应用", "尺寸", "技术", "出货量", "占比", "同比"}, rows, 8);
         }
     }
@@ -434,7 +679,10 @@ final class StructuredReportOfficeRenderer
             JSONObject metric = object(item);
             market.add(new String[] {"市场合计", metricValue(metric, "2024"), metricValue(metric, "2025"), pct(metric.get("yoy_2025_vs_2024"), 1)});
         }
-        addPptTableSlides(show, "Y25前三季度市场总览", new String[] {"范围", "Y24 Q1-Q3（千片）", "Y25 Q1-Q3（千片）", "同比"}, market,
+        addPptTableSlides(show, fullYear() ? "Y25全年市场总览" : "Y25前三季度市场总览",
+            fullYear()
+                ? new String[] {"范围", "Y24全年（千片）", "Y25全年（千片）", "同比"}
+                : new String[] {"范围", "Y24 Q1-Q3（千片）", "Y25 Q1-Q3（千片）", "同比"}, market,
             strings(summary == null ? null : summary.getJSONArray("insights")), 10);
         JSONObject matrix = summary == null ? null : summary.getJSONObject("summary_matrix"); JSONArray matrixRows = matrix == null ? null : matrix.getJSONArray("rows");
         if (matrixRows != null && !matrixRows.isEmpty())
@@ -442,7 +690,8 @@ final class StructuredReportOfficeRenderer
             List<String> makers = orderedMakers(root, makerSections(root));
             List<String> headers = new ArrayList<>(List.of("产品线", "市场 YoY", "市场占比"));
             for (String maker : makers) headers.addAll(List.of(maker + " YoY", maker + " 内部", maker + " 市占"));
-            addPptTableSlides(show, "Y25前三季度产品线 Summary", headers.toArray(String[]::new), summaryRows(matrixRows, makers), List.of(), 7);
+            addPptTableSlides(show, fullYear() ? "Y25全年产品线 Summary" : "Y25前三季度产品线 Summary",
+                headers.toArray(String[]::new), summaryRows(matrixRows, makers), List.of(), 7);
         }
     }
 
@@ -468,11 +717,13 @@ final class StructuredReportOfficeRenderer
         JSONObject technology = product.getJSONObject("technology_history"); List<String[]> rows = new ArrayList<>();
         for (String name : List.of("LTPS", "a-Si")) { JSONObject metric = technology == null ? null : technology.getJSONObject(name); if (metric != null) rows.add(periodRow(name, metric, false)); }
         addPptTableSlides(show, maker + "增长点分析一 产品线", periodHeaders("技术"), rows, flattenInsights(product.getJSONObject("insights")), 9);
-        JSONObject distribution = product.getJSONObject("y25q1_q3_size_distribution"); JSONArray points = distribution == null ? null : distribution.getJSONArray("points");
+        JSONObject distribution = product.getJSONObject("size_distribution");
+        if (distribution == null) distribution = product.getJSONObject("y25q1_q3_size_distribution");
+        JSONArray points = distribution == null ? null : distribution.getJSONArray("points");
         if (points != null && !points.isEmpty())
         {
             String[] headers = new String[] {"Size", "Shipment", "Size", "Shipment", "Size", "Shipment", "Size", "Shipment"};
-            addPptTableSlides(show, maker + " Y25 Q1 Q3尺寸别分布", headers, sizeGridRows(points, 4), List.of(), 9);
+            addPptTableSlides(show, maker + (fullYear() ? " Y25全年尺寸别分布" : " Y25 Q1-Q3尺寸别分布"), headers, sizeGridRows(points, 4), List.of(), 9);
         }
         JSONObject growth = product.getJSONObject("technology_size_growth");
         if (growth != null)
@@ -510,19 +761,45 @@ final class StructuredReportOfficeRenderer
         if (clients != null) for (Object item : clients)
         {
             JSONObject client = object(item); JSONObject periods = client.getJSONObject("periods");
-            clientRows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"), value(periods, "Y25Q1-Q3"),
-                pct(client.get("yoy_2025_q1_q3_vs_2024_q1_q3"), 0), pct(client.get("share_y25_q1_q3"), 0), pct(client.get("growth_contribution_y25_q1_q3"), 0)});
+            if (fullYear())
+            {
+                clientRows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"),
+                    value(periods, "Y25F"), value(periods, "Y25Q1-Q3"),
+                    pct(primaryNumber(client, "yoy_primary", "yoy_2025_full_vs_2024_full", "yoy_2025_q1_q3_vs_2024_q1_q3"), 0),
+                    pct(primaryNumber(client, "share_primary", "share_y25_full", "share_y25_q1_q3"), 0),
+                    pct(primaryNumber(client, "growth_contribution_primary", "growth_contribution_y25_full", "growth_contribution_y25_q1_q3"), 0)});
+            }
+            else
+            {
+                clientRows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"), value(periods, "Y25Q1-Q3"),
+                    pct(client.get("yoy_2025_q1_q3_vs_2024_q1_q3"), 0), pct(client.get("share_y25_q1_q3"), 0), pct(client.get("growth_contribution_y25_q1_q3"), 0)});
+            }
         }
-        addPptTableSlides(show, maker + "增长点分析二 客户", new String[] {"客户", "Y22", "Y23", "Y24", "Y25 Q1-Q3", "同比", "内部占比", "增长贡献"}, clientRows,
-            flattenInsights(customer.getJSONObject("insights")), 8);
+        addPptTableSlides(show, maker + "增长点分析二 客户",
+            fullYear()
+                ? new String[] {"客户", "Y22", "Y23", "Y24", "Y25F", "Y25 Q1-Q3", "同比", "内部占比", "增长贡献"}
+                : new String[] {"客户", "Y22", "Y23", "Y24", "Y25 Q1-Q3", "同比", "内部占比", "增长贡献"},
+            clientRows, flattenInsights(customer.getJSONObject("insights")), 8);
         JSONObject regions = customer.getJSONObject("regions"); JSONArray regionRows = regions == null ? null : regions.getJSONArray("rows"); List<String[]> values = new ArrayList<>();
         if (regionRows != null) for (Object item : regionRows)
         {
-            JSONObject region = object(item); JSONObject annual = region.getJSONObject("annual"); JSONObject q = region.getJSONObject("q1_q3");
-            values.add(new String[] {safe(region.getString("region")), value(annual, "Y24"), pct(annual == null ? null : annual.get("yoy_2024_vs_2023"), 0),
-                value(q, "Y25Q1-Q3"), pct(q == null ? null : q.get("yoy_2025_vs_2024"), 0)});
+            JSONObject region = object(item); JSONObject annual = region.getJSONObject("annual");
+            JSONObject q = region.getJSONObject("q1_q3");
+            JSONObject fy = region.getJSONObject("full_year");
+            if (fullYear() && fy != null)
+            {
+                values.add(new String[] {safe(region.getString("region")), value(annual, "Y24"), pct(annual == null ? null : annual.get("yoy_2024_vs_2023"), 0),
+                    value(fy, "Y25"), pct(fy.get("yoy_2025_vs_2024"), 0)});
+            }
+            else
+            {
+                values.add(new String[] {safe(region.getString("region")), value(annual, "Y24"), pct(annual == null ? null : annual.get("yoy_2024_vs_2023"), 0),
+                    value(q, "Y25Q1-Q3"), pct(q == null ? null : q.get("yoy_2025_vs_2024"), 0)});
+            }
         }
-        addPptTableSlides(show, maker + "区域别占比情况", new String[] {"区域", "Y24出货量", "Y24同比", "Y25 Q1-Q3", "前三季度同比"}, values, List.of(), 9);
+        addPptTableSlides(show, maker + "区域别占比情况",
+            new String[] {"区域", "Y24出货量", "Y24同比", fullYear() ? "Y25全年" : "Y25 Q1-Q3", fullYear() ? "全年同比" : "前三季度同比"},
+            values, List.of(), 9);
     }
 
     private static void pptApplication(XMLSlideShow show, String maker, JSONObject application)
@@ -531,17 +808,23 @@ final class StructuredReportOfficeRenderer
         if (series != null) for (Object item : series)
         {
             JSONObject metric = object(item); String[] base = periodRow(safe(metric.getString("application")), metric, false); String[] row = new String[base.length + 2];
-            System.arraycopy(base, 0, row, 0, base.length); row[base.length] = pct(metric.get("share_y25_q1_q3"), 0); row[base.length + 1] = pct(metric.get("growth_contribution_y25_q1_q3"), 0); rows.add(row);
+            System.arraycopy(base, 0, row, 0, base.length);
+            row[base.length] = pct(primaryNumber(metric, "share_primary", "share_y25_full", "share_y25_q1_q3"), 0);
+            row[base.length + 1] = pct(primaryNumber(metric, "growth_contribution_primary", "growth_contribution_y25_full", "growth_contribution_y25_q1_q3"), 0);
+            rows.add(row);
         }
-        List<String> headers = new ArrayList<>(List.of(periodHeaders("应用"))); headers.add("Y25占比"); headers.add("增长贡献");
+        List<String> headers = new ArrayList<>(List.of(periodHeaders("应用")));
+        headers.add(fullYear() ? "Y25全年占比" : "Y25占比");
+        headers.add("增长贡献");
         addPptTableSlides(show, maker + "增长点分析三 应用", headers.toArray(String[]::new), rows, flattenInsights(application.getJSONObject("insights")), 8);
         JSONObject sizes = application.getJSONObject("key_sizes"); JSONArray sizeRows = sizes == null ? null : sizes.getJSONArray("rows"); List<String[]> values = new ArrayList<>();
         if (sizeRows != null) for (Object item : sizeRows)
         {
             JSONObject row = object(item); values.add(new String[] {safe(row.getString("application")), number(row.get("size")), safe(row.getString("technology")),
-                number(row.get("shipment")), pct(row.get("share"), 0), pct(row.get("yoy_2025_q1_q3_vs_2024_q1_q3"), 0)});
+                number(row.get("shipment")), pct(row.get("share"), 0), pct(primaryNumber(row, "yoy_primary", "yoy_2025_q1_q3_vs_2024_q1_q3"), 0)});
         }
-        addPptTableSlides(show, maker + "应用别重点尺寸", new String[] {"应用", "尺寸", "技术", "出货量", "占比", "同比"}, values, List.of(), 9);
+        addPptTableSlides(show, maker + "应用别重点尺寸" + (fullYear() ? "（Y25全年）" : "（Y25 Q1-Q3）"),
+            new String[] {"应用", "尺寸", "技术", "出货量", "占比", "同比"}, values, List.of(), 9);
     }
 
     private static void pptSources(XMLSlideShow show, JSONObject root)
@@ -638,26 +921,70 @@ final class StructuredReportOfficeRenderer
 
     private static void addHistoryRow(List<String[]> rows, String label, JSONObject metric, boolean percent)
     {
-        if (metric == null) return; String[] row = new String[PERIODS.size() + 2]; row[0] = label;
-        JSONObject periods = metric.getJSONObject("periods");
-        for (int i = 0; i < PERIODS.size(); i++) row[i + 1] = percent ? pct(periods == null ? null : periods.get(PERIODS.get(i)), 1) : value(periods, PERIODS.get(i));
-        row[row.length - 1] = pct(metric.get("standard_y25f_yoy"), 1); rows.add(row);
+        if (metric == null) return;
+        List<String> keys = periods();
+        String[] row = new String[keys.size() + 2];
+        row[0] = label;
+        JSONObject periodValues = metric.getJSONObject("periods");
+        for (int i = 0; i < keys.size(); i++)
+        {
+            row[i + 1] = percent
+                ? pct(periodValues == null ? null : periodValues.get(keys.get(i)), 1)
+                : value(periodValues, keys.get(i));
+        }
+        row[row.length - 1] = pct(metric.get("standard_y25f_yoy"), 1);
+        rows.add(row);
     }
 
     private static String[] historyHeaders()
     {
-        return new String[] {"指标", "Y22", "Y23", "Y24", "Y25F", "Y25 Q1-Q3", "Y25F YoY"};
+        List<String> keys = periods();
+        List<String> headers = new ArrayList<>();
+        headers.add("指标");
+        for (String key : keys)
+        {
+            headers.add(periodLabel(key));
+        }
+        headers.add("Y25F YoY");
+        return headers.toArray(String[]::new);
     }
 
     private static String[] periodHeaders(String first)
     {
-        return new String[] {first, "Y22", "Y23", "Y24", "Y25F", "Y25 Q1-Q3"};
+        List<String> headers = new ArrayList<>();
+        headers.add(first);
+        for (String key : periods())
+        {
+            headers.add(periodLabel(key));
+        }
+        return headers.toArray(String[]::new);
+    }
+
+    private static String periodLabel(String key)
+    {
+        if ("Y25Q1-Q3".equals(key))
+        {
+            return "Y25 Q1-Q3";
+        }
+        if ("Y25F".equals(key))
+        {
+            return "Y25F(全年)";
+        }
+        return key;
     }
 
     private static String[] periodRow(String label, JSONObject metric, boolean percent)
     {
-        String[] row = new String[PERIODS.size() + 1]; row[0] = label; JSONObject periods = metric.getJSONObject("periods");
-        for (int i = 0; i < PERIODS.size(); i++) row[i + 1] = percent ? pct(periods == null ? null : periods.get(PERIODS.get(i)), 1) : value(periods, PERIODS.get(i));
+        List<String> keys = periods();
+        String[] row = new String[keys.size() + 1];
+        row[0] = label;
+        JSONObject periodValues = metric.getJSONObject("periods");
+        for (int i = 0; i < keys.size(); i++)
+        {
+            row[i + 1] = percent
+                ? pct(periodValues == null ? null : periodValues.get(keys.get(i)), 1)
+                : value(periodValues, keys.get(i));
+        }
         return row;
     }
 
@@ -707,6 +1034,17 @@ final class StructuredReportOfficeRenderer
 
     private static String value(JSONObject object, String key) { return object == null ? "--" : number(object.get(key)); }
     private static String number(Object value) { return value instanceof Number number ? NUMBER.format(number.doubleValue()) : value == null ? "--" : safe(String.valueOf(value)); }
+    private static Object primaryNumber(JSONObject object, String... keys)
+    {
+        if (object == null || keys == null) return null;
+        for (String key : keys)
+        {
+            if (key == null || key.isBlank()) continue;
+            Object value = object.get(key);
+            if (value != null) return value;
+        }
+        return null;
+    }
     private static String pct(Object value, int digits)
     {
         if (!(value instanceof Number number)) return "--";

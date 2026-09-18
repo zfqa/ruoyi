@@ -166,21 +166,27 @@ class StaticNewsCrawler:
         # frequently contain cookie banners) merely because a short official
         # announcement has fewer than 80 characters.
         if selector:
-            node = cls._content_node(soup, selector)
-            if node:
+            nodes = soup.select(selector)
+            if not nodes:
+                return ""
+            chunks: list[str] = []
+            for node in nodes:
                 # Remove only explicitly configured, source-local public
                 # widgets from this extraction.  The original parsed page is
                 # left intact for title/date/media detection.
-                node = BeautifulSoup(str(node), "html.parser")
+                cloned = BeautifulSoup(str(node), "html.parser")
                 for exclude_selector in exclude_selectors or []:
-                    for excluded in node.select(exclude_selector):
+                    for excluded in cloned.select(exclude_selector):
                         excluded.decompose()
                 # A site-specific selector identifies the article body.  Use
                 # all text within that body (not only ``<p>`` elements), so
                 # headings, list items and text in nested containers are not
-                # silently omitted from the stored article.
-                return _clean_text(node.get_text(" ", strip=True))
-            return ""
+                # silently omitted from the stored article.  Multiple matches
+                # (e.g. multi-block press templates) are joined in order.
+                text = _clean_text(cloned.get_text(" ", strip=True))
+                if text:
+                    chunks.append(text)
+            return "\n".join(chunks)
         if node := cls._content_node(soup, selector):
             text = "\n".join(_clean_text(p.get_text(" ", strip=True)) for p in node.select("p")) or _clean_text(node.get_text(" ", strip=True))
             if text.strip():

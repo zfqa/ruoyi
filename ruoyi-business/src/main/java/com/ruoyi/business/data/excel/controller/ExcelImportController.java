@@ -610,6 +610,37 @@ public class ExcelImportController extends BaseController
                 }
             }
         }
+        if (StringUtils.isNotEmpty(options.fileOriginalName))
+        {
+            command.add("--file-label");
+            command.add(options.fileOriginalName);
+        }
+        if (StringUtils.isNotEmpty(options.baselineOriginalName))
+        {
+            command.add("--baseline-file-label");
+            command.add(options.baselineOriginalName);
+        }
+        if (StringUtils.isNotEmpty(options.supplyChainOriginalName))
+        {
+            command.add("--supply-chain-file-label");
+            command.add(options.supplyChainOriginalName);
+        }
+        for (String label : options.extraHistoryOriginalNames)
+        {
+            if (StringUtils.isNotEmpty(label))
+            {
+                command.add("--extra-history-file-label");
+                command.add(label);
+            }
+        }
+        for (String label : options.extraSupplyChainOriginalNames)
+        {
+            if (StringUtils.isNotEmpty(label))
+            {
+                command.add("--extra-supply-chain-file-label");
+                command.add(label);
+            }
+        }
         if (options.includeRawCells)
         {
             command.add("--include-raw-cells");
@@ -802,7 +833,34 @@ public class ExcelImportController extends BaseController
         {
             rawCellMode = "non-empty";
         }
-        return new ParseOptions(includeRawCells, rawCellMode, useLlm);
+        return new ParseOptions(
+            includeRawCells,
+            rawCellMode,
+            useLlm,
+            stringValue(payload.get("fileOriginalName")),
+            stringValue(payload.get("baselineOriginalName")),
+            stringValue(payload.get("supplyChainOriginalName")),
+            stringList(payload.get("extraHistoryOriginalNames")),
+            stringList(payload.get("extraSupplyChainOriginalNames"))
+        );
+    }
+
+    private List<String> stringList(Object raw)
+    {
+        List<String> values = new ArrayList<>();
+        if (!(raw instanceof List<?> list))
+        {
+            return values;
+        }
+        for (Object item : list)
+        {
+            String value = stringValue(item);
+            if (StringUtils.isNotEmpty(value))
+            {
+                values.add(value);
+            }
+        }
+        return values;
     }
 
     private String stringValue(Object value)
@@ -815,12 +873,32 @@ public class ExcelImportController extends BaseController
         private final boolean includeRawCells;
         private final String rawCellMode;
         private final boolean useLlm;
+        private final String fileOriginalName;
+        private final String baselineOriginalName;
+        private final String supplyChainOriginalName;
+        private final List<String> extraHistoryOriginalNames;
+        private final List<String> extraSupplyChainOriginalNames;
 
-        private ParseOptions(boolean includeRawCells, String rawCellMode, boolean useLlm)
+        private ParseOptions(
+            boolean includeRawCells,
+            String rawCellMode,
+            boolean useLlm,
+            String fileOriginalName,
+            String baselineOriginalName,
+            String supplyChainOriginalName,
+            List<String> extraHistoryOriginalNames,
+            List<String> extraSupplyChainOriginalNames)
         {
             this.includeRawCells = includeRawCells;
             this.rawCellMode = rawCellMode;
             this.useLlm = useLlm;
+            this.fileOriginalName = fileOriginalName;
+            this.baselineOriginalName = baselineOriginalName;
+            this.supplyChainOriginalName = supplyChainOriginalName;
+            this.extraHistoryOriginalNames = extraHistoryOriginalNames == null
+                ? List.of() : List.copyOf(extraHistoryOriginalNames);
+            this.extraSupplyChainOriginalNames = extraSupplyChainOriginalNames == null
+                ? List.of() : List.copyOf(extraSupplyChainOriginalNames);
         }
     }
 

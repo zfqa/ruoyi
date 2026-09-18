@@ -13,6 +13,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -631,6 +632,89 @@ public class KnowledgeIngestService
             chunk.setSourceSnippet(KnowledgeTextProcessor.buildSnippet(chunk.getContent(), query, entityTerms, 500));
         return hydrated;
     }
+
+    /** 把按 1200 字拆开的周报指标拼回，月度销量序列才不会和品牌名分成两段。 */
+    public List<KnowledgeChunk> expandMetricFragments(List<KnowledgeChunk> chunks)
+    {
+        if (chunks == null || chunks.isEmpty()) return List.of();
+        List<KnowledgeChunk> expanded = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (KnowledgeChunk chunk : chunks)
+        {
+            if (chunk == null) continue;
+            String metricId = chunk.getMetricId() == null ? "" : chunk.getMetricId();
+            if (metricId.isBlank() || chunk.getVersionId() == null)
+            {
+                expanded.add(chunk);
+                continue;
+            }
+            String key = chunk.getVersionId() + ":" + metricId + ":" + (chunk.getTitlePath() == null ? "" : chunk.getTitlePath());
+            if (!seen.add(key)) continue;
+            List<KnowledgeChunk> fragments = mapper.selectMetricFragments(chunk.getVersionId(), metricId, chunk.getTitlePath());
+            List<KnowledgeChunk> merged = metricQueryRouter.coalesceFragments(
+                fragments == null || fragments.isEmpty() ? List.of(chunk) : fragments);
+            expanded.add(merged.isEmpty() ? chunk : merged.get(0));
+        }
+        return expanded;
+    }
+
+    /**
+     * 点名车企问销量时：检索常先命中 market.meta 溯源碎片。
+     * 这里把同版本周报里的 fact_pack / 折线 / 洞察一并拉回，才能用上 monthly_trend 等 JSON。
+     */
+    public List<KnowledgeChunk> expandVehicleSalesReportContext(List<KnowledgeChunk> chunks)
+    {
+        if (chunks == null || chunks.isEmpty()) return List.of();
+        List<KnowledgeChunk> expanded = new ArrayList<>(expandMetricFragments(chunks));
+        Set<String> seen = new LinkedHashSet<>();
+        for (KnowledgeChunk chunk : expanded)
+        {
+            if (chunk == null || chunk.getId() == null) continue;
+            seen.add("ID:" + chunk.getId());
+        }
+        Set<Long> versionIds = new LinkedHashSet<>();
+        for (KnowledgeChunk chunk : expanded)
+        {
+            if (chunk == null || chunk.getVersionId() == null) continue;
+            String metricId = chunk.getMetricId() == null ? "" : chunk.getMetricId();
+            if (metricId.startsWith("market.") || "REPORT".equalsIgnoreCase(safe(chunk.getSourceType())))
+                versionIds.add(chunk.getVersionId());
+        }
+        for (Long versionId : versionIds)
+        {
+            List<KnowledgeChunk> siblings = mapper.selectChunksByVersionId(versionId);
+            if (siblings == null || siblings.isEmpty()) continue;
+            List<KnowledgeChunk> useful = new ArrayList<>();
+            for (KnowledgeChunk sibling : siblings)
+            {
+                if (sibling == null) continue;
+                String metricId = sibling.getMetricId() == null ? "" : sibling.getMetricId().toLowerCase();
+                String content = sibling.getContent() == null ? "" : sibling.getContent();
+                boolean usefulMetric = metricId.equals("market.market_fact_pack")
+                    || metricId.equals("market.all_available_line_charts")
+                    || metricId.equals("market.market_key_insights")
+                    || metricId.contains("fact_pack")
+                    || metricId.contains("line_chart");
+                boolean usefulJson = content.contains("monthly_trend")
+                    || content.contains("\"销量/数值\"")
+                    || content.contains("\"时间\":\"20");
+                if (!usefulMetric && !usefulJson) continue;
+                useful.add(sibling);
+            }
+            for (KnowledgeChunk merged : metricQueryRouter.coalesceFragments(useful))
+            {
+                if (merged == null) continue;
+                String key = merged.getId() == null
+                    ? versionId + ":" + safe(merged.getMetricId()) + ":" + safe(merged.getTitlePath())
+                    : "ID:" + merged.getId();
+                if (!seen.add(key)) continue;
+                expanded.add(merged);
+            }
+        }
+        return expanded;
+    }
+
+    private static String safe(String value) { return value == null ? "" : value; }
 
     private KnowledgeIngestTask submit(KnowledgeVersion version, String username, ThrowingRunnable processor)
     {

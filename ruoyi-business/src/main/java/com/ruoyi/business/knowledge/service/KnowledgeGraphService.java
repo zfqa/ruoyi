@@ -31,14 +31,9 @@ public class KnowledgeGraphService
     private static final Map<String, List<String>> COMPANIES = companyAliases();
     private static final List<String> MODELS = List.of("海豚", "秦PLUS", "宋PLUS", "元PLUS", "汉", "唐", "腾势D9",
         "Model 3", "Model Y", "DM-i", "HUD", "SUV", "EV");
-    private static final Map<String, List<String>> TECHNOLOGIES = Map.of(
-        "LTPS", List.of("LTPS"), "a-Si", List.of("a-Si", "aSi"),
-        "OLED", List.of("OLED"), "Oxide", List.of("Oxide"));
-    private static final Map<String, List<String>> APPLICATIONS = Map.of(
-        "仪表", List.of("仪表", "Instrument cluster"), "中控", List.of("中控", "Center stack display"),
-        "HUD", List.of("HUD", "Head-up display"), "控制屏", List.of("控制屏", "Control panel"),
-        "后视镜", List.of("后视镜", "Room mirror", "Side mirror"),
-        "娱乐屏", List.of("娱乐屏", "Passenger display"));
+    /** 图谱只保留这六类业务节点；无边关联的节点不展示。 */
+    private static final Set<String> VISIBLE_ENTITY_TYPES = Set.of(
+        "COMPANY", "MODEL", "SALES", "NEWS", "FINANCIAL", "POLICY");
     private static final int MAX_ENTITIES_PER_CHUNK = 24;
 
     private final KnowledgeBaseMapper mapper;
@@ -63,7 +58,9 @@ public class KnowledgeGraphService
 
     public void indexChunk(KnowledgeBase source, KnowledgeVersion version, KnowledgeChunk chunk)
     {
-        List<EntityValue> entities = extract(source, version, chunk);
+        List<EntityValue> entities = extract(source, version, chunk).stream()
+            .filter(entity -> VISIBLE_ENTITY_TYPES.contains(entity.type()))
+            .toList();
         if (entities.size() < 2) return;
         List<KnowledgeGraphNode> nodes = new ArrayList<>();
         for (EntityValue entity : entities)
@@ -75,14 +72,25 @@ public class KnowledgeGraphService
             nodes.add(node);
         }
         String period = detectPeriod(chunk.getContent());
-        KnowledgeGraphNode document = nodes.get(0);
-        for (int i = 1; i < nodes.size(); i++)
-            insertRelation(document, nodes.get(i), "来源提及", source, version, chunk, period);
         List<KnowledgeGraphNode> companies = nodes.stream().filter(n -> "COMPANY".equals(n.getEntityType())).toList();
+        List<KnowledgeGraphNode> sources = nodes.stream()
+            .filter(n -> Set.of("NEWS", "FINANCIAL", "POLICY").contains(n.getEntityType())).toList();
+        for (KnowledgeGraphNode document : sources)
+            for (KnowledgeGraphNode target : nodes)
+                if (!target.getId().equals(document.getId()))
+                    insertRelation(document, target, "来源提及", source, version, chunk, period);
         for (KnowledgeGraphNode company : companies)
             for (KnowledgeGraphNode target : nodes)
-                if (!target.getId().equals(company.getId()) && target != document)
+                if (!target.getId().equals(company.getId())
+                    && !Set.of("NEWS", "FINANCIAL", "POLICY").contains(target.getEntityType()))
                     insertRelation(company, target, relationFor(target.getEntityType()), source, version, chunk, period);
+        if (companies.isEmpty() && sources.isEmpty())
+        {
+            KnowledgeGraphNode anchor = nodes.get(0);
+            for (int i = 1; i < nodes.size(); i++)
+                insertRelation(anchor, nodes.get(i), relationFor(nodes.get(i).getEntityType()),
+                    source, version, chunk, period);
+        }
     }
 
     public Map<String, Object> graph(String period, String dataType, Long centerId,
@@ -346,34 +354,30 @@ public class KnowledgeGraphService
     {
         String text = chunk.getContent() == null ? "" : chunk.getContent();
         LinkedHashMap<String, EntityValue> values = new LinkedHashMap<>();
-        String documentType = switch (source.getSourceType().toUpperCase(Locale.ROOT)) {
-            case "NEWS" -> "NEWS";
-            case "POLICY" -> "POLICY";
-            case "REPORT" -> text.contains("财报") || source.getSourceName().contains("财报") ? "FINANCIAL" : "REPORT";
-            default -> "DOCUMENT";
-        };
-        add(values, source.getSourceName(), documentType, version.getOriginalName());
+        String sourceType = source.getSourceType() == null ? "" : source.getSourceType().toUpperCase(Locale.ROOT);
+        if ("NEWS".equals(sourceType))
+            add(values, source.getSourceName(), "NEWS", version.getOriginalName());
+        else if ("POLICY".equals(sourceType))
+            add(values, source.getSourceName(), "POLICY", version.getOriginalName());
+        else if ("REPORT".equals(sourceType)
+            && (containsIgnoreCase(text, "财报") || containsIgnoreCase(safe(source.getSourceName()), "财报")
+                || containsIgnoreCase(safe(version.getOriginalName()), "财报")
+                || containsIgnoreCase(safe(version.getOriginalName()), "年报")
+                || containsIgnoreCase(safe(version.getOriginalName()), "业绩")))
+            add(values, source.getSourceName(), "FINANCIAL", version.getOriginalName());
         for (Map.Entry<String, List<String>> entry : COMPANIES.entrySet())
             if (entry.getValue().stream().anyMatch(alias -> containsIgnoreCase(text, alias)))
                 add(values, entry.getKey(), "COMPANY", String.join(",", entry.getValue()));
         for (String model : MODELS) if (containsIgnoreCase(text, model)) add(values, model, "MODEL", "");
-        for (Map.Entry<String, List<String>> entry : TECHNOLOGIES.entrySet())
-            if (entry.getValue().stream().anyMatch(alias -> containsIgnoreCase(text, alias)))
-                add(values, entry.getKey(), "TECHNOLOGY", String.join(",", entry.getValue()));
-        for (Map.Entry<String, List<String>> entry : APPLICATIONS.entrySet())
-            if (entry.getValue().stream().anyMatch(alias -> containsIgnoreCase(text, alias)))
-                add(values, entry.getKey(), "APPLICATION", String.join(",", entry.getValue()));
         extractKeywordValues(values, text, "企业|公司|车企", "COMPANY");
         extractKeywordValues(values, text, "车型|车系", "MODEL");
-        extractKeywordValues(values, text, "客户|Client", "CUSTOMER");
-        if (chunk.getMetricId() != null && !chunk.getMetricId().isBlank())
-            add(values, chunk.getMetricId(), "METRIC", "");
-        String period = detectPeriod(text);
-        if (!period.isBlank()) add(values, period, "PERIOD", "");
         extractMatches(values, SALES, text, "SALES", 1);
         extractMatches(values, FINANCIAL, text, "FINANCIAL", 0);
         extractMatches(values, POLICY, text, "POLICY", 0);
-        return values.values().stream().limit(MAX_ENTITIES_PER_CHUNK).toList();
+        return values.values().stream()
+            .filter(entity -> VISIBLE_ENTITY_TYPES.contains(entity.type()))
+            .limit(MAX_ENTITIES_PER_CHUNK)
+            .toList();
     }
 
     private void extractKeywordValues(Map<String, EntityValue> values, String text, String keyword, String type)
@@ -406,9 +410,13 @@ public class KnowledgeGraphService
         Map<String, Set<String>> linkSources = new LinkedHashMap<>();
         for (Map<String, Object> row : rows)
         {
+            String fromType = string(row.get("fromType"));
+            String toType = string(row.get("toType"));
+            if (!VISIBLE_ENTITY_TYPES.contains(fromType) || !VISIBLE_ENTITY_TYPES.contains(toType)) continue;
             Long fromId = longValue(row.get("fromId")); Long toId = longValue(row.get("toId"));
-            addViewNode(nodes, fromId, string(row.get("fromName")), string(row.get("fromType")), centerId);
-            addViewNode(nodes, toId, string(row.get("toName")), string(row.get("toType")), centerId);
+            if (fromId == null || toId == null || fromId.equals(toId)) continue;
+            addViewNode(nodes, fromId, string(row.get("fromName")), fromType, centerId);
+            addViewNode(nodes, toId, string(row.get("toName")), toType, centerId);
             String key = fromId + ":" + toId + ":" + row.get("relationType");
             Map<String, Object> link = links.computeIfAbsent(key, ignored -> newLink(row, fromId, toId));
             int mentionCount = ((Number) link.get("mentionCount")).intValue() + 1;
@@ -420,9 +428,20 @@ public class KnowledgeGraphService
             List<Map<String, Object>> evidences = (List<Map<String, Object>>) link.get("evidences");
             if (evidences.size() < 10) evidences.add(evidence(row));
         }
+        Set<String> connected = new LinkedHashSet<>();
+        for (Map<String, Object> link : links.values())
+        {
+            connected.add(String.valueOf(link.get("source")));
+            connected.add(String.valueOf(link.get("target")));
+        }
+        List<Map<String, Object>> visibleNodes = nodes.values().stream()
+            .filter(node -> connected.contains(String.valueOf(node.get("id"))))
+            .toList();
         Map<String, Object> graph = new LinkedHashMap<>();
-        graph.put("nodes", new ArrayList<>(nodes.values())); graph.put("links", new ArrayList<>(links.values()));
-        graph.put("categories", categories(nodes.values())); graph.put("centerId", centerId);
+        graph.put("nodes", visibleNodes);
+        graph.put("links", new ArrayList<>(links.values()));
+        graph.put("categories", categories(visibleNodes));
+        graph.put("centerId", centerId);
         return graph;
     }
 
@@ -463,10 +482,16 @@ public class KnowledgeGraphService
 
     private List<Map<String, Object>> categories(Collection<Map<String, Object>> nodes)
     {
-        List<String> order = List.of("COMPANY", "MODEL", "SALES", "NEWS", "FINANCIAL", "POLICY", "REPORT", "DOCUMENT",
-            "TECHNOLOGY", "APPLICATION", "CUSTOMER", "PERIOD", "METRIC");
+        List<String> order = List.of("COMPANY", "MODEL", "SALES", "NEWS", "FINANCIAL", "POLICY");
+        Set<String> present = new LinkedHashSet<>();
+        for (Map<String, Object> node : nodes)
+        {
+            String type = string(node.get("entityType"));
+            if (VISIBLE_ENTITY_TYPES.contains(type)) present.add(type);
+        }
         List<Map<String, Object>> result = new ArrayList<>();
-        for (String type : order) result.add(Map.of("name", typeLabel(type), "entityType", type));
+        for (String type : order)
+            if (present.contains(type)) result.add(Map.of("name", typeLabel(type), "entityType", type));
         return result;
     }
 
@@ -479,20 +504,21 @@ public class KnowledgeGraphService
 
     private int categoryIndex(String type)
     {
-        return switch (type) { case "COMPANY" -> 0; case "MODEL" -> 1; case "SALES" -> 2; case "NEWS" -> 3;
-            case "FINANCIAL" -> 4; case "POLICY" -> 5; case "REPORT" -> 6; case "TECHNOLOGY" -> 8;
-            case "APPLICATION" -> 9; case "CUSTOMER" -> 10; case "PERIOD" -> 11; case "METRIC" -> 12; default -> 7; };
+        return switch (type)
+        {
+            case "COMPANY" -> 0; case "MODEL" -> 1; case "SALES" -> 2;
+            case "NEWS" -> 3; case "FINANCIAL" -> 4; case "POLICY" -> 5;
+            default -> 0;
+        };
     }
 
-    private int nodeSize(String type) { return "COMPANY".equals(type) ? 42 : ("DOCUMENT".equals(type) ? 26 : 34); }
+    private int nodeSize(String type) { return "COMPANY".equals(type) ? 42 : 34; }
     private String typeLabel(String type) { return switch (type) { case "COMPANY" -> "企业"; case "MODEL" -> "车型";
         case "SALES" -> "销量"; case "NEWS" -> "新闻"; case "FINANCIAL" -> "财报"; case "POLICY" -> "政策";
-        case "REPORT" -> "分析报告"; case "TECHNOLOGY" -> "技术"; case "APPLICATION" -> "应用";
-        case "CUSTOMER" -> "客户"; case "PERIOD" -> "时间"; case "METRIC" -> "指标"; default -> "资料"; }; }
+        default -> "资料"; }; }
     private String relationFor(String type) { return switch (type) { case "MODEL" -> "关联车型"; case "SALES" -> "销量表现";
         case "NEWS" -> "相关新闻"; case "FINANCIAL" -> "披露财报"; case "POLICY" -> "关联政策";
-        case "TECHNOLOGY" -> "采用技术"; case "APPLICATION" -> "关联应用"; case "CUSTOMER" -> "关联客户";
-        case "PERIOD" -> "发生时间"; case "METRIC" -> "关联指标"; default -> "关联"; }; }
+        case "COMPANY" -> "关联企业"; default -> "关联"; }; }
     private String detectPeriod(String text) { Matcher matcher = PERIOD.matcher(text == null ? "" : text); if (!matcher.find()) return "";
         String quarter = matcher.group(2); return matcher.group(1) + (quarter == null ? "" : " " + normalizeQuarter(quarter)); }
     private String normalizeQuarter(String value) { if (value == null) return ""; String q=value.toUpperCase(Locale.ROOT).replace("第", "").replace("季度", "");
@@ -501,6 +527,7 @@ public class KnowledgeGraphService
     private String cleanType(String value) { return value == null ? "" : value.trim().toUpperCase(Locale.ROOT); }
     private List<Long> safeRoles(List<Long> roles) { return roles == null ? List.of() : roles; }
     private String normalize(String value) { return value.toLowerCase(Locale.ROOT).replaceAll("[\\s·._—–-]+", ""); }
+    private String safe(String value) { return value == null ? "" : value; }
     private EvidenceWindow evidenceWindow(String content, String entity)
     {
         if (content == null || content.isEmpty()) return new EvidenceWindow("", 0, 0);

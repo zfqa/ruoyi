@@ -34,7 +34,7 @@ class KnowledgeQaTaskServiceTest
             Map.of("order", 3, "name", "引用核验", "status", "PENDING"));
         when(qaService.previewQueryPlan(anyString(), anyString(), anyBoolean())).thenReturn(plan);
         doAnswer(invocation -> {
-            KnowledgeQaService.QaProgressListener listener = invocation.getArgument(5);
+            KnowledgeQaService.QaProgressListener listener = invocation.getArgument(6);
             listener.onProgress(35, "已完成多源检索", List.of(
                 Map.of("type", "SEARCH", "action", "混合证据检索", "status", "SUCCESS")));
             Thread.sleep(80);
@@ -43,7 +43,7 @@ class KnowledgeQaTaskServiceTest
             result.put("retrievalLogs", List.of(Map.of("type", "VERIFY", "status", "SUCCESS")));
             result.put("citations", List.of()); result.put("graph", Map.of("nodes", List.of(), "links", List.of()));
             return result;
-        }).when(qaService).ask(anyString(), anyString(), anyList(), anyBoolean(), anyBoolean(),
+        }).when(qaService).ask(anyString(), anyString(), anyList(), anyBoolean(), anyBoolean(), anyBoolean(),
             any(KnowledgeQaService.QaProgressListener.class));
 
         ThreadPoolTaskExecutor executor = executor();
@@ -87,7 +87,7 @@ class KnowledgeQaTaskServiceTest
         claim.put("claimText", "天马同比增长20%。"); claim.put("verified", true); claim.put("evidences", List.of(evidence));
         Map<String, Object> answer = new LinkedHashMap<>();
         answer.put("answer", "天马同比增长20%。[S1]"); answer.put("claims", List.of(claim));
-        when(qaService.ask(anyString(), anyString(), anyList(), anyBoolean(), anyBoolean(),
+        when(qaService.ask(anyString(), anyString(), anyList(), anyBoolean(), anyBoolean(), anyBoolean(),
             any(KnowledgeQaService.QaProgressListener.class))).thenReturn(answer);
 
         ThreadPoolTaskExecutor executor = executor();

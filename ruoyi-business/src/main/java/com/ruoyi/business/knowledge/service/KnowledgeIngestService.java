@@ -691,13 +691,8 @@ public class KnowledgeIngestService
                 String metricId = sibling.getMetricId() == null ? "" : sibling.getMetricId().toLowerCase();
                 String content = sibling.getContent() == null ? "" : sibling.getContent();
                 boolean usefulMetric = metricId.equals("market.market_fact_pack")
-                    || metricId.equals("market.all_available_line_charts")
-                    || metricId.equals("market.market_key_insights")
-                    || metricId.contains("fact_pack")
-                    || metricId.contains("line_chart");
-                boolean usefulJson = content.contains("monthly_trend")
-                    || content.contains("\"销量/数值\"")
-                    || content.contains("\"时间\":\"20");
+                    || metricId.contains("fact_pack");
+                boolean usefulJson = content.contains("\"monthly_trend\"");
                 if (!usefulMetric && !usefulJson) continue;
                 useful.add(sibling);
             }
@@ -1066,6 +1061,7 @@ public class KnowledgeIngestService
         {
             if (entry.getValue() == null) continue;
             String section = entry.getKey();
+            if (skipVehicleMarketSection(section)) continue;
             String value = entry.getValue() instanceof String stringValue ? stringValue
                 : JSON.toJSONString(entry.getValue());
             if (value == null || value.isBlank()) continue;
@@ -1074,10 +1070,49 @@ public class KnowledgeIngestService
             JSONObject evidence = new JSONObject(); evidence.put("kind", "MARKET_REPORT");
             evidence.put("report_id", report.getId()); evidence.put("dataset_id", datasetId);
             evidence.put("section", section);
-            count = insertTextChunks(source, version, report.getTaskName() + " / " + section, text, null, null,
-                version.getSourceUrl(), report.getId(), evidence.toJSONString(), "market." + section, count);
+            String metricId = "market." + section;
+            if (keepVehicleMarketSectionWhole(section, value))
+                count = insertAtomicChunk(source, version, report.getTaskName() + " / " + section, text, null, null,
+                    version.getSourceUrl(), report.getId(), evidence.toJSONString(), metricId, count);
+            else
+                count = insertTextChunks(source, version, report.getTaskName() + " / " + section, text, null, null,
+                    version.getSourceUrl(), report.getId(), evidence.toJSONString(), metricId, count);
         }
         return count;
+    }
+
+    /** 溯源 meta 和审计碎片会抢检索，不入库。 */
+    private boolean skipVehicleMarketSection(String section)
+    {
+        String key = section == null ? "" : section.toLowerCase();
+        return "meta".equals(key) || "content_audit".equals(key) || key.endsWith("_meta");
+    }
+
+    /** 销量结论依赖完整 JSON，不能按 1200 字切开。 */
+    private boolean keepVehicleMarketSectionWhole(String section, String value)
+    {
+        String key = section == null ? "" : section.toLowerCase();
+        if ("market_fact_pack".equals(key) || "all_available_line_charts".equals(key)
+            || "line_charts".equals(key) || "rankings".equals(key))
+            return true;
+        return value != null && value.contains("monthly_trend");
+    }
+
+    private int insertAtomicChunk(KnowledgeBase source, KnowledgeVersion version, String title, String text,
+        Integer pageStart, Integer pageEnd, String url, Long reportId, String evidenceJson, String metricId, int number)
+    {
+        String content = normalizeText(text);
+        if (content.isBlank()) return number;
+        KnowledgeChunk chunk = new KnowledgeChunk();
+        chunk.setSourceId(source.getId()); chunk.setVersionId(version.getId()); chunk.setChunkNo(number++);
+        chunk.setTitlePath(title); chunk.setContent(content);
+        chunk.setSourceSnippet(content.substring(0, Math.min(300, content.length())));
+        chunk.setPageStart(pageStart); chunk.setPageEnd(pageEnd); chunk.setSourceUrl(url); chunk.setReportId(reportId);
+        chunk.setMetricId(metricId); chunk.setEvidenceJson(evidenceJson);
+        chunk.setContentSha256(storage.sha256(content)); chunk.setTokenCount(Math.max(1, content.length() / 2));
+        mapper.insertChunk(chunk);
+        if (graphService != null) graphService.indexChunk(source, version, chunk);
+        return number;
     }
 
     private int insertTextChunks(KnowledgeBase source, KnowledgeVersion version, String title, String text,

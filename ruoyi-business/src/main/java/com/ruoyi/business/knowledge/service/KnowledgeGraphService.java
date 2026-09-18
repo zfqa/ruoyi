@@ -79,10 +79,13 @@ public class KnowledgeGraphService
             for (KnowledgeGraphNode target : nodes)
                 if (!target.getId().equals(document.getId()))
                     insertRelation(document, target, "来源提及", source, version, chunk, period);
+        String content = chunk.getContent() == null ? "" : chunk.getContent();
+        boolean singleCompany = companies.size() == 1;
         for (KnowledgeGraphNode company : companies)
             for (KnowledgeGraphNode target : nodes)
                 if (!target.getId().equals(company.getId())
-                    && !Set.of("NEWS", "FINANCIAL", "POLICY").contains(target.getEntityType()))
+                    && !Set.of("NEWS", "FINANCIAL", "POLICY", "COMPANY").contains(target.getEntityType())
+                    && (singleCompany || nearInText(content, companyNames(company), target.getEntityName())))
                     insertRelation(company, target, relationFor(target.getEntityType()), source, version, chunk, period);
         if (companies.isEmpty() && sources.isEmpty())
         {
@@ -121,10 +124,19 @@ public class KnowledgeGraphService
 
     public Map<String, Object> graphForChunks(List<KnowledgeChunk> chunks, List<Long> roleIds, boolean admin)
     {
+        return graphForChunks(chunks, roleIds, admin, List.of());
+    }
+
+    /** 问答图谱：只保留提问点名的车企及其直接关联节点，避免周报一块里多家企业挤在一张图。 */
+    public Map<String, Object> graphForChunks(List<KnowledgeChunk> chunks, List<Long> roleIds, boolean admin,
+        Collection<String> focusTerms)
+    {
         List<Long> ids = chunks == null ? List.of() : chunks.stream().map(KnowledgeChunk::getId)
             .filter(java.util.Objects::nonNull).distinct().toList();
         if (ids.isEmpty()) return emptyGraph(null);
-        return assemble(mapper.selectGraphRelationsByChunkIds(ids, safeRoles(roleIds), admin, 300), null);
+        return focusOnAskedCompanies(
+            assemble(mapper.selectGraphRelationsByChunkIds(ids, safeRoles(roleIds), admin, 300), null),
+            focusTerms);
     }
 
     public Map<String, Object> evidence(Long chunkId, Integer startOffset, Integer endOffset,
@@ -500,6 +512,130 @@ public class KnowledgeGraphService
         Map<String, Object> graph = new LinkedHashMap<>();
         graph.put("nodes", List.of()); graph.put("links", List.of()); graph.put("categories", List.of()); graph.put("centerId", centerId);
         return graph;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> focusOnAskedCompanies(Map<String, Object> graph, Collection<String> focusTerms)
+    {
+        if (graph == null) return emptyGraph(null);
+        Set<String> focus = expandFocusTerms(focusTerms);
+        if (focus.isEmpty()) return graph;
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) graph.getOrDefault("nodes", List.of());
+        List<Map<String, Object>> links = (List<Map<String, Object>>) graph.getOrDefault("links", List.of());
+        Set<String> focusCompanyIds = new LinkedHashSet<>();
+        for (Map<String, Object> node : nodes)
+        {
+            if (!"COMPANY".equals(string(node.get("entityType")))) continue;
+            if (matchesFocusName(string(node.get("name")), focus))
+                focusCompanyIds.add(string(node.get("id")));
+        }
+        if (focusCompanyIds.isEmpty()) return graph;
+        List<Map<String, Object>> keptLinks = new ArrayList<>();
+        Set<String> keptNodeIds = new LinkedHashSet<>(focusCompanyIds);
+        for (Map<String, Object> link : links)
+        {
+            String sourceId = string(link.get("source"));
+            String targetId = string(link.get("target"));
+            if (!focusCompanyIds.contains(sourceId) && !focusCompanyIds.contains(targetId)) continue;
+            keptLinks.add(link);
+            keptNodeIds.add(sourceId);
+            keptNodeIds.add(targetId);
+        }
+        List<Map<String, Object>> keptNodes = nodes.stream()
+            .filter(node -> keptNodeIds.contains(string(node.get("id"))))
+            .filter(node -> !"COMPANY".equals(string(node.get("entityType")))
+                || focusCompanyIds.contains(string(node.get("id"))))
+            .toList();
+        Set<String> finalIds = keptNodes.stream().map(node -> string(node.get("id"))).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        keptLinks = keptLinks.stream()
+            .filter(link -> finalIds.contains(string(link.get("source"))) && finalIds.contains(string(link.get("target"))))
+            .toList();
+        Map<String, Object> focused = new LinkedHashMap<>();
+        focused.put("nodes", keptNodes);
+        focused.put("links", keptLinks);
+        focused.put("categories", categories(keptNodes));
+        focused.put("centerId", graph.get("centerId"));
+        focused.put("focusCompanies", new ArrayList<>(focusCompanyIds));
+        return focused;
+    }
+
+    private Set<String> expandFocusTerms(Collection<String> focusTerms)
+    {
+        Set<String> focus = new LinkedHashSet<>();
+        if (focusTerms == null) return focus;
+        for (String term : focusTerms)
+        {
+            if (term == null || term.isBlank()) continue;
+            focus.add(normalize(term));
+            for (Map.Entry<String, List<String>> entry : COMPANIES.entrySet())
+            {
+                boolean hit = containsIgnoreCase(entry.getKey(), term)
+                    || entry.getValue().stream().anyMatch(alias -> containsIgnoreCase(alias, term)
+                        || containsIgnoreCase(term, alias));
+                if (!hit) continue;
+                focus.add(normalize(entry.getKey()));
+                for (String alias : entry.getValue()) focus.add(normalize(alias));
+            }
+        }
+        return focus;
+    }
+
+    private boolean matchesFocusName(String name, Set<String> focus)
+    {
+        if (name == null || name.isBlank() || focus.isEmpty()) return false;
+        String normalizedName = normalize(name);
+        if (focus.contains(normalizedName)) return true;
+        for (String term : focus)
+            if (!term.isBlank() && (normalizedName.contains(term) || term.contains(normalizedName)))
+                return true;
+        for (Map.Entry<String, List<String>> entry : COMPANIES.entrySet())
+        {
+            boolean nodeHit = containsIgnoreCase(entry.getKey(), name)
+                || entry.getValue().stream().anyMatch(alias -> containsIgnoreCase(name, alias));
+            if (!nodeHit) continue;
+            if (focus.contains(normalize(entry.getKey()))) return true;
+            if (entry.getValue().stream().anyMatch(alias -> focus.contains(normalize(alias)))) return true;
+        }
+        return false;
+    }
+
+    private List<String> companyNames(KnowledgeGraphNode company)
+    {
+        List<String> names = new ArrayList<>();
+        if (company.getEntityName() != null && !company.getEntityName().isBlank())
+            names.add(company.getEntityName());
+        if (company.getAliases() != null)
+            for (String alias : company.getAliases().split("[,，]"))
+                if (alias != null && !alias.isBlank()) names.add(alias.trim());
+        return names;
+    }
+
+    /** 多企业同一切片时，只把车企连到邻近出现的车型/销量，避免一家问销量却牵出全场车企。 */
+    private boolean nearInText(String content, List<String> companyNames, String targetName)
+    {
+        if (content == null || content.isBlank() || targetName == null || targetName.isBlank()) return false;
+        if (companyNames == null || companyNames.isEmpty()) return false;
+        String lower = content.toLowerCase(Locale.ROOT);
+        String target = targetName.toLowerCase(Locale.ROOT);
+        int window = 220;
+        boolean companySeen = false;
+        for (String companyName : companyNames)
+        {
+            if (companyName == null || companyName.isBlank()) continue;
+            String needle = companyName.toLowerCase(Locale.ROOT);
+            int from = 0;
+            while (true)
+            {
+                int index = lower.indexOf(needle, from);
+                if (index < 0) break;
+                companySeen = true;
+                int start = Math.max(0, index - window);
+                int end = Math.min(lower.length(), index + needle.length() + window);
+                if (lower.substring(start, end).contains(target)) return true;
+                from = index + Math.max(1, needle.length());
+            }
+        }
+        return !companySeen;
     }
 
     private int categoryIndex(String type)

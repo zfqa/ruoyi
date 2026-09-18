@@ -496,6 +496,46 @@ class KnowledgeQaServiceIntegrationTest
     }
 
     @Test
+    void conflictingMonthlyTotalsKeepTheSmallerFactPackTotal() throws Exception
+    {
+        KnowledgeIngestService ingest = mock(KnowledgeIngestService.class);
+        StringBuilder months = new StringBuilder();
+        for (int i = 1; i <= 12; i++)
+        {
+            if (i > 1) months.append(',');
+            months.append("{\"时间\":\"2024-").append(String.format("%02d", i)).append("\",\"数值\":100}");
+        }
+        KnowledgeChunk factPack = new KnowledgeChunk();
+        factPack.setId(940L); factPack.setSourceType("REPORT"); factPack.setSourceName("整车市场周报");
+        factPack.setVersionNo("v1"); factPack.setMetricId("market.market_fact_pack");
+        factPack.setContent("比亚迪2024年批发\n{\"monthly_trend\":[" + months + "]}");
+        StringBuilder inflated = new StringBuilder();
+        for (int i = 1; i <= 12; i++)
+        {
+            if (i > 1) inflated.append(',');
+            inflated.append("{\"时间\":\"2024-").append(String.format("%02d", i)).append("\",\"数值\":1000000}");
+        }
+        KnowledgeChunk charts = new KnowledgeChunk();
+        charts.setId(941L); charts.setSourceType("REPORT"); charts.setSourceName("整车市场周报");
+        charts.setVersionNo("v1"); charts.setMetricId("market.all_available_line_charts");
+        charts.setContent("比亚迪2024年\n{\"monthly_trend\":[" + inflated + "]}");
+        when(ingest.searchMetrics(anyString(), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.search(anyString(), eq("REPORT"), anyList(), anyBoolean(), anyInt()))
+            .thenReturn(List.of(factPack, charts));
+        when(ingest.search(anyString(), eq("NEWS"), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.search(anyString(), eq("PDF"), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.expandMetricFragments(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(ingest.expandVehicleSalesReportContext(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        KnowledgeQaService service = new KnowledgeQaService(ingest,
+            new LlmRuntimeConfiguration(apiUrl, "mock-ark", ""));
+        Map<String, Object> result = service.ask("byd2024年年度销量", null, List.of(2L), false, true, false);
+        String answer = String.valueOf(result.get("answer")).replace(",", "");
+        assertTrue(answer.contains("1200"));
+        assertFalse(answer.contains("12000000"));
+    }
+
+    @Test
     void webLlmSupplementsExistingKnowledgeAnswer() throws Exception
     {
         KnowledgeIngestService ingest = mock(KnowledgeIngestService.class);

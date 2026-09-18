@@ -100,6 +100,33 @@ class KnowledgeGraphVisibleTypesTest
         assertTrue(relations.size() >= 5);
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void qaGraphKeepsOnlyAskedCompanyNeighborhood()
+    {
+        KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
+        KnowledgeChunk chunk = new KnowledgeChunk();
+        chunk.setId(1000L);
+        when(mapper.selectGraphRelationsByChunkIds(anyList(), anyList(), anyBoolean(), anyInt()))
+            .thenReturn(List.of(
+                relationRow(1L, 1L, "BYD", "COMPANY", 2L, "海豚", "MODEL", "关联车型"),
+                relationRow(2L, 1L, "BYD", "COMPANY", 3L, "4262629辆", "SALES", "销量表现"),
+                relationRow(3L, 4L, "Tesla", "COMPANY", 5L, "Model Y", "MODEL", "关联车型"),
+                relationRow(4L, 4L, "Tesla", "COMPANY", 6L, "100万辆", "SALES", "销量表现"),
+                relationRow(5L, 7L, "整车新闻", "NEWS", 1L, "BYD", "COMPANY", "来源提及"),
+                relationRow(6L, 7L, "整车新闻", "NEWS", 4L, "Tesla", "COMPANY", "来源提及")));
+
+        Map<String, Object> graph = new KnowledgeGraphService(mapper)
+            .graphForChunks(List.of(chunk), List.of(), true, List.of("BYD", "比亚迪"));
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) graph.get("nodes");
+        Set<String> names = nodes.stream().map(n -> String.valueOf(n.get("name"))).collect(Collectors.toSet());
+        assertTrue(names.contains("BYD"));
+        assertTrue(names.contains("海豚") || names.contains("4262629辆") || names.contains("整车新闻"));
+        assertFalse(names.contains("Tesla"));
+        assertFalse(names.contains("Model Y"));
+        assertFalse(names.contains("100万辆"));
+    }
+
     private Map<String, Object> relationRow(Long relationId, Long fromId, String fromName, String fromType,
         Long toId, String toName, String toType, String relationType)
     {

@@ -204,7 +204,9 @@ public class KnowledgeQaService
             Math.max(validation.getClaims().size(), validation.getCitedIndexes().size()), includeNews, sourceBreakdown));
         result.put("retrievalLogs", logs);
         result.put("analysisTrace", analysisTrace(actualQuestion, chunks, validation, answerMode));
-        result.put("graph", graphService == null ? emptyGraph() : graphService.graphForChunks(citedChunks, roleIds, admin));
+        result.put("graph", graphService == null ? emptyGraph()
+            : graphService.graphForChunks(citedChunks, roleIds, admin,
+                KnowledgeTextProcessor.detectEntityTerms(actualQuestion)));
         if (webLlm)
             appendWebSearchSupplement(actualQuestion, result, logs, progressListener);
         notifyProgress(progressListener, 100, "问答与来源图谱生成完成", logs);
@@ -1122,9 +1124,12 @@ public class KnowledgeQaService
             {
                 int score = scoreSalesSentence(fact, KnowledgeTextProcessor.detectEntityTerms(question), question);
                 if ("REPORT".equals(type) || "PDF".equals(type)) score += 3;
+                String metricId = chunk.getMetricId() == null ? "" : chunk.getMetricId().toLowerCase();
+                if (metricId.contains("fact_pack") && fact.contains("月度") && fact.contains("合计")) score += 40;
                 scored.add(new ScoredFact(score, fact + " [S" + (i + 1) + "]"));
             }
         }
+        scored = keepOneMonthlyTotalPerYear(scored);
         scored.sort((a, b) -> Integer.compare(b.score(), a.score()));
         List<String> lines = new ArrayList<>();
         for (ScoredFact item : scored)
@@ -1196,14 +1201,15 @@ public class KnowledgeQaService
             }
         }
         Matcher ranking = MARKET_RANK_PATTERN.matcher(content);
-        while (ranking.find())
+        boolean annual = asksAnnualTotal(question);
+        while (!annual && ranking.find())
         {
             String name = ranking.group(1);
             String amount = ranking.group(2);
             if (!entities.stream().anyMatch(term -> name.toLowerCase().contains(term.toLowerCase()))) continue;
             String period = nearestPeriodLabel(content, ranking.start());
-            String fact = (period.isBlank() ? "" : period)
-                + name + "销量为" + formatVehicleUnits(amount) + "。";
+            if (period.isBlank()) continue;
+            String fact = period + name + "销量为" + formatVehicleUnits(amount) + "。";
             scored.add(new ScoredFact(scoreSalesSentence(fact, entities, question) + 4, fact));
         }
         appendMonthlyYearTotals(scored, content, brandScope, question, entities);
@@ -1220,31 +1226,17 @@ public class KnowledgeQaService
         return facts;
     }
 
-    /** 周报 fact pack / 折线 JSON 里的月度序列可以按提问年份相加，不能只拿最新单月排名当全年。 */
+    /** 只加总 monthly_trend，避免把多车型折线里的时间/数值误加成年合计。 */
     private void appendMonthlyYearTotals(List<ScoredFact> scored, String content, String brandHaystack,
         String question, List<String> entities)
     {
         if (!entities.stream().anyMatch(term -> brandHaystack.toLowerCase().contains(term.toLowerCase()))) return;
+        String trend = monthlyTrendArray(content);
+        if (trend.isBlank()) return;
         Map<String, Double> byMonth = new LinkedHashMap<>();
-        Matcher brandedSeries = Pattern.compile(
-            "(?is)\"(?:name|对象|title)\"\\s*:\\s*\"([^\"]{1,80})\"\\s*,\\s*\"points\"\\s*:\\s*\\[(.*?)]")
-            .matcher(content);
-        boolean matchedSeries = false;
-        while (brandedSeries.find())
-        {
-            String name = brandedSeries.group(1);
-            if (!entities.stream().anyMatch(term -> name.toLowerCase().contains(term.toLowerCase()))) continue;
-            matchedSeries = true;
-            Matcher points = TREND_POINT_PATTERN.matcher(brandedSeries.group(2));
-            while (points.find())
-                byMonth.put(points.group(1) + "-" + points.group(2), Double.parseDouble(points.group(3)));
-        }
-        if (!matchedSeries)
-        {
-            Matcher points = TREND_POINT_PATTERN.matcher(content);
-            while (points.find())
-                byMonth.put(points.group(1) + "-" + points.group(2), Double.parseDouble(points.group(3)));
-        }
+        Matcher points = TREND_POINT_PATTERN.matcher(trend);
+        while (points.find())
+            byMonth.put(points.group(1) + "-" + points.group(2), Double.parseDouble(points.group(3)));
         if (byMonth.size() < 2) return;
         Map<String, double[]> byYear = new LinkedHashMap<>();
         for (Map.Entry<String, Double> entry : byMonth.entrySet())
@@ -1270,6 +1262,85 @@ public class KnowledgeQaService
                 + "，由整车市场周报月度数据相加，不是另行发布的年报口径。";
             scored.add(new ScoredFact(scoreSalesSentence(fact, entities, question) + 30, fact));
         }
+    }
+
+    private String monthlyTrendArray(String content)
+    {
+        if (content == null) return "";
+        int key = content.indexOf("\"monthly_trend\"");
+        if (key < 0) return "";
+        int start = content.indexOf('[', key);
+        if (start < 0) return "";
+        int depth = 0;
+        for (int i = start; i < content.length(); i++)
+        {
+            char ch = content.charAt(i);
+            if (ch == '[') depth++;
+            else if (ch == ']')
+            {
+                depth--;
+                if (depth == 0) return content.substring(start, i + 1);
+            }
+        }
+        return "";
+    }
+
+    private boolean asksAnnualTotal(String question)
+    {
+        String value = question == null ? "" : question;
+        return value.contains("全年") || value.contains("年度") || value.contains("年销量") || value.contains("年批发");
+    }
+
+    /** 同一年只留一条月度合计；量级差超过一倍时丢掉偏大的那条。 */
+    private List<ScoredFact> keepOneMonthlyTotalPerYear(List<ScoredFact> scored)
+    {
+        Map<String, ScoredFact> chosen = new LinkedHashMap<>();
+        List<ScoredFact> others = new ArrayList<>();
+        for (ScoredFact item : scored)
+        {
+            String line = item.line();
+            if (!line.contains("月度") || !line.contains("合计"))
+            {
+                others.add(item);
+                continue;
+            }
+            Matcher year = YEAR_PATTERN.matcher(line);
+            if (!year.find())
+            {
+                others.add(item);
+                continue;
+            }
+            String key = year.group(1);
+            ScoredFact current = chosen.get(key);
+            if (current == null) chosen.put(key, item);
+            else chosen.put(key, preferMonthlyTotal(current, item));
+        }
+        List<ScoredFact> result = new ArrayList<>(others);
+        result.addAll(chosen.values());
+        return result;
+    }
+
+    private ScoredFact preferMonthlyTotal(ScoredFact left, ScoredFact right)
+    {
+        double leftValue = firstNumber(left.line());
+        double rightValue = firstNumber(right.line());
+        if (leftValue > 0 && rightValue > 0)
+        {
+            if (leftValue > rightValue * 2) return right;
+            if (rightValue > leftValue * 2) return left;
+        }
+        return left.score() >= right.score() ? left : right;
+    }
+
+    private double firstNumber(String text)
+    {
+        Matcher matcher = Pattern.compile("([0-9][0-9,]*(?:\\.[0-9]+)?)").matcher(text == null ? "" : text);
+        while (matcher.find())
+        {
+            try { return Double.parseDouble(matcher.group(1).replace(",", "")); }
+            catch (NumberFormatException ignored) { }
+        }
+        return 0;
     }
 
     private String nearestPeriodLabel(String content, int around)

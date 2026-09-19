@@ -8,8 +8,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import com.alibaba.fastjson2.JSONArray;
@@ -759,13 +762,24 @@ public class KnowledgeQaService
             context.append(" / ").append(chunk.getVersionNo());
             if (chunk.getPageStart() != null) context.append(" / PDF第").append(chunk.getPageStart()).append("页");
             if (chunk.getMetricId() != null && !chunk.getMetricId().isBlank()) context.append(" / 指标").append(chunk.getMetricId());
-            context.append('\n').append(readableEvidenceContent(question, chunk)).append("\n\n");
+            String evidence = readableEvidenceContent(question, chunk);
+            context.append('\n').append(evidence);
+            String raw = safe(chunk.getContent());
+            if (!raw.isBlank() && !raw.equals(evidence))
+            {
+                String sourceNumbers = raw.length() > 12000 ? raw.substring(0, 12000) : raw;
+                context.append("\n可计算的原始数据：\n").append(sourceNumbers);
+            }
+            context.append("\n\n");
         }
         JSONArray messages = new JSONArray();
         messages.add(message("system", "你是汽车行业市场洞察分析助手。回答必须严格基于用户提供的资料。"
             + "用自然语言直接回答，先给结论，再补充关键数据和必要限定，语气接近市面常见分析助手。"
             + "不要使用“数据结论”“外部解释”“新闻与政策解释证据”“以下为通过引用校验的知识库确定性结果”这类固定标题或模板。"
-            + "销量、市占率、同比等数值只能引用分析结果或固定资料中的数字，不得用新闻或政策估算、替换或修正。"
+            + "知识库资料里已经有的数字，必须按问题要求计算后再回答。包括加总、差额、平均值、占比、同比、环比、排序，不限于月度销量。"
+            + "不要因为资料没有写好“合计”“全年”“占比”这几个字就拒绝计算。"
+            + "计算用到的每一个输入数字都必须来自知识库资料，不能补造缺失项，也不能用新闻或政策替换、修正这些数字。"
+            + "回答时说明结果是根据引用资料计算的；若计算所需的关键数字确实不在资料中，再说明缺什么，不要编造。"
             + "车载显示面板出货指标的thousand_units必须表述为“千片”或“Kpcs”，禁止写成“千台”。"
             + "新闻和政策只能作为可能背景，表述为“可能有关”，不要写成确定因果。"
             + "资料不足时直接说明缺什么，不要编造。可选用 [S1] 标注关键数字来源，但不是必须。"
@@ -1102,9 +1116,11 @@ public class KnowledgeQaService
 
     private String readableEvidenceContent(String question, KnowledgeChunk chunk)
     {
-        if (!requiresNamedSalesEvidence(question)) return safe(chunk.getContent());
         List<String> facts = extractVehicleSalesFacts(chunk, question);
-        if (!facts.isEmpty()) return String.join("\n", facts);
+        boolean computedTotal = facts.stream().anyMatch(fact -> fact.contains("合计"));
+        if (!facts.isEmpty() && (requiresNamedSalesEvidence(question) || computedTotal))
+            return String.join("\n", facts);
+        if (!requiresNamedSalesEvidence(question)) return safe(chunk.getContent());
         if (isProvenanceOnlyMarketJson(chunk.getContent()))
             return "（该切片为整车分析溯源元数据，未解析出与问题主体匹配的可读销量结论）";
         if (looksLikeJsonNoise(chunk.getContent()) && !hasUsableMarketSalesJson(chunk.getContent()))
@@ -1123,22 +1139,31 @@ public class KnowledgeQaService
             for (String fact : extractVehicleSalesFacts(chunk, question))
             {
                 int score = scoreSalesSentence(fact, KnowledgeTextProcessor.detectEntityTerms(question), question);
+                if (score <= 0) score = scoreSubjectFact(fact, question);
                 if ("REPORT".equals(type) || "PDF".equals(type)) score += 3;
                 String metricId = chunk.getMetricId() == null ? "" : chunk.getMetricId().toLowerCase();
                 if (metricId.contains("fact_pack") && fact.contains("月度") && fact.contains("合计")) score += 40;
+                if (asksModelLevelSales(question) && fact.contains("车型") && fact.contains("排名")) score += 20;
                 scored.add(new ScoredFact(score, fact + " [S" + (i + 1) + "]"));
             }
         }
         scored = keepOneMonthlyTotalPerYear(scored);
         scored.sort((a, b) -> Integer.compare(b.score(), a.score()));
+        boolean modelLevel = asksModelLevelSales(question);
+        List<String> subjects = questionSubjects(question);
+        boolean hasSubjectTotal = scored.stream().anyMatch(item -> item.line().contains("合计")
+            && subjects.stream().anyMatch(subject -> item.line().contains(subject)));
         List<String> lines = new ArrayList<>();
         for (ScoredFact item : scored)
         {
             if (item.score() <= 0) continue;
+            if (modelLevel && item.line().contains("月度") && item.line().contains("合计") && !hasSubjectTotal) continue;
+            if (hasSubjectTotal && item.line().contains("合计")
+                && subjects.stream().noneMatch(subject -> item.line().contains(subject))) continue;
             boolean duplicate = lines.stream().anyMatch(existing -> normalizeFactKey(existing).equals(normalizeFactKey(item.line())));
             if (duplicate) continue;
             lines.add(item.line());
-            if (lines.size() >= 5) break;
+            if (lines.size() >= (modelLevel ? 10 : 5)) break;
         }
         return lines;
     }
@@ -1182,7 +1207,8 @@ public class KnowledgeQaService
     {
         if (content == null || content.isBlank()) return List.of();
         List<String> entities = KnowledgeTextProcessor.detectEntityTerms(question);
-        if (entities.isEmpty()) return List.of();
+        List<String> subjects = questionSubjects(question);
+        if (entities.isEmpty() && subjects.isEmpty()) return List.of();
         String brandScope = brandHaystack == null || brandHaystack.isBlank() ? content : brandHaystack;
         List<ScoredFact> scored = new ArrayList<>();
         for (String prose : content.replace("\r", "").split("[\\n。！？!?]"))
@@ -1200,30 +1226,174 @@ public class KnowledgeQaService
                 scored.add(new ScoredFact(score, fact));
             }
         }
-        Matcher ranking = MARKET_RANK_PATTERN.matcher(content);
-        boolean annual = asksAnnualTotal(question);
-        while (!annual && ranking.find())
+        boolean modelLevel = asksModelLevelSales(question);
+        boolean matchedSeries = appendMatchedSeriesYearTotals(scored, content, question, entities);
+        if (modelLevel)
+            appendModelRankingFacts(scored, content, brandScope, question, entities);
+        else
         {
-            String name = ranking.group(1);
-            String amount = ranking.group(2);
-            if (!entities.stream().anyMatch(term -> name.toLowerCase().contains(term.toLowerCase()))) continue;
-            String period = nearestPeriodLabel(content, ranking.start());
-            if (period.isBlank()) continue;
-            String fact = period + name + "销量为" + formatVehicleUnits(amount) + "。";
-            scored.add(new ScoredFact(scoreSalesSentence(fact, entities, question) + 4, fact));
+            Matcher ranking = MARKET_RANK_PATTERN.matcher(content);
+            boolean annual = asksAnnualTotal(question);
+            while (!annual && ranking.find())
+            {
+                String name = ranking.group(1);
+                String amount = ranking.group(2);
+                if (!entities.stream().anyMatch(term -> name.toLowerCase().contains(term.toLowerCase()))) continue;
+                String period = nearestPeriodLabel(content, ranking.start());
+                if (period.isBlank()) continue;
+                String fact = period + name + "销量为" + formatVehicleUnits(amount) + "。";
+                scored.add(new ScoredFact(scoreSalesSentence(fact, entities, question) + 4, fact));
+            }
+            if (!matchedSeries)
+                appendMonthlyYearTotals(scored, content, brandScope, question, entities);
         }
-        appendMonthlyYearTotals(scored, content, brandScope, question, entities);
         scored.sort((a, b) -> Integer.compare(b.score(), a.score()));
         List<String> facts = new ArrayList<>();
+        int cap = modelLevel ? 10 : 4;
         for (ScoredFact item : scored)
         {
             if (item.score() <= 0) continue;
             boolean duplicate = facts.stream().anyMatch(existing -> normalizeFactKey(existing).equals(normalizeFactKey(item.line())));
             if (duplicate) continue;
             facts.add(item.line());
-            if (facts.size() >= 4) break;
+            if (facts.size() >= cap) break;
         }
         return facts;
+    }
+
+    /** 问题点名的车型/对象若自带月度序列，按年加总。不限于海鸥，也不再用车企总趋势冒充。 */
+    private boolean appendMatchedSeriesYearTotals(List<ScoredFact> scored, String content, String question,
+        List<String> entities)
+    {
+        List<String> subjects = questionSubjects(question);
+        if (content == null || subjects.isEmpty()) return false;
+        boolean added = false;
+        Matcher names = Pattern.compile("\"(?:name|title)\"\\s*:\\s*\"([^\"]{2,40})\"").matcher(content);
+        Set<String> seen = new LinkedHashSet<>();
+        while (names.find())
+        {
+            String name = names.group(1).trim();
+            if (!seriesNameMatches(name, subjects)) continue;
+            if (!seen.add(name.toLowerCase(Locale.ROOT))) continue;
+            String points = pointsArrayNear(content, names.end());
+            if (points.isBlank()) continue;
+            if (addSeriesYearTotal(scored, points, name, content, question, entities)) added = true;
+        }
+        return added;
+    }
+
+    private boolean addSeriesYearTotal(List<ScoredFact> scored, String points, String name, String content,
+        String question, List<String> entities)
+    {
+        Map<String, Double> byMonth = new LinkedHashMap<>();
+        collectTrendPoints(byMonth, points);
+        if (byMonth.size() < 2) return false;
+        Map<String, double[]> byYear = new LinkedHashMap<>();
+        for (Map.Entry<String, Double> entry : byMonth.entrySet())
+        {
+            String year = entry.getKey().substring(0, 4);
+            double[] bucket = byYear.computeIfAbsent(year, ignored -> new double[2]);
+            bucket[0] += entry.getValue();
+            bucket[1] += 1;
+        }
+        String metric = content.contains("批发") ? "批发销量" : "销量";
+        String brand = entities == null || entities.isEmpty() ? "" : entities.get(0);
+        List<String> asked = yearsIn(question);
+        List<String> years = asked.isEmpty() ? new ArrayList<>(byYear.keySet()) : asked;
+        boolean added = false;
+        for (String year : years)
+        {
+            double[] bucket = byYear.get(year);
+            if (bucket == null || bucket[1] < 2) continue;
+            int months = (int) bucket[1];
+            String scope = months >= 12 ? year + "年1-12月" : year + "年已有" + months + "个月";
+            String fact = brand + name + scope + "月度" + metric + "合计为" + formatVehicleUnits(String.valueOf(bucket[0]))
+                + "，由该对象的月度数据相加，不是另行发布的年报口径。";
+            int score = scoreSalesSentence(fact, entities, question);
+            if (score <= 0) score = scoreSubjectFact(fact, question);
+            if (score <= 0) continue;
+            scored.add(new ScoredFact(score + 55, fact));
+            added = true;
+        }
+        return added;
+    }
+
+    private void collectTrendPoints(Map<String, Double> byMonth, String text)
+    {
+        Matcher points = TREND_POINT_PATTERN.matcher(text);
+        while (points.find())
+            byMonth.put(points.group(1) + "-" + points.group(2), Double.parseDouble(points.group(3)));
+        Matcher alt = Pattern.compile(
+            "\"period\"\\s*:\\s*\"(20\\d{2})-(\\d{2})\"\\s*,\\s*\"value\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
+            .matcher(text);
+        while (alt.find())
+            byMonth.putIfAbsent(alt.group(1) + "-" + alt.group(2), Double.parseDouble(alt.group(3)));
+    }
+
+    private String pointsArrayNear(String content, int from)
+    {
+        int key = content.indexOf("\"points\"", from);
+        if (key < 0 || key - from > 240) return "";
+        int start = content.indexOf('[', key);
+        if (start < 0) return "";
+        int depth = 0;
+        for (int i = start; i < content.length(); i++)
+        {
+            char ch = content.charAt(i);
+            if (ch == '[') depth++;
+            else if (ch == ']')
+            {
+                depth--;
+                if (depth == 0) return content.substring(start, i + 1);
+            }
+        }
+        return "";
+    }
+
+    private static final Set<String> SUBJECT_STOP = Set.of(
+        "销量", "销售", "全年", "年度", "年销量", "年批发", "各个", "车型", "多少", "什么", "数据",
+        "月度", "合计", "批发", "零售", "汽车", "市场", "排名", "报告", "知识", "请问", "一下");
+
+    /** 问题里点名的具体对象，不含车企品牌和“销量/全年”这类词。 */
+    private List<String> questionSubjects(String question)
+    {
+        List<String> subjects = new ArrayList<>();
+        if (question == null) return subjects;
+        Set<String> brands = new LinkedHashSet<>();
+        for (String term : KnowledgeTextProcessor.detectEntityTerms(question))
+            brands.add(term.toLowerCase(Locale.ROOT));
+        Matcher matcher = Pattern.compile("[\\u4e00-\\u9fa5A-Za-z0-9+＋]{2,}").matcher(question);
+        while (matcher.find())
+        {
+            String token = matcher.group();
+            if (token.matches("20\\d{2}") || SUBJECT_STOP.contains(token)) continue;
+            if (brands.contains(token.toLowerCase(Locale.ROOT))) continue;
+            if (!subjects.contains(token)) subjects.add(token);
+        }
+        return subjects;
+    }
+
+    private boolean seriesNameMatches(String name, List<String> subjects)
+    {
+        if (name == null) return false;
+        String normalized = name.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        if (normalized.length() < 2 || SUBJECT_STOP.contains(name) || "销量/数值".equals(name)) return false;
+        for (String subject : subjects)
+        {
+            String needle = subject.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+            if (needle.length() < 2) continue;
+            if (normalized.equals(needle) || normalized.contains(needle) || needle.contains(normalized)) return true;
+        }
+        return false;
+    }
+
+    private int scoreSubjectFact(String fact, String question)
+    {
+        if (fact == null || !fact.contains("合计") || !fact.contains("销量")) return 0;
+        if (questionSubjects(question).stream().noneMatch(fact::contains)) return 0;
+        List<String> years = yearsIn(question);
+        if (!years.isEmpty() && years.stream().noneMatch(fact::contains)) return 0;
+        return 36;
     }
 
     /** 只加总 monthly_trend，避免把多车型折线里的时间/数值误加成年合计。 */
@@ -1289,6 +1459,84 @@ public class KnowledgeQaService
     {
         String value = question == null ? "" : question;
         return value.contains("全年") || value.contains("年度") || value.contains("年销量") || value.contains("年批发");
+    }
+
+    /** 问各车型销量时，要用排名行，不能把车企 monthly_trend 合计当成答案。 */
+    private boolean asksModelLevelSales(String question)
+    {
+        String value = question == null ? "" : question;
+        return value.contains("车型") || value.contains("各车") || value.contains("各个");
+    }
+
+    private void appendModelRankingFacts(List<ScoredFact> scored, String content, String brandHaystack,
+        String question, List<String> entities)
+    {
+        if (!entities.stream().anyMatch(term -> brandHaystack.toLowerCase().contains(term.toLowerCase()))) return;
+        String slice = modelRankingSlice(content, brandHaystack);
+        if (slice.isBlank()) return;
+        String period = reportPeriodLabel(content);
+        if (period.isBlank()) period = nearestPeriodLabel(content, Math.max(0, content.indexOf("\"对象\"")));
+        String subject = entities.stream()
+            .filter(term -> brandHaystack.toLowerCase().contains(term.toLowerCase()))
+            .findFirst().orElse(entities.get(0));
+        Matcher ranking = MARKET_RANK_PATTERN.matcher(slice);
+        int added = 0;
+        while (ranking.find() && added < 10)
+        {
+            String name = ranking.group(1);
+            if (entities.stream().anyMatch(term -> name.toLowerCase().contains(term.toLowerCase())
+                && name.length() <= term.length() + 2))
+                continue;
+            String fact = (period.isBlank() ? "" : period)
+                + subject + "车型" + name + "销量为" + formatVehicleUnits(ranking.group(2))
+                + "。该数字来自整车市场周报车型排名，对应报告分析期，不是各车型全年逐月加总。";
+            int score = scoreSalesSentence(fact, entities, question);
+            if (score <= 0) continue;
+            scored.add(new ScoredFact(score + 25, fact));
+            added++;
+        }
+    }
+
+    private String modelRankingSlice(String content, String brandHaystack)
+    {
+        String hay = (content == null ? "" : content) + " " + (brandHaystack == null ? "" : brandHaystack);
+        String lower = hay.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("top_model") || lower.contains("full_model")) return content == null ? "" : content;
+        String rankings = sliceBalanced(content, "rankings", '{', '}');
+        if (rankings.isBlank()) return "";
+        String model = sliceBalanced(rankings, "model", '{', '}');
+        return model.isBlank() ? sliceBalanced(rankings, "model", '[', ']') : model;
+    }
+
+    private String reportPeriodLabel(String content)
+    {
+        if (content == null) return "";
+        Matcher display = Pattern.compile("\"display_label\"\\s*:\\s*\"([^\"]{2,40})\"").matcher(content);
+        if (display.find()) return display.group(1);
+        Matcher latest = Pattern.compile("\"latest_period\"\\s*:\\s*\"(20\\d{2})-(\\d{2})\"").matcher(content);
+        if (latest.find()) return latest.group(1) + "年" + Integer.parseInt(latest.group(2)) + "月";
+        return "";
+    }
+
+    private String sliceBalanced(String content, String key, char open, char close)
+    {
+        if (content == null || key == null) return "";
+        int marker = content.indexOf("\"" + key + "\"");
+        if (marker < 0) return "";
+        int start = content.indexOf(open, marker);
+        if (start < 0) return "";
+        int depth = 0;
+        for (int i = start; i < content.length(); i++)
+        {
+            char ch = content.charAt(i);
+            if (ch == open) depth++;
+            else if (ch == close)
+            {
+                depth--;
+                if (depth == 0) return content.substring(start, i + 1);
+            }
+        }
+        return "";
     }
 
     /** 同一年只留一条月度合计；量级差超过一倍时丢掉偏大的那条。 */

@@ -691,8 +691,12 @@ public class KnowledgeIngestService
                 String metricId = sibling.getMetricId() == null ? "" : sibling.getMetricId().toLowerCase();
                 String content = sibling.getContent() == null ? "" : sibling.getContent();
                 boolean usefulMetric = metricId.equals("market.market_fact_pack")
-                    || metricId.contains("fact_pack");
-                boolean usefulJson = content.contains("\"monthly_trend\"");
+                    || metricId.contains("fact_pack")
+                    || metricId.equals("market.top_model")
+                    || metricId.equals("market.full_model")
+                    || metricId.contains("line_chart");
+                boolean usefulJson = content.contains("\"monthly_trend\"")
+                    || (content.contains("\"对象\"") && content.contains("销量/数值"));
                 if (!usefulMetric && !usefulJson) continue;
                 useful.add(sibling);
             }

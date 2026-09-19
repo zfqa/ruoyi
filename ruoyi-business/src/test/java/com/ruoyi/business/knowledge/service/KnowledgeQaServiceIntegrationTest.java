@@ -496,6 +496,87 @@ class KnowledgeQaServiceIntegrationTest
     }
 
     @Test
+    void bydModelSalesUsesRankingRowsNotOemAnnualTotal() throws Exception
+    {
+        KnowledgeIngestService ingest = mock(KnowledgeIngestService.class);
+        KnowledgeChunk factPack = new KnowledgeChunk();
+        factPack.setId(950L); factPack.setSourceType("REPORT");
+        factPack.setSourceName("整车市场周报 - 比亚迪"); factPack.setVersionNo("v1");
+        factPack.setMetricId("market.market_fact_pack");
+        factPack.setContent("报告任务：整车市场周报\n章节：market_fact_pack\n内容：\n"
+            + "{\"display_label\":\"2024年12月\",\"latest_period\":\"2024-12\","
+            + "\"rankings\":{\"oem\":{\"top10\":[{\"对象\":\"比亚迪汽车\",\"销量/数值\":514809}]},"
+            + "\"model\":{\"top10\":["
+            + "{\"对象\":\"秦PLUS\",\"销量/数值\":120000},"
+            + "{\"对象\":\"海鸥\",\"销量/数值\":98000}]}},"
+            + "\"monthly_trend\":["
+            + "{\"时间\":\"2024-01\",\"数值\":100},{\"时间\":\"2024-02\",\"数值\":200},"
+            + "{\"时间\":\"2024-03\",\"数值\":300},{\"时间\":\"2024-04\",\"数值\":400},"
+            + "{\"时间\":\"2024-05\",\"数值\":500},{\"时间\":\"2024-06\",\"数值\":600},"
+            + "{\"时间\":\"2024-07\",\"数值\":700},{\"时间\":\"2024-08\",\"数值\":800},"
+            + "{\"时间\":\"2024-09\",\"数值\":900},{\"时间\":\"2024-10\",\"数值\":1000},"
+            + "{\"时间\":\"2024-11\",\"数值\":1100},{\"时间\":\"2024-12\",\"数值\":1200}]}");
+        when(ingest.searchMetrics(anyString(), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.search(anyString(), eq("REPORT"), anyList(), anyBoolean(), anyInt())).thenReturn(List.of(factPack));
+        when(ingest.search(anyString(), eq("NEWS"), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.search(anyString(), eq("PDF"), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.expandMetricFragments(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(ingest.expandVehicleSalesReportContext(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        KnowledgeQaService service = new KnowledgeQaService(ingest,
+            new LlmRuntimeConfiguration(apiUrl, "mock-ark", ""));
+        Map<String, Object> result = service.ask("各个byd车型在2024年销量", null, List.of(2L), false, true, false);
+        String answer = String.valueOf(result.get("answer")).replace(",", "");
+        assertNotEquals("WEB_SEARCH", result.get("answerMode"));
+        assertTrue(answer.contains("秦PLUS"));
+        assertTrue(answer.contains("海鸥"));
+        assertTrue(answer.contains("120000") && answer.contains("98000"));
+        assertFalse(answer.contains("月度") && answer.contains("合计"));
+    }
+
+    @Test
+    void namedModelAnnualSalesSumsThatSeriesNotOemTrend() throws Exception
+    {
+        KnowledgeIngestService ingest = mock(KnowledgeIngestService.class);
+        StringBuilder modelMonths = new StringBuilder();
+        StringBuilder oemMonths = new StringBuilder();
+        for (int i = 1; i <= 12; i++)
+        {
+            if (i > 1)
+            {
+                modelMonths.append(',');
+                oemMonths.append(',');
+            }
+            String month = String.format("%02d", i);
+            modelMonths.append("{\"时间\":\"2024-").append(month).append("\",\"数值\":100}");
+            oemMonths.append("{\"时间\":\"2024-").append(month).append("\",\"数值\":500}");
+        }
+        KnowledgeChunk charts = new KnowledgeChunk();
+        charts.setId(960L); charts.setSourceType("REPORT");
+        charts.setSourceName("整车市场周报 - 比亚迪"); charts.setVersionNo("v1");
+        charts.setMetricId("market.all_available_line_charts");
+        charts.setContent("{\"series\":[{\"name\":\"海鸥\",\"points\":[" + modelMonths + "]},"
+            + "{\"name\":\"秦PLUS\",\"points\":[{\"时间\":\"2024-01\",\"数值\":9},{\"时间\":\"2024-02\",\"数值\":9}]}]},"
+            + "{\"monthly_trend\":[" + oemMonths + "]}");
+        when(ingest.searchMetrics(anyString(), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.search(anyString(), eq("REPORT"), anyList(), anyBoolean(), anyInt())).thenReturn(List.of(charts));
+        when(ingest.search(anyString(), eq("NEWS"), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.search(anyString(), eq("PDF"), anyList(), anyBoolean(), anyInt())).thenReturn(List.of());
+        when(ingest.expandMetricFragments(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(ingest.expandVehicleSalesReportContext(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        KnowledgeQaService service = new KnowledgeQaService(ingest,
+            new LlmRuntimeConfiguration(apiUrl, "mock-ark", ""));
+        Map<String, Object> result = service.ask("比亚迪海鸥2024年全年销量", null, List.of(2L), false, true, false);
+        String answer = String.valueOf(result.get("answer")).replace(",", "");
+        assertNotEquals("WEB_SEARCH", result.get("answerMode"));
+        assertTrue(answer.contains("海鸥"));
+        assertTrue(answer.contains("1200"));
+        assertFalse(answer.contains("6000"));
+        assertFalse(answer.contains("不能加总") || answer.contains("没有累计"));
+    }
+
+    @Test
     void conflictingMonthlyTotalsKeepTheSmallerFactPackTotal() throws Exception
     {
         KnowledgeIngestService ingest = mock(KnowledgeIngestService.class);

@@ -32,6 +32,8 @@ class PdfTableProvenanceTest(unittest.TestCase):
         self.assertEqual(7, table_chunk.source.page_start)
         self.assertEqual("厂商 2024 2025\nTianma 100 120", table_chunk.source.source_text)
         self.assertIn("Tianma", table_chunk.content)
+        self.assertIn("行: Tianma | 列: 2025 | 值: 120", table_chunk.content)
+        self.assertNotIn("column_1", table_chunk.content)
 
 
 if __name__ == "__main__":

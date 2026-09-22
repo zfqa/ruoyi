@@ -134,6 +134,24 @@ def latest_omdia_data_through(
     return latest
 
 
+def workbook_overlay_rank(file_name: str | None) -> tuple[int, int, int]:
+    """Sort key for History / Supply overlay: older publications first, newest last.
+
+    Same roles as the original three-file setup:
+    - current / newer tracker replaces overlapping Year+Quarter
+    - older tracker only fills periods the newer file does not have
+    Missing Omdia tags sort first so unlabeled extras never override tagged ones.
+    """
+    meta = parse_omdia_tracker_meta(file_name)
+    if not meta:
+        return (0, 0, 0)
+    return (
+        int(meta["publication_year"]),
+        int(meta["publication_quarter"]),
+        int(meta["data_through_year"]) * 10 + int(meta["data_through_quarter"]),
+    )
+
+
 def report_horizon_from_data_through(year: int, quarter: int) -> dict[str, Any]:
     """Map data-through quarter to report framing (前三季度 / 全年 / 截至Qn)."""
     year_i, quarter_i = int(year), int(quarter)

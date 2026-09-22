@@ -197,6 +197,17 @@ business:
     llm:
       # 知识问答超时；接口/模型/Key 一律走 business.llm 统一配置
       timeout-seconds: ${KNOWLEDGE_LLM_TIMEOUT_SECONDS:300}
+    retrieval:
+      # 唯一知识库先宽召回，再在得分最高的几份资料内补查。不启用向量库。
+      keyword-top-k: ${KNOWLEDGE_KEYWORD_TOP_K:20}
+      candidate-document-top-k: ${KNOWLEDGE_CANDIDATE_DOCUMENT_TOP_K:5}
+      # 召回候选数（先扩后筛）；送给模型的核心切片另有上限
+      pdf-candidate-limit: ${KNOWLEDGE_PDF_CANDIDATE_LIMIT:20}
+      report-candidate-limit: ${KNOWLEDGE_REPORT_CANDIDATE_LIMIT:8}
+      news-candidate-limit: ${KNOWLEDGE_NEWS_CANDIDATE_LIMIT:5}
+      policy-candidate-limit: ${KNOWLEDGE_POLICY_CANDIDATE_LIMIT:5}
+      model-context-limit: ${KNOWLEDGE_MODEL_CONTEXT_LIMIT:10}
+      adjacent-chunk-radius: ${KNOWLEDGE_ADJACENT_CHUNK_RADIUS:1}
   excel:
     # 车载市场分析沿用受限后台任务，避免解析占用Tomcat请求线程
     parse-timeout-minutes: 30

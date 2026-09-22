@@ -265,6 +265,31 @@ class CompetitiveInsightReportTest(unittest.TestCase):
         self.assertEqual(600, metrics["market"]["values"]["2025"])
         self.assertEqual(0.2, metrics["makers"]["Tianma"]["shipment"]["market_share"]["2025"])
 
+    def test_market_total_includes_oxide_while_maker_shipment_excludes_it(self):
+        def record(year, maker, quantity, technology):
+            values = {
+                "year": year, "quarter": "Q1", "maker": maker,
+                "quantity_000": quantity, "technology": technology,
+                "original_specification": "Automobile monitor", "application": "Control panel",
+            }
+            return {name: {"value": value, "source_cell": f"A{index + 1}", "source_sheet": "Shipment"}
+                    for index, (name, value) in enumerate(values.items())}
+
+        metrics = calculate_competitive_metrics([{
+            "sheet": "Shipment",
+            "records": [
+                record(2024, "Tianma", 100, "LTPS"),
+                record(2024, "BOE", 10, "Oxide TFT LCD"),
+                record(2025, "Tianma", 120, "a-Si"),
+                record(2025, "Tianma", 30, "Oxide"),
+                record(2025, "BOE", 999, "AMOLED"),
+            ],
+        }])
+
+        self.assertEqual(150, metrics["market"]["values"]["2025"])
+        self.assertEqual(120, metrics["makers"]["Tianma"]["shipment"]["values"]["2025"])
+        self.assertEqual(0.8, metrics["makers"]["Tianma"]["shipment"]["market_share"]["2025"])
+
     def test_summary_matrix_uses_the_report_size_buckets_and_denominators(self):
         def record(year, maker, quantity, technology, size):
             values = {
@@ -318,6 +343,61 @@ class CompetitiveInsightReportTest(unittest.TestCase):
         self.assertEqual(0.25, row["makers"]["Tianma"]["internal_share"]["2025"])
         self.assertEqual(0.5, row["makers"]["Tianma"]["segment_market_share"]["2025"])
         self.assertEqual(0.2, row["makers"]["Tianma"]["technology_market_share"]["2025"])
+
+    def test_summary_all_share_excludes_oxide_from_denominator(self):
+        def record(year, maker, quantity, technology, size=10):
+            values = {
+                "year": year, "quarter": "Q1", "maker": maker,
+                "quantity_000": quantity, "technology": technology, "size": size,
+                "original_specification": "Automobile monitor", "application": "Control panel",
+            }
+            return {name: {"value": value, "source_cell": f"A{index + 1}", "source_sheet": "Shipment"}
+                    for index, (name, value) in enumerate(values.items())}
+
+        metrics = calculate_competitive_metrics([{"sheet": "Shipment", "records": [
+            record(2024, "Tianma", 100, "LTPS"),
+            record(2024, "Other Maker", 100, "a-Si"),
+            record(2024, "BOE", 50, "Oxide"),
+            record(2025, "Tianma", 100, "LTPS"),
+            record(2025, "Other Maker", 100, "a-Si"),
+            record(2025, "BOE", 50, "Oxide"),
+        ]}])
+        # Absolute market still includes Oxide.
+        self.assertEqual(250, metrics["market"]["values"]["2025"])
+        rows = {row["row_key"]: row for row in metrics["summary_matrix"]["rows"]}
+        all_row = rows["all.all"]
+        # All YoY uses Oxide-inclusive totals; share uses LTPS+a-Si only → 100/200.
+        self.assertEqual(250, all_row["market"]["values"]["2025"])
+        self.assertEqual(1.0, all_row["market"]["total_market_share"]["2025"])
+        self.assertEqual(0.5, all_row["makers"]["Tianma"]["same_size_market_share"]["2025"])
+        self.assertEqual(0.5, rows["ltps.total"]["market"]["total_market_share"]["2025"])
+
+    def test_summary_all_row_keeps_values_for_ltps_only_csot(self):
+        """CSOT 仅有 LTPS 时，All 仍按 LTPS+a-Si 总量口径正常出数，不强制留空。"""
+        def record(year, maker, quantity, technology, size=10):
+            values = {
+                "year": year, "quarter": "Q1", "maker": maker,
+                "quantity_000": quantity, "technology": technology, "size": size,
+                "original_specification": "Automobile monitor", "application": "Control panel",
+            }
+            return {name: {"value": value, "source_cell": f"A{index + 1}", "source_sheet": "Shipment"}
+                    for index, (name, value) in enumerate(values.items())}
+
+        metrics = calculate_competitive_metrics([{"sheet": "Shipment", "records": [
+            record(2024, "CSOT", 100, "LTPS"),
+            record(2024, "Tianma", 50, "LTPS"),
+            record(2024, "Tianma", 50, "a-Si"),
+            record(2025, "CSOT", 150, "LTPS"),
+            record(2025, "Tianma", 60, "LTPS"),
+            record(2025, "Tianma", 40, "a-Si"),
+        ]}])
+        rows = {row["row_key"]: row for row in metrics["summary_matrix"]["rows"]}
+        all_csot = rows["all.all"]["makers"]["CSOT"]
+        self.assertIsNone(all_csot.get("display_suppressed"))
+        self.assertAlmostEqual(0.5, all_csot["yoy_2025_vs_2024"])
+        self.assertEqual(1.0, all_csot["internal_share"]["2025"])
+        # 150 / (150+100) share of LTPS+a-Si market
+        self.assertAlmostEqual(0.6, all_csot["same_size_market_share"]["2025"])
 
 
 if __name__ == "__main__":

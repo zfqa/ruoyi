@@ -17,7 +17,7 @@ from app.llm.client import ArkChatClient
 from app.llm.interpreter import interpret_table
 from app.report.metrics import calculate_competitive_metrics
 from app.report.record_merge import merge_records_by_year_quarter, period_coverage
-from app.report.periods import latest_omdia_data_through, parse_omdia_tracker_meta
+from app.report.periods import latest_omdia_data_through, parse_omdia_tracker_meta, workbook_overlay_rank
 from app.report.tianma_history import calculate_tianma_history_metrics
 from app.report.tianma_product import calculate_tianma_product_metrics
 from app.report.tianma_growth import calculate_tianma_application_metrics, calculate_tianma_customer_metrics
@@ -329,6 +329,7 @@ def _parse_shipment_share_cache(
     history_groups: list[tuple[str, list[dict[str, Any]]]] = []
     history_sources = []
     extra_history_labels = list(extra_history_file_labels or [])
+    extra_history_entries = []
     for index, extra_path in enumerate(list(extra_history_file_paths or [])):
         if not extra_path:
             continue
@@ -345,11 +346,15 @@ def _parse_shipment_share_cache(
         extra_records = _pivot_cache_records(
             extra_cache, extra_name, extra_id, "Shipment share (extra history)"
         )
-        history_groups.append((extra_name, extra_records))
-        history_sources.append(_source_workbook_entry(
+        entry = _source_workbook_entry(
             extra_id, extra_stored, "extra history", original_file_name=extra_name,
-        ))
-    # Primary current workbook is applied last so its Year/Quarter wins on overlap.
+        )
+        extra_history_entries.append((workbook_overlay_rank(extra_name), extra_name, extra_records, entry))
+    # Oldest extras first, current last: newer Year/Quarter replaces older.
+    extra_history_entries.sort(key=lambda item: item[0])
+    for _, extra_name, extra_records, entry in extra_history_entries:
+        history_groups.append((extra_name, extra_records))
+        history_sources.append(entry)
     history_groups.append((file_name, primary_records))
     records = merge_records_by_year_quarter(history_groups) if len(history_groups) > 1 else primary_records
 
@@ -369,6 +374,7 @@ def _parse_shipment_share_cache(
     supply_groups: list[tuple[str, list[dict[str, Any]]]] = []
     supply_sources = []
     extra_supply_labels = list(extra_supply_chain_file_labels or [])
+    extra_supply_entries = []
     for index, extra_path in enumerate(list(extra_supply_chain_file_paths or [])):
         if not extra_path:
             continue
@@ -386,10 +392,14 @@ def _parse_shipment_share_cache(
             extra_cache, extra_name, extra_id,
             "Panel maker to client pivot", "panel-maker-client-pivot-cache",
         )
-        supply_groups.append((extra_name, extra_records))
-        supply_sources.append(_source_workbook_entry(
+        entry = _source_workbook_entry(
             extra_id, extra_stored, "extra supply chain", original_file_name=extra_name,
-        ))
+        )
+        extra_supply_entries.append((workbook_overlay_rank(extra_name), extra_name, extra_records, entry))
+    extra_supply_entries.sort(key=lambda item: item[0])
+    for _, extra_name, extra_records, entry in extra_supply_entries:
+        supply_groups.append((extra_name, extra_records))
+        supply_sources.append(entry)
 
     supply_chain_records = []
     supply_chain_source = None
@@ -493,10 +503,6 @@ def _parse_shipment_share_cache(
             "structure_note": "Pivot Cache已提供精确字段定义，无需LLM识别表头",
         },
     }
-    result["computed_metrics"] = calculate_competitive_metrics([metric_table])
-    maker_details = {}
-    detail_gaps = []
-    maker_names = _report_maker_names(records, supply_chain_records)
     through = latest_omdia_data_through(
         [item.get("original_file_name") or item.get("file_name") for item in source_workbooks]
     )
@@ -504,15 +510,16 @@ def _parse_shipment_share_cache(
     data_through_quarter = through.get("data_through_quarter") if through else None
     if through:
         result["omdia_publication_lag"] = through
+    result["computed_metrics"] = calculate_competitive_metrics(
+        [metric_table],
+        data_through_year=data_through_year,
+        data_through_quarter=data_through_quarter,
+    )
+    maker_details = {}
+    detail_gaps = []
+    maker_names = _report_maker_names(records, supply_chain_records)
     metrics_scope = (result["computed_metrics"].get("scope") or {})
     full_year = bool(metrics_scope.get("full_year"))
-    if (
-        not full_year
-        and data_through_year is not None
-        and data_through_quarter is not None
-        and (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
-    ):
-        full_year = True
     for maker in maker_names:
         detail = {
             "history": calculate_tianma_history_metrics(

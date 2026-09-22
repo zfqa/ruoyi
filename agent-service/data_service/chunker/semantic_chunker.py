@@ -86,17 +86,45 @@ class SemanticChunker:
             if column in group_columns and value
         ]
 
-        lines = [f"标题: {table.title}", f"表头: {' | '.join(data_columns)}", "数据:"]
-        for row_number, row in enumerate(rows, start=1):
-            fields = [
-                f"{column}: {cls._value_with_column_unit(column, row.get(column, ''))}"
-                for column in data_columns if row.get(column, "")
-            ]
-            if fields:
-                lines.append(f"{row_number}. {' | '.join(fields)}")
+        lines = [f"标题: {table.title}"]
+        for row in rows:
+            row_label = cls._row_label(data_columns, row)
+            if not row_label:
+                continue
+            for column in data_columns:
+                raw = row.get(column, "")
+                if not raw or raw == row_label or not cls._is_numberish(raw):
+                    continue
+                header = column if cls._meaningful_label(column) else "数值"
+                value = cls._value_with_column_unit(column, raw)
+                lines.append(f"行: {row_label} | 列: {header} | 值: {value}")
         if group_notes and not explicit_group_columns:
             lines.append(f"分组信息: {'；'.join(dict.fromkeys(group_notes))}")
         return "\n".join(lines).strip()
+
+    _PLACEHOLDER_COLUMN = re.compile(r"^column_\d+$", re.IGNORECASE)
+
+    @classmethod
+    def _meaningful_label(cls, value: str) -> bool:
+        text = cls._clean_table_text(value)
+        if not text or cls._PLACEHOLDER_COLUMN.match(text):
+            return False
+        if cls._is_numberish(text):
+            return False
+        return True
+
+    @classmethod
+    def _is_numberish(cls, value: str) -> bool:
+        text = cls._clean_table_text(value).replace(",", "")
+        return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?%?", text))
+
+    @classmethod
+    def _row_label(cls, columns: list[str], row: dict[str, str]) -> str:
+        for column in columns:
+            cell = cls._clean_table_text(row.get(column, ""))
+            if cls._meaningful_label(cell):
+                return cell
+        return ""
 
     @staticmethod
     def _clean_table_text(value: object) -> str:

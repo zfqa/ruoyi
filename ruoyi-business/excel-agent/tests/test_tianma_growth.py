@@ -50,7 +50,8 @@ class TianmaGrowthMetricsTest(unittest.TestCase):
 
         metrics = calculate_tianma_customer_metrics(records)
         names = [item["client"] for item in metrics["top_clients"]["clients"]]
-        self.assertEqual(["Continental AG", "Denso", "Visteon", "Yazaki", "Nippon Seiki", "BYD"], names)
+        # Top6 = Qty descending; Others excluded, GM kept.
+        self.assertEqual(["GM", "Continental AG", "Denso", "Visteon", "Yazaki", "Nippon Seiki"], names)
         europe = next(row for row in metrics["regions"]["rows"] if row["region"] == "欧系")
         self.assertEqual(100, europe["annual"]["Y24"])
         self.assertEqual(1, europe["annual"]["yoy_2024_vs_2023"])
@@ -100,7 +101,7 @@ class TianmaGrowthMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(0.2, instrument["yoy_2025_q1_q3_vs_2024_q1_q3"])
         self.assertEqual(1400, center["shipment"])
         self.assertEqual("LTPS", center["technology"])
-        self.assertEqual("final_report_v1", metrics["scope"]["key_size_profile"])
+        self.assertEqual("threshold_plus_profile", metrics["scope"]["key_size_profile"])
 
     def test_customer_region_uses_decision_location_and_excludes_oxide(self):
         records = [

@@ -245,6 +245,8 @@ export default {
       exportingFormat: "",
       freeFileList: [],
       selectedFiles: [],
+      fileSyncTimer: null,
+      pendingUploadFileList: null,
       queryParams: {
         pageNum: 1,
         pageSize: 10,
@@ -271,9 +273,13 @@ export default {
       }
       const many = role => this.selectedFiles
         .filter(file => file.role === role && file.storedName)
+        .slice()
+        .sort((a, b) => this.historyRank(a.originalName) - this.historyRank(b.originalName))
         .map(file => file.storedName)
       const manyOriginal = role => this.selectedFiles
         .filter(file => file.role === role && file.storedName)
+        .slice()
+        .sort((a, b) => this.historyRank(a.originalName) - this.historyRank(b.originalName))
         .map(file => file.originalName || file.name || "")
       return {
         fileName: byRole('current'),
@@ -333,6 +339,10 @@ export default {
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
+    if (this.fileSyncTimer) {
+      clearTimeout(this.fileSyncTimer);
+      this.fileSyncTimer = null;
+    }
   },
   methods: {
     getList() {
@@ -358,15 +368,25 @@ export default {
       return ''
     },
     historyRank(fileName) {
+      // Rank by Omdia data-through (publication lags one quarter). Higher = newer = current.
       const name = String(fileName || '').toLowerCase()
-      if (/1q26|q126/.test(name)) return 2601
-      if (/4q25|3q25/.test(name)) return 2504
-      if (/1q25|4q24/.test(name)) return 2501
+      const withResults = name.match(/with\s+([1-4])\s*q\s*([0-9]{2})\s+results/)
+      if (withResults) {
+        return Number(withResults[2]) * 10 + Number(withResults[1])
+      }
+      if (/1q26|q126/.test(name)) return 254 // publish 1Q26 → through 4Q25
+      if (/4q25/.test(name)) return 253 // publish 4Q25 → through 3Q25
+      if (/3q25/.test(name)) return 252
+      if (/2q25/.test(name)) return 251
+      if (/1q25/.test(name)) return 244 // publish 1Q25 → through 4Q24
+      if (/4q24/.test(name)) return 243
       return 0
     },
     assignRoles(files) {
+      // Mutate in place — never clone. Multi-select fires on-change per file; cloning
+      // would orphan in-flight upload callbacks from the rows shown in the table.
       const used = new Set()
-      const next = files.map(file => ({ ...file }))
+      const next = files
       next.forEach(file => {
         const guessed = this.guessFileRole(file.originalName)
         if (!guessed) {
@@ -418,36 +438,66 @@ export default {
     },
     onFreeFileRemove(file, fileList) {
       this.freeFileList = fileList
-      this.syncSelectedFromUploadList(fileList)
+      this.scheduleSelectedSync(fileList)
     },
     onFreeFileChange(file, fileList) {
       this.freeFileList = fileList
-      this.syncSelectedFromUploadList(fileList)
+      // Folder multi-select triggers one on-change per file; coalesce the batch.
+      this.scheduleSelectedSync(fileList)
+    },
+    scheduleSelectedSync(fileList) {
+      this.pendingUploadFileList = fileList
+      if (this.fileSyncTimer) {
+        clearTimeout(this.fileSyncTimer)
+      }
+      this.fileSyncTimer = setTimeout(() => {
+        this.fileSyncTimer = null
+        this.syncSelectedFromUploadList(this.pendingUploadFileList || [])
+        this.pendingUploadFileList = null
+      }, 80)
     },
     syncSelectedFromUploadList(fileList) {
       const allowed = ['xlsx', 'xlsm', 'csv']
       const next = []
-      for (const item of fileList.slice(-5)) {
+      const rejected = []
+      const source = Array.isArray(fileList) ? fileList.slice(-5) : []
+      for (const item of source) {
         const raw = item.raw
         const originalName = (raw && raw.name) || item.name || ''
         const ext = originalName.split('.').pop().toLowerCase()
         if (!allowed.includes(ext)) {
-          this.$modal.msgError(`不支持的文件格式：${originalName}`)
+          rejected.push(`不支持的文件格式：${originalName}`)
           continue
         }
         if (raw && raw.size / 1024 / 1024 >= 10) {
-          this.$modal.msgError(`文件不能超过 10MB：${originalName}`)
+          rejected.push(`文件不能超过 10MB：${originalName}`)
           continue
         }
         const existing = this.selectedFiles.find(file => file.uid === item.uid)
-        next.push(existing && existing.originalName === originalName ? existing : {
-          uid: item.uid,
-          originalName,
-          raw,
-          role: '',
-          storedName: '',
-          uploading: false
-        })
+        if (existing) {
+          existing.originalName = originalName
+          if (raw) existing.raw = raw
+          next.push(existing)
+        } else {
+          next.push({
+            uid: item.uid,
+            originalName,
+            raw,
+            role: '',
+            storedName: '',
+            uploading: false
+          })
+        }
+      }
+      if (rejected.length) {
+        this.$modal.msgError(rejected.slice(0, 3).join('；') + (rejected.length > 3 ? ` 等 ${rejected.length} 项` : ''))
+      }
+      // Keep el-upload list aligned with accepted rows only (drop rejected extras).
+      const acceptedUids = new Set(next.map(file => file.uid))
+      const cleanedUploadList = source.filter(item => acceptedUids.has(item.uid))
+      this.freeFileList = cleanedUploadList
+      if (this.$refs.freeUpload) {
+        this.$refs.freeUpload.uploadFiles = cleanedUploadList
       }
       this.selectedFiles = this.assignRoles(next)
       this.uploadPendingFiles()
@@ -461,13 +511,16 @@ export default {
         const formData = new FormData()
         formData.append('file', file.raw)
         return uploadExcelImport(formData).then(res => {
-          file.storedName = res.fileName || res.url || ''
-          file.uploading = false
-          if (!file.storedName) {
-            return Promise.reject(new Error(`${file.originalName} 上传失败：未返回文件名`))
+          // Resolve against current selectedFiles by uid in case roles were reassigned.
+          const target = this.selectedFiles.find(item => item.uid === file.uid) || file
+          target.storedName = res.fileName || res.url || ''
+          target.uploading = false
+          if (!target.storedName) {
+            return Promise.reject(new Error(`${target.originalName} 上传失败：未返回文件名`))
           }
         }).catch(error => {
-          file.uploading = false
+          const target = this.selectedFiles.find(item => item.uid === file.uid) || file
+          target.uploading = false
           throw error
         })
       })

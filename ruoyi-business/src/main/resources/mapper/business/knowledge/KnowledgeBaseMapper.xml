@@ -138,7 +138,8 @@
         (match(c.title_path,c.content) against(#{query} in natural language mode)
         <if test="entityTerms != null and entityTerms.size() > 0">
           + case when <foreach collection="entityTerms" item="term" open="(" separator=" or " close=")">
-            lower(c.content) like concat('%',lower(#{term}),'%')
+            lower(concat(coalesce(c.title_path,''),' ',c.content,' ',coalesce(s.source_name,''),' ',coalesce(v.original_name,'')))
+              like concat('%',lower(#{term}),'%')
           </foreach> then 100 else 0 end
         </if>
         <if test="normalizedLiteral != null and normalizedLiteral != ''">
@@ -149,12 +150,21 @@
         where (match(c.title_path,c.content) against(#{query} in natural language mode)
         <if test="normalizedLiteral != null and normalizedLiteral != ''">
           or replace(replace(replace(lower(c.content),'-',''),' ',''),'–','') like concat('%',#{normalizedLiteral},'%')
-        </if>)
+        </if>
         <if test="entityTerms != null and entityTerms.size() > 0">
+          or <foreach collection="entityTerms" item="term" open="(" separator=" or " close=")">
+            lower(concat(coalesce(c.title_path,''),' ',c.content,' ',coalesce(s.source_name,''),' ',coalesce(v.original_name,'')))
+              like concat('%',lower(#{term}),'%')
+          </foreach>
+        </if>)
+        <if test="requireEntityInContent and entityTerms != null and entityTerms.size() > 0">
           and <foreach collection="entityTerms" item="term" open="(" separator=" or " close=")">
-            lower(c.content) like concat('%',lower(#{term}),'%')
+            lower(concat(coalesce(c.title_path,''),' ',c.content,' ',coalesce(s.source_name,''),' ',coalesce(v.original_name,'')))
+              like concat('%',lower(#{term}),'%')
           </foreach>
         </if>
+        <if test="sourceId != null">and c.source_id=#{sourceId}</if>
+        <if test="versionId != null">and c.version_id=#{versionId}</if>
         <if test="sourceType != null and sourceType != ''">and s.source_type=#{sourceType}</if>
         <if test="!admin">
           and (s.allowed_role_ids is null or s.allowed_role_ids=''
@@ -199,6 +209,15 @@
         join business_kb_version v on v.id=c.version_id
         where c.version_id=#{versionId}
         order by c.chunk_no asc
+    </select>
+
+    <select id="selectChunkByVersionAndNo" resultMap="ChunkResult">
+        select c.*,s.source_name,s.source_type,v.version_no,v.original_name
+        from business_kb_chunk c
+        join business_knowledge s on s.id=c.source_id
+        join business_kb_version v on v.id=c.version_id
+        where c.version_id=#{versionId} and c.chunk_no=#{chunkNo}
+        limit 1
     </select>
 
     <select id="selectAuthorizedChunkById" resultMap="ChunkResult">
@@ -326,4 +345,28 @@
     <delete id="deleteQaSessionsBefore">
         delete from business_kb_qa_session where finished_time is not null and finished_time&lt;#{cutoff}
     </delete>
+    <delete id="deleteFactsByVersionId">delete from business_kb_fact where version_id=#{versionId}</delete>
+    <insert id="insertFact" parameterType="com.ruoyi.business.knowledge.domain.KnowledgeFact" useGeneratedKeys="true" keyProperty="id">
+        insert into business_kb_fact (source_id,version_id,chunk_id,page_start,row_label,col_header,metric_label,raw_value,unit,fact_year,create_time)
+        values (#{sourceId},#{versionId},#{chunkId},#{pageStart},#{rowLabel},#{colHeader},#{metricLabel},#{rawValue},#{unit},#{factYear},sysdate())
+    </insert>
+    <select id="searchCurrentFacts" resultType="com.ruoyi.business.knowledge.domain.KnowledgeFact">
+        select f.id,f.source_id sourceId,f.version_id versionId,f.chunk_id chunkId,f.page_start pageStart,
+        f.row_label rowLabel,f.col_header colHeader,f.metric_label metricLabel,f.raw_value rawValue,
+        f.unit,f.fact_year factYear,v.original_name originalName
+        from business_kb_fact f
+        join business_knowledge s on s.id=f.source_id and s.enabled='1' and s.current_version_id=f.version_id
+        join business_kb_version v on v.id=f.version_id
+        where
+        <foreach collection="hints" item="hint" separator=" or " open="(" close=")">
+            f.metric_label like concat('%',#{hint},'%')
+            or f.row_label like concat('%',#{hint},'%')
+            or (char_length(f.metric_label) &gt;= 4 and #{hint} like concat('%', f.metric_label, '%'))
+        </foreach>
+        <if test="sourceIds != null and sourceIds.size() > 0">
+          and f.source_id in
+          <foreach collection="sourceIds" item="sourceId" open="(" separator="," close=")">#{sourceId}</foreach>
+        </if>
+        order by char_length(f.metric_label) desc, f.id asc limit 200
+    </select>
 </mapper>

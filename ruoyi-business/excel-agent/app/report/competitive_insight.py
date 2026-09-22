@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from app.llm.client import ArkChatClient, LlmError
+from app.report.driver_narratives import build_driver_narratives
 from app.report.metrics import calculate_competitive_metrics
 from app.report.periods import (
     clip_periods_to_data_through,
@@ -63,21 +64,33 @@ def _source_file_names(parsed: dict[str, Any]) -> list[str]:
 
 
 def _resolve_horizon_meta(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
-    """报告口径优先按解析后的季度完备度自动判断。
+    """报告口径与列裁剪共用同一 data_through，避免表头全年/前三季度与裁剪截止分叉。
 
-    1) computed_metrics.scope：某年四季齐全 → 全年；仅齐 Q1–Q3 → 前三季度
-    2) 无指标时再看 period_coverage / Omdia 发布滞后
-    Omdia 文件名仍写入 notes，并用于裁掉截止季之后的预测列。
+    优先级：
+    1) metrics.scope 已带 data_through_*（pipeline 从文件名算出）
+    2) summary_mode / full_year
+    3) 文件名 Omdia 滞后 → period_coverage → 默认前三季度
+    最终若文件名截止季更新，整套 framing（含 full_year）一起重算，不单独抬高 through。
     """
     scope = (metrics or {}).get("scope") or {}
     summary_mode = str(scope.get("summary_mode") or "")
     target_year = int(scope.get("summary_target_year") or 2025)
     framing: dict[str, Any] | None = None
 
-    if scope.get("full_year") is True or summary_mode.endswith("full_year"):
+    scope_through_year = scope.get("data_through_year")
+    scope_through_quarter = scope.get("data_through_quarter")
+    if scope_through_year is not None and scope_through_quarter is not None:
+        framing = report_horizon_from_data_through(
+            int(scope_through_year), int(scope_through_quarter)
+        )
+    elif scope.get("full_year") is True or summary_mode.endswith("full_year"):
         framing = report_horizon_from_data_through(target_year, 4)
-    elif summary_mode.endswith("q1_q3") or scope.get("full_year") is False:
+    elif summary_mode.endswith("q1_q3"):
         framing = report_horizon_from_data_through(target_year, 3)
+    else:
+        mode_match = re.search(r"q1_q([1-4])$", summary_mode)
+        if mode_match:
+            framing = report_horizon_from_data_through(target_year, int(mode_match.group(1)))
 
     latest = latest_omdia_data_through(_source_file_names(parsed))
     if framing is None:
@@ -111,7 +124,7 @@ def _resolve_horizon_meta(parsed: dict[str, Any], metrics: dict[str, Any]) -> di
         "data_through_year", 2025
     )
     framing["omdia"] = latest
-    # 列裁剪截止：取「指标口径」与「Omdia 滞后」中较新者，避免漏裁预测列
+    # 若文件名截止更新，整套口径（含 full_year / 表头）一起重算
     if latest:
         metric_through = (
             int(framing["data_through_year"]),
@@ -122,9 +135,11 @@ def _resolve_horizon_meta(parsed: dict[str, Any], metrics: dict[str, Any]) -> di
             int(latest["data_through_quarter"]),
         )
         through_year, through_quarter = max(metric_through, omdia_through)
-        framing["data_through_year"] = through_year
-        framing["data_through_quarter"] = through_quarter
-        framing["data_through_label"] = publication_label(through_year, through_quarter)
+        if (through_year, through_quarter) != metric_through:
+            refreshed = report_horizon_from_data_through(through_year, through_quarter)
+            framing.update(refreshed)
+            framing["summary_target_year"] = target_year if scope.get("summary_target_year") else through_year
+            framing["omdia"] = latest
     return framing
 
 
@@ -360,6 +375,10 @@ def _empty_report(parsed: dict[str, Any], metrics: dict[str, Any]) -> dict[str, 
                     or horizon_meta.get("data_through_year")
                     or 2025
                 ) == 2025,
+                "header_period_label": (
+                    ((metrics or {}).get("scope") or {}).get("header_period_label")
+                    or ("Y25全年" if full_year else "Y25前三季度")
+                ),
                 "data_through_year": horizon_meta.get("data_through_year"),
                 "data_through_quarter": horizon_meta.get("data_through_quarter"),
                 "omdia_publication_label": pub_label,
@@ -467,6 +486,7 @@ def _empty_maker(maker: str) -> dict[str, Any]:
         "customer_region": {"top_customers": [], "regions": [], "insights": []},
         "application": {"applications": [], "key_sizes": [], "insights": []},
         "drivers": {"product": [], "customer": [], "application": []},
+        "driver_narratives": {"product": "", "customer": "", "application": ""},
     }
 
 
@@ -657,7 +677,7 @@ def _clean_narrative_list(values: list[Any]) -> list[str]:
 
 def _finalize_narrative_traceability(report: dict[str, Any]) -> dict[str, Any]:
     """Strip internal metric references from prose and retain a displayable conclusion-to-evidence map."""
-    result = deepcopy(report)
+    result = _attach_driver_narratives(deepcopy(report))
     source_file = (result.get("source") or {}).get("file_name")
     evidence_by_metric = {
         item.get("metric_id"): item.get("evidence")
@@ -1206,6 +1226,60 @@ def _populate_rule_narratives(report: dict[str, Any]) -> dict[str, Any]:
         if section_key in tianma:
             result[legacy_key] = deepcopy(tianma[section_key])
     result["quality"]["generation_mode"] = "python_metrics_rule_narrative"
+    return result
+
+
+def _attach_driver_narratives(report: dict[str, Any]) -> dict[str, Any]:
+    """Always attach终稿-style driver essays from deterministic metrics."""
+    result = report
+    metrics = result.get("computed_metrics") or {}
+    full_year = bool(
+        ((result.get("methodology") or {}).get("scope") or {}).get("full_year")
+        or ((result.get("methodology") or {}).get("scope") or {}).get("report_horizon")
+        == HORIZON_FULL_YEAR
+    )
+    size_rows = [
+        row for row in (((metrics.get("summary_matrix") or {}).get("rows") or []))
+        if not row.get("is_total")
+    ]
+    maker_lookup = {item.get("maker"): item for item in result.get("makers") or []}
+    boe_sections = (result.get("maker_sections") or {}).get("BOE") or {}
+    for maker, maker_result in maker_lookup.items():
+        if not maker or not maker_result:
+            continue
+        sections = (result.get("maker_sections") or {}).get(maker) or {}
+        product = sections.get("product") or {}
+        customer = sections.get("customer") or {}
+        application = sections.get("application") or {}
+        essays = build_driver_narratives(
+            maker,
+            full_year=full_year,
+            size_rows=size_rows,
+            product=product,
+            customer=customer,
+            application=application,
+            boe_customer=boe_sections.get("customer") if maker != "BOE" else None,
+            boe_application=boe_sections.get("application") if maker != "BOE" else None,
+            boe_product=boe_sections.get("product") if maker != "BOE" else None,
+        )
+        maker_result["driver_narratives"] = essays
+        for key, title in (
+            ("product", "驱动力一（产品）"),
+            ("customer", "驱动力二（客户）"),
+            ("application", "驱动力三（应用）"),
+        ):
+            body = (essays.get(key) or "").strip()
+            if not body:
+                continue
+            titled = f"{title}：{body}"
+            existing = list((maker_result.get("drivers") or {}).get(key) or [])
+            # Avoid duplicating if finalize runs after rule populate twice.
+            existing = [item for item in existing if not str(item).startswith(title)]
+            maker_result.setdefault("drivers", {})[key] = [titled] + existing
+            section = {"product": product, "customer": customer, "application": application}[key]
+            bucket = section.setdefault("insights", {}).setdefault("driver_narrative", [])
+            if titled not in bucket:
+                bucket.append(titled)
     return result
 
 

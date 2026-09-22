@@ -168,6 +168,10 @@
             </el-table-column>
           </el-table>
           <el-row :gutter="20">
+            <el-col :span="12"><div ref="shipmentVolumeChart" class="history-chart" /></el-col>
+            <el-col :span="12"><div ref="displayAreaVolumeChart" class="history-chart" /></el-col>
+          </el-row>
+          <el-row :gutter="20">
             <el-col :span="12"><div ref="shipmentShareChart" class="history-chart" /></el-col>
             <el-col :span="12"><div ref="displayAreaShareChart" class="history-chart" /></el-col>
           </el-row>
@@ -272,10 +276,16 @@
             <el-col :span="6"><h4>客户与区域</h4><ul><li v-for="(item, index) in (maker.customer_region || {}).insights || []" :key="`r-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
             <el-col :span="6"><h4>应用</h4><ul><li v-for="(item, index) in (maker.application || {}).insights || []" :key="`i-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
           </el-row>
+          <div v-if="hasDriverNarratives(maker)" class="driver-narratives">
+            <h4>出货变化背后的主要因素</h4>
+            <p v-if="(maker.driver_narratives || {}).product"><strong>驱动力一（产品）：</strong>{{ cleanNarrative(maker.driver_narratives.product) }}</p>
+            <p v-if="(maker.driver_narratives || {}).customer"><strong>驱动力二（客户）：</strong>{{ cleanNarrative(maker.driver_narratives.customer) }}</p>
+            <p v-if="(maker.driver_narratives || {}).application"><strong>驱动力三（应用）：</strong>{{ cleanNarrative(maker.driver_narratives.application) }}</p>
+          </div>
           <el-row :gutter="16">
-            <el-col :span="8"><h4>产品驱动力</h4><ul><li v-for="(item, index) in (maker.drivers || {}).product || []" :key="`p-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
-            <el-col :span="8"><h4>客户驱动力</h4><ul><li v-for="(item, index) in (maker.drivers || {}).customer || []" :key="`c-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
-            <el-col :span="8"><h4>应用驱动力</h4><ul><li v-for="(item, index) in (maker.drivers || {}).application || []" :key="`a-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+            <el-col :span="8"><h4>产品驱动力要点</h4><ul><li v-for="(item, index) in shortDriverBullets(maker, 'product')" :key="`p-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+            <el-col :span="8"><h4>客户驱动力要点</h4><ul><li v-for="(item, index) in shortDriverBullets(maker, 'customer')" :key="`c-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
+            <el-col :span="8"><h4>应用驱动力要点</h4><ul><li v-for="(item, index) in shortDriverBullets(maker, 'application')" :key="`a-${index}`">{{ cleanNarrative(item) }}</li></ul></el-col>
           </el-row>
         </el-card>
         <el-collapse v-if="(reportData.narrative_sources || []).length" class="narrative-sources">
@@ -324,6 +334,8 @@ export default {
       currentReport: null,
       exportingFormat: '',
       activeMaker: 'Tianma',
+      shipmentVolumeChart: null,
+      displayAreaVolumeChart: null,
       shipmentShareChart: null,
       displayAreaShareChart: null,
       technologyHistoryChart: null,
@@ -375,6 +387,12 @@ export default {
     },
     isFullYearReport() {
       const scope = this.reportScope;
+      // Explicit non-full-year from backend must win (pivot may still contain forecast Q4).
+      if (scope.full_year === false || scope.full_year_2025 === false) {
+        return String(scope.report_horizon || '').endsWith('_full_year')
+          || String(scope.summary_mode || '').endsWith('full_year')
+          || String(scope.header_period_label || '').includes('全年');
+      }
       const makerScopes = [
         ((this.activeMakerDetail || {}).history || {}).scope,
         ((this.activeMakerDetail || {}).product || {}).scope,
@@ -382,19 +400,20 @@ export default {
         ((this.activeMakerDetail || {}).application || {}).scope
       ].filter(Boolean);
       const makerFullYear = makerScopes.some(item => item.full_year || String(item.primary_period || '') === 'Y25F');
-      const quarters = scope.summary_quarters || [];
       return Boolean(
         scope.full_year
         || scope.full_year_2025
         || makerFullYear
         || String(scope.report_horizon || '').endsWith('_full_year')
         || String(scope.summary_mode || '').endsWith('full_year')
-        || quarters.includes('Q4')
+        || String(scope.header_period_label || '').includes('全年')
         || String((this.reportData || {}).title || '').includes('全年')
       );
     },
     summaryPeriodLabel() {
-      return this.isFullYearReport ? 'Y25全年' : 'Y25 Q1-Q3';
+      const label = this.reportScope.header_period_label
+      if (label) return label
+      return this.isFullYearReport ? 'Y25全年' : 'Y25前三季度'
     },
     summaryPeriodKey() {
       return this.isFullYearReport ? 'Y25F' : 'Y25Q1-Q3';
@@ -442,10 +461,10 @@ export default {
       return 'Y25前三季度总览';
     },
     marketPriorColumnLabel() {
-      return this.isFullYearReport ? 'Y24全年（千片）' : 'Y24 Q1-Q3（千片）';
+      return this.isFullYearReport ? 'Y24全年（千片）' : 'Y24前三季度（千片）';
     },
     marketCurrentColumnLabel() {
-      return this.isFullYearReport ? 'Y25全年（千片）' : 'Y25 Q1-Q3（千片）';
+      return this.isFullYearReport ? 'Y25全年（千片）' : 'Y25前三季度（千片）';
     },
     marketMetricRows() {
       const rows = ((this.reportData || {}).market_summary || {}).rows || [];
@@ -542,7 +561,7 @@ export default {
   methods: {
     periodDisplayLabel(period) {
       if (period === 'Y25F') return this.isFullYearReport ? 'Y25全年' : 'Y25F';
-      if (period === 'Y25Q1-Q3') return this.isFullYearReport ? 'Y25 Q1-Q3（过程）' : 'Y25 Q1-Q3';
+      if (period === 'Y25Q1-Q3') return this.isFullYearReport ? 'Y25前三季度（过程）' : 'Y25前三季度';
       return period;
     },
     cleanNarrative(value) {
@@ -552,6 +571,17 @@ export default {
         .filter(item => item.conclusion === text)
         .map(item => `[${item.citation_label}]`);
       return labels.length ? `${text} ${labels.join('')}` : text;
+    },
+    hasDriverNarratives(maker) {
+      const essays = (maker && maker.driver_narratives) || {};
+      return Boolean(essays.product || essays.customer || essays.application);
+    },
+    shortDriverBullets(maker, key) {
+      const items = (((maker || {}).drivers || {})[key]) || [];
+      return items.filter(item => {
+        const text = String(item || '');
+        return text && !/^驱动力[一二三]/.test(text);
+      });
     },
     evidenceLocations(evidence) {
       const locations = [];
@@ -702,7 +732,10 @@ export default {
     summaryRowClassName({ row }) {
       return row && row._section ? 'summary-section-row' : '';
     },
-    handleMakerTabChange() {
+    handleMakerTabChange(tab) {
+      if (tab && tab.name) {
+        this.activeMaker = tab.name;
+      }
       this.$nextTick(() => this.renderHistoryCharts());
     },
     getList() {
@@ -775,6 +808,20 @@ export default {
       this.disposeHistoryCharts();
       if (!this.tianmaHistoryAvailable && !this.tianmaProductAvailable && !this.tianmaCustomerAvailable && !this.tianmaApplicationAvailable) return;
       if (this.tianmaHistoryAvailable) {
+        this.shipmentVolumeChart = this.renderVolumeChart(
+          'shipmentVolumeChart',
+          this.tianmaHistory.shipment,
+          `${this.activeMaker}前装出货情况（Kpcs）`,
+          'Kpcs',
+          false
+        );
+        this.displayAreaVolumeChart = this.renderVolumeChart(
+          'displayAreaVolumeChart',
+          this.tianmaHistory.display_area,
+          `${this.activeMaker}前装出货面积情况（㎡）`,
+          '㎡',
+          true
+        );
         this.shipmentShareChart = this.renderShareChart('shipmentShareChart', this.tianmaHistory.shipment_share, `${this.activeMaker}前装出货量市占率`);
         this.displayAreaShareChart = this.renderShareChart('displayAreaShareChart', this.tianmaHistory.display_area_share, `${this.activeMaker}前装出货面积市占率`);
       }
@@ -790,6 +837,83 @@ export default {
       if (this.tianmaApplicationAvailable) {
         this.applicationChart = this.renderApplicationChart();
       }
+    },
+    renderVolumeChart(refName, metric, title, unitLabel, isArea) {
+      const element = this.$refs[refName];
+      if (!element || !metric) return null;
+      const chart = echarts.init(element, 'macarons');
+      const periods = this.historyPeriods || [];
+      const values = periods.map(period => {
+        const value = (metric.periods || {})[period];
+        return value === null || value === undefined ? null : Number(value);
+      });
+      const yoys = periods.map(period => {
+        const value = (metric.yoy_periods || {})[period];
+        return value === null || value === undefined ? null : Number((Number(value) * 100).toFixed(2));
+      });
+      chart.setOption({
+        title: { text: title, left: 'center', textStyle: { fontSize: 15 } },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+        legend: { bottom: 0, data: [this.activeMaker, `${this.activeMaker} YoY`] },
+        grid: { left: 58, right: 52, top: 55, bottom: 48 },
+        xAxis: {
+          type: 'category',
+          data: periods.map(period => this.periodDisplayLabel(period)),
+          axisLabel: { interval: 0, fontSize: 10 }
+        },
+        yAxis: [
+          {
+            type: 'value',
+            name: unitLabel,
+            axisLabel: {
+              fontSize: 9,
+              formatter: value => isArea
+                ? (Number(value) >= 1000 ? `${(Number(value) / 1000).toFixed(1)}K` : Number(value).toLocaleString('zh-CN'))
+                : Number(value).toLocaleString('zh-CN')
+            }
+          },
+          {
+            type: 'value',
+            name: 'YoY',
+            axisLabel: { formatter: '{value}%', fontSize: 9 },
+            splitLine: { show: false }
+          }
+        ],
+        series: [
+          {
+            name: this.activeMaker,
+            type: 'bar',
+            barMaxWidth: 36,
+            data: values,
+            label: {
+              show: true,
+              position: 'top',
+              fontSize: 9,
+              formatter: params => {
+                if (params.value === null || params.value === undefined) return '';
+                const number = Number(params.value);
+                if (isArea) return number >= 1000 ? `${(number / 1000).toFixed(1)}K` : number.toLocaleString('zh-CN');
+                return number.toLocaleString('zh-CN');
+              }
+            }
+          },
+          {
+            name: `${this.activeMaker} YoY`,
+            type: 'line',
+            yAxisIndex: 1,
+            smooth: false,
+            symbolSize: 7,
+            connectNulls: false,
+            data: yoys,
+            label: {
+              show: true,
+              fontSize: 9,
+              formatter: params => (params.value === null || params.value === undefined ? '' : `${Number(params.value).toFixed(1)}%`)
+            }
+          }
+        ]
+      });
+      return chart;
     },
     renderShareChart(refName, metric, title) {
       const element = this.$refs[refName];
@@ -987,7 +1111,7 @@ export default {
       return chart;
     },
     disposeHistoryCharts() {
-      ['shipmentShareChart', 'displayAreaShareChart', 'technologyHistoryChart', 'sizeDistributionChart', 'ltpsSizeGrowthChart', 'asiSizeGrowthChart', 'customerChart', 'applicationChart'].forEach(name => {
+      ['shipmentVolumeChart', 'displayAreaVolumeChart', 'shipmentShareChart', 'displayAreaShareChart', 'technologyHistoryChart', 'sizeDistributionChart', 'ltpsSizeGrowthChart', 'asiSizeGrowthChart', 'customerChart', 'applicationChart'].forEach(name => {
         if (this[name]) {
           this[name].dispose();
           this[name] = null;
@@ -1063,6 +1187,15 @@ export default {
 .compact-table ::v-deep .cell { padding-left: 5px; padding-right: 5px; font-size: 12px; }
 .table-note { color: #606266; font-size: 12px; margin-top: 6px; }
 .insight-row { margin-top: 8px; }
+.driver-narratives {
+  margin: 12px 0 8px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border-left: 3px solid #334155;
+  line-height: 1.7;
+}
+.driver-narratives p { margin: 0 0 10px; }
+.driver-narratives p:last-child { margin-bottom: 0; }
 .narrative-sources { margin: 18px 0; }
 .narrative-source-row { padding: 12px 4px; border-bottom: 1px solid #ebeef5; line-height: 1.8; }
 .source-file { margin-left: 8px; color: #606266; font-size: 13px; }

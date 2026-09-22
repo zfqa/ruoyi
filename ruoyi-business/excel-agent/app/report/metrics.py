@@ -7,6 +7,8 @@ from typing import Any
 
 
 TARGET_MAKERS = ("Tianma", "AUO", "CSOT", "BOE")
+MARKET_TECHNOLOGIES = {"LTPS", "a-Si", "Oxide"}
+MAKER_TECHNOLOGIES = {"LTPS", "a-Si"}
 HISTORY_YEARS = (2022, 2023, 2024, 2025, 2026)
 SUMMARY_YEARS = (2024, 2025)
 SUMMARY_QUARTERS = {1, 2, 3}
@@ -21,13 +23,16 @@ MAKER_ALIASES = {
 }
 
 
-def _detect_summary_mode(rows: list[dict[str, Any]]) -> tuple[set[int], bool, str, int]:
-    """按解析后的实际季度完备度自动选择汇总口径。
+def _detect_summary_mode(
+    rows: list[dict[str, Any]],
+    data_through_year: int | None = None,
+    data_through_quarter: int | None = None,
+) -> tuple[set[int], bool, str, int]:
+    """选择汇总口径。
 
-    规则（优先较新年份）：
-    - 某 SUMMARY_YEAR 的 Q1–Q4 全部出现 → 该年全年汇总
-    - 否则若 Q1–Q3 齐全 → 该年前三季度汇总
-    不依赖文件名；文件名仅用于发布滞后说明与列裁剪。
+    有 Omdia 文件名截止季时，以截止季为准（例如 with 3Q25 Results → 前三季度；
+    1Q26 发布 → 截止 4Q25 → 全年）。Pivot 里可能已有晚于截止季的预测季，不能因此提前切全年。
+    没有文件名信息时，再按行内季度完备度判断。
     """
     by_year: dict[int, set[int]] = {}
     for row in rows:
@@ -35,6 +40,19 @@ def _detect_summary_mode(rows: list[dict[str, Any]]) -> tuple[set[int], bool, st
         quarter = row.get("quarter")
         if year in SUMMARY_YEARS and quarter in SUMMARY_QUARTERS_FULL_YEAR:
             by_year.setdefault(int(year), set()).add(int(quarter))
+
+    if data_through_year is not None and data_through_quarter is not None:
+        year = int(data_through_year)
+        quarter = int(data_through_quarter)
+        if year in SUMMARY_YEARS or year >= max(SUMMARY_YEARS):
+            target = year if year in SUMMARY_YEARS else max(SUMMARY_YEARS)
+            yy = target % 100
+            if year > target or (year == target and quarter >= 4):
+                return set(SUMMARY_QUARTERS_FULL_YEAR), True, f"y{yy}_full_year", target
+            if year == target and quarter >= 3:
+                return set(SUMMARY_QUARTERS), False, f"y{yy}_q1_q3", target
+            if year == target and quarter in {1, 2}:
+                return set(range(1, quarter + 1)), False, f"y{yy}_q1_q{quarter}", target
 
     for year in sorted(SUMMARY_YEARS, reverse=True):
         qs = by_year.get(year, set())
@@ -47,7 +65,11 @@ def _detect_summary_mode(rows: list[dict[str, Any]]) -> tuple[set[int], bool, st
     return set(SUMMARY_QUARTERS), False, "y25_q1_q3", 2025
 
 
-def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any]:
+def calculate_competitive_metrics(
+    tables: list[dict[str, Any]],
+    data_through_year: int | None = None,
+    data_through_quarter: int | None = None,
+) -> dict[str, Any]:
     """Calculate all quantitative report inputs without LLM arithmetic."""
     rows = []
     source_tables = []
@@ -82,24 +104,29 @@ def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any
     if rows and not any(row.get("display_area") is not None for row in rows):
         gaps.append("源明细缺少显示面积字段，无法计算显示面积指标")
 
-    summary_quarters, full_year, summary_mode, summary_target_year = _detect_summary_mode(rows)
+    summary_quarters, full_year, summary_mode, summary_target_year = _detect_summary_mode(
+        rows, data_through_year, data_through_quarter,
+    )
     summary_rows = [
         row for row in rows
         if row["year"] in SUMMARY_YEARS and row["quarter"] in summary_quarters
     ]
+    # 前装市场总量含 Oxide。厂商出货、面积和内部占比仍只计 LTPS 与 a-Si。
+    maker_summary_rows = [row for row in summary_rows if row["technology"] in MAKER_TECHNOLOGIES]
+    maker_history_rows = [row for row in rows if row["technology"] in MAKER_TECHNOLOGIES]
     market = _group(summary_rows, lambda row: (row["year"],))
-    maker = _group(summary_rows, lambda row: (row["maker"], row["year"]))
-    technology = _group(summary_rows, lambda row: (row["maker"], row["year"], row["technology"]))
+    maker = _group(maker_summary_rows, lambda row: (row["maker"], row["year"]))
+    technology = _group(maker_summary_rows, lambda row: (row["maker"], row["year"], row["technology"]))
     market_technology = _group(summary_rows, lambda row: (row["year"], row["technology"]))
-    clients = _group(summary_rows, lambda row: (row["maker"], row["year"], row["client"] or "未定义"))
-    applications = _group(summary_rows, lambda row: (row["maker"], row["year"], row["application"] or "未定义"))
-    history_maker = _group(rows, lambda row: (row["maker"], row["year"]))
+    clients = _group(maker_summary_rows, lambda row: (row["maker"], row["year"], row["client"] or "未定义"))
+    applications = _group(maker_summary_rows, lambda row: (row["maker"], row["year"], row["application"] or "未定义"))
+    history_maker = _group(maker_history_rows, lambda row: (row["maker"], row["year"]))
     sizes = _group(
-        [row for row in summary_rows if row.get("size") is not None],
+        [row for row in maker_summary_rows if row.get("size") is not None],
         lambda row: (row["maker"], row["year"], _size_bucket(row["size"])),
     )
     maker_technology_size = _group(
-        [row for row in summary_rows if row.get("size") is not None],
+        [row for row in maker_summary_rows if row.get("size") is not None],
         lambda row: (row["maker"], row["year"], row["technology"], _size_bucket(row["size"])),
     )
     market_technology_size = _group(
@@ -134,9 +161,25 @@ def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any
             "summary_mode": summary_mode,
             "summary_target_year": summary_target_year,
             "full_year": full_year,
+            "data_through_year": data_through_year,
+            "data_through_quarter": data_through_quarter,
+            "report_horizon": (
+                "full_year" if full_year
+                else ("q1_q3" if summary_mode.endswith("q1_q3") else summary_mode.rsplit("_", 1)[-1] if "_q1_q" in summary_mode else "q1_q3")
+            ),
+            "header_period_label": (
+                f"Y{summary_target_year % 100}全年" if full_year
+                else (
+                    f"Y{summary_target_year % 100}截至Q{data_through_quarter}"
+                    if not full_year and data_through_year == summary_target_year and data_through_quarter in {1, 2}
+                    else f"Y{summary_target_year % 100}前三季度"
+                )
+            ),
             "original_specification": "Automobile monitor",
             "makers": list(TARGET_MAKERS),
             "market_maker_scope": "all_source_makers",
+            "market_technology_scope": "LTPS, a-Si, Oxide",
+            "maker_technology_scope": "LTPS, a-Si",
             "source_row_count": len(rows),
             "summary_row_count": len(summary_rows),
             "source_tables": source_tables,
@@ -145,13 +188,13 @@ def calculate_competitive_metrics(tables: list[dict[str, Any]]) -> dict[str, Any
             "yoy": "value_2025 / value_2024 - 1",
             "market_share": "maker_shipment / market_shipment",
             "maker_internal_share": "maker_segment_shipment / maker_total_shipment",
-            "segment_share": "market_segment_shipment / total_market_shipment",
-            "total_market_share": "market_segment_shipment / total_market_shipment",
+            "segment_share": "market_segment_shipment / (LTPS + a-Si market); Oxide excluded from share denominator",
+            "total_market_share": "market_segment_shipment / (LTPS + a-Si market); Oxide excluded from share denominator",
             "technology_internal_share": "market_segment_shipment / market_technology_shipment",
             "technology_size_maker_internal_share": "maker_segment_shipment / maker_total_shipment",
             "segment_market_share": "maker_segment_shipment / market_same_technology_size_shipment",
-            "technology_market_share": "maker_segment_shipment / market_technology_shipment",
-            "same_size_market_share": "maker_segment_shipment / market_segment_shipment",
+            "technology_market_share": "maker_segment_shipment / market_technology_shipment (All row: LTPS+a-Si)",
+            "same_size_market_share": "maker_segment_shipment / market_segment_shipment (All row: LTPS+a-Si)",
         },
         "market": market_metrics,
         "summary_matrix": _summary_matrix(
@@ -187,7 +230,7 @@ def _normalize_record(record: dict[str, Any], table: dict[str, Any]) -> dict[str
         return None
     if "automobile monitor" in application.lower() and "others" in application.lower():
         return None
-    if technology not in {"LTPS", "a-Si"}:
+    if technology not in MARKET_TECHNOLOGIES:
         return None
     return {
         "year": year,
@@ -334,6 +377,15 @@ def _technology_size_metrics(
 def _summary_matrix(market, maker, maker_technology, market_technology, maker_segments, market_segments, full_year: bool = False):
     """Build the Y25 Summary matrix (Q1-Q3 or full year depending on data through)."""
     rows = []
+    # Summary「细分占比 / 细分市场占比」分母只用 LTPS+a-Si（终稿口径）。
+    # Oxide 仍计入市场绝对出货与 All 行 YoY，但不进占比分母。
+    share_market = {
+        year: _bucket_sum(
+            market_technology.get((year, "LTPS")),
+            market_technology.get((year, "a-Si")),
+        )
+        for year in SUMMARY_YEARS
+    }
     size_labels = (("<8", '8”以下'), ("[8,12)", '8”-12”'), ("[12,15)", '12”-15”'), (">=15", '15”以上'))
     for technology_name in ("LTPS", "a-Si"):
         for size_bucket, size_label in size_labels:
@@ -349,7 +401,7 @@ def _summary_matrix(market, maker, maker_technology, market_technology, maker_se
             }
             rows.append(_summary_row(
                 technology_name, size_bucket, size_label, False,
-                market_values, maker_values, market, maker,
+                market_values, maker_values, share_market, maker,
                 market_technology, maker_technology, market_values,
             ))
 
@@ -365,10 +417,11 @@ def _summary_matrix(market, maker, maker_technology, market_technology, maker_se
         }
         rows.append(_summary_row(
             technology_name, "total", f"{technology_name} Total", True,
-            market_values, maker_values, market, maker,
+            market_values, maker_values, share_market, maker,
             market_technology, maker_technology, market_values,
         ))
 
+    # All 绝对量/YoY 含 Oxide；厂商细分市场占比分母为 LTPS+a-Si。
     market_values = {year: market.get((year,)) for year in SUMMARY_YEARS}
     maker_values = {
         maker_name: {year: maker.get((maker_name, year)) for year in SUMMARY_YEARS}
@@ -376,7 +429,7 @@ def _summary_matrix(market, maker, maker_technology, market_technology, maker_se
     }
     rows.append(_summary_row(
         "All", "all", "All", True, market_values, maker_values,
-        market, maker, market_technology, maker_technology, market_values,
+        share_market, maker, market_technology, maker_technology, share_market,
     ))
     suffix = "y25_full_year" if full_year else "y25q1_q3"
     title = "Y25全年 Summary" if full_year else "Y25前三季度 Summary"
@@ -391,16 +444,16 @@ def _summary_matrix(market, maker, maker_technology, market_technology, maker_se
 
 def _summary_row(
     technology_name, size_bucket, label, is_total, market_values, maker_values,
-    market, maker, market_technology, maker_technology, market_segment_values,
+    share_market, maker, market_technology, maker_technology, market_segment_values,
 ):
     row_key = f"{_slug(technology_name)}.{_slug(size_bucket)}"
     market_columns = {
         "metric_id": f"market.summary.{row_key}",
         "values": {str(year): _metric_value(market_values[year]) for year in SUMMARY_YEARS},
         "yoy_2025_vs_2024": _ratio(market_values[2025], market_values[2024]),
-        # 最终报告第3页口径：市场尺寸细分 / LTPS+a-Si全市场总量。
+        # 细分占比 = 本行市场量 / (LTPS+a-Si)，不含 Oxide。
         "segment_share": {
-            str(year): _share(market_values[year], market.get((year,)))
+            str(year): _share(market_values[year], share_market.get(year))
             for year in SUMMARY_YEARS
         },
         "technology_internal_share": {
@@ -408,15 +461,18 @@ def _summary_row(
             for year in SUMMARY_YEARS
         },
         "total_market_share": {
-            str(year): _share(market_values[year], market.get((year,))) for year in SUMMARY_YEARS
+            str(year): _share(market_values[year], share_market.get(year)) for year in SUMMARY_YEARS
         },
         "evidence": {str(year): _evidence(market_values[year], "sum") for year in SUMMARY_YEARS},
     }
     if technology_name == "All":
-        market_columns["segment_share"] = {
-            str(year): _share(market_values[year], market.get((year,))) for year in SUMMARY_YEARS
+        # 绝对量含 Oxide；占比列仍显示 100%。
+        all_share = {
+            str(year): (1.0 if share_market.get(year) else None) for year in SUMMARY_YEARS
         }
-        market_columns["technology_internal_share"] = dict(market_columns["segment_share"])
+        market_columns["segment_share"] = dict(all_share)
+        market_columns["technology_internal_share"] = dict(all_share)
+        market_columns["total_market_share"] = dict(all_share)
 
     maker_columns = {}
     for maker_name in TARGET_MAKERS:
@@ -440,8 +496,9 @@ def _summary_row(
             },
             "technology_market_share": {
                 str(year): _share(
-                    values[year], market.get((year,)) if technology_name == "All"
-                    else market_technology.get((year, technology_name))
+                    values[year],
+                    share_market.get(year) if technology_name == "All"
+                    else market_technology.get((year, technology_name)),
                 ) for year in SUMMARY_YEARS
             },
             "same_size_market_share": {
@@ -494,6 +551,8 @@ def _technology(value) -> str:
         return "LTPS"
     if "a-si" in text or "a_si" in text or "asi" == text:
         return "a-Si"
+    if "oxide" in text:
+        return "Oxide"
     return ""
 
 
@@ -540,6 +599,25 @@ def _share(part, total):
     if not part or not total or total["value"] == 0:
         return None
     return _number(part["value"] / total["value"])
+
+
+def _bucket_sum(*buckets):
+    total = None
+    for bucket in buckets:
+        if not bucket:
+            continue
+        if total is None:
+            total = {
+                "value": Decimal(bucket["value"]),
+                "cells": list(bucket.get("cells") or []),
+                "sheet": bucket.get("sheet"),
+                "count": int(bucket.get("count") or 0),
+            }
+        else:
+            total["value"] += bucket["value"]
+            total["cells"].extend(bucket.get("cells") or [])
+            total["count"] += int(bucket.get("count") or 0)
+    return total
 
 
 def _evidence(bucket, aggregation):

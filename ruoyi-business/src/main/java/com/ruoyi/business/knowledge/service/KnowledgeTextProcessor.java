@@ -58,6 +58,70 @@ public final class KnowledgeTextProcessor
         return result.toString().replaceAll("\\n{3,}", "\n\n").trim();
     }
 
+    /** 拼回 PDF 视觉折行。只连接行尾没有句读、且下一行仍是同一句的长行。 */
+    public static String joinWrappedLines(String text)
+    {
+        if (text == null || text.isBlank()) return text == null ? "" : text;
+        String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+        StringBuilder out = new StringBuilder();
+        String pending = null;
+        for (String raw : lines)
+        {
+            String line = raw.trim();
+            if (line.isEmpty())
+            {
+                pending = flush(out, pending);
+                continue;
+            }
+            if (pending == null)
+            {
+                pending = line;
+                continue;
+            }
+            if (continuesWrappedLine(pending, line))
+                pending = joinPair(pending, line);
+            else
+            {
+                pending = flush(out, pending);
+                pending = line;
+            }
+        }
+        flush(out, pending);
+        return out.toString();
+    }
+
+    private static String flush(StringBuilder out, String pending)
+    {
+        if (pending == null) return null;
+        if (out.length() > 0) out.append('\n');
+        out.append(pending);
+        return null;
+    }
+
+    private static boolean continuesWrappedLine(String current, String next)
+    {
+        if (current.length() < 18 || next.isEmpty()) return false;
+        char end = current.charAt(current.length() - 1);
+        if ("。！？；：、.!?;:）)》」】".indexOf(end) >= 0) return false;
+        if (next.startsWith("图") || next.startsWith("表") || next.startsWith("数据来源")
+            || next.startsWith("资料来源") || next.startsWith("下载日志"))
+            return false;
+        return !next.matches("^[（(]?\\d+[）).、].*");
+    }
+
+    private static String joinPair(String current, String next)
+    {
+        char end = current.charAt(current.length() - 1);
+        char start = next.charAt(0);
+        if (isAsciiWord(end) && isAsciiWord(start)) return current + " " + next;
+        return current + next;
+    }
+
+    private static boolean isAsciiWord(char value)
+    {
+        return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
+    }
+
     public static String buildSnippet(String content, String query, List<String> entityTerms, int maxLength)
     {
         String cleaned = cleanPdfText(content);

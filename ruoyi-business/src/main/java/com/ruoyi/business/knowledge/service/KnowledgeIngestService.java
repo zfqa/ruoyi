@@ -26,6 +26,7 @@ import com.ruoyi.business.agent.client.AgentServiceClient;
 import com.ruoyi.business.agent.client.AgentServiceClientException;
 import com.ruoyi.business.knowledge.domain.KnowledgeBase;
 import com.ruoyi.business.knowledge.domain.KnowledgeChunk;
+import com.ruoyi.business.knowledge.domain.KnowledgeFact;
 import com.ruoyi.business.knowledge.domain.KnowledgeIngestTask;
 import com.ruoyi.business.knowledge.domain.KnowledgeVersion;
 import com.ruoyi.business.knowledge.mapper.KnowledgeBaseMapper;
@@ -44,7 +45,8 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class KnowledgeIngestService
 {
-    private static final String PARSER_VERSION = "kb-poc-2-layout-aware";
+    private static final String PARSER_VERSION = "kb-fact-1";
+    private final KnowledgeFactIndexer factIndexer = new KnowledgeFactIndexer();
     private static final int CHUNK_SIZE = 1200;
     private static final int CHUNK_OVERLAP = 120;
 
@@ -526,11 +528,36 @@ public class KnowledgeIngestService
 
     public List<KnowledgeChunk> search(String query, String sourceType, List<Long> roleIds, boolean admin, int limit)
     {
+        return search(query, sourceType, roleIds, admin, limit, null, null, null);
+    }
+
+    public List<KnowledgeChunk> search(String query, String sourceType, List<Long> roleIds, boolean admin, int limit,
+        Long sourceId, Long versionId)
+    {
+        return search(query, sourceType, roleIds, admin, limit, sourceId, versionId, null);
+    }
+
+    /**
+     * 在可选的文档范围内检索。指定 sourceId/versionId 时：先定文档再取 topK，
+     * 且不要求切片正文重复写出主体名（主体可来自文档元数据）。
+     * extraEntityTerms 来自 LLM/规则主体解析，用于通用主体约束，不依赖写死品牌表。
+     */
+    public List<KnowledgeChunk> search(String query, String sourceType, List<Long> roleIds, boolean admin, int limit,
+        Long sourceId, Long versionId, List<String> extraEntityTerms)
+    {
         if (query == null || query.trim().length() < 2) throw new IllegalArgumentException("检索词至少2个字符");
         String actualQuery = query.trim();
-        List<String> entityTerms = KnowledgeTextProcessor.detectEntityTerms(actualQuery);
+        LinkedHashSet<String> merged = new LinkedHashSet<>(KnowledgeTextProcessor.detectEntityTerms(actualQuery));
+        if (extraEntityTerms != null)
+            for (String term : extraEntityTerms)
+                if (term != null && !term.isBlank()) merged.add(term.trim());
+        List<String> entityTerms = new ArrayList<>(merged);
+        boolean scoped = sourceId != null || versionId != null;
+        // 宽召回且已识别主体时，强制切片/文件名命中主体，避免大年报抢走其他主体问题
+        boolean requireEntity = !scoped && !entityTerms.isEmpty();
         List<KnowledgeChunk> chunks = mapper.searchChunks(actualQuery, sourceType, roleIds, admin,
-            Math.max(1, Math.min(limit, 50)), entityTerms, KnowledgeTextProcessor.normalizedLiteral(actualQuery));
+            Math.max(1, Math.min(limit, 50)), entityTerms, KnowledgeTextProcessor.normalizedLiteral(actualQuery),
+            sourceId, versionId, requireEntity);
         for (KnowledgeChunk chunk : chunks)
         {
             String cleaned = KnowledgeTextProcessor.cleanPdfText(chunk.getContent());
@@ -538,6 +565,82 @@ public class KnowledgeIngestService
             chunk.setSourceSnippet(KnowledgeTextProcessor.buildSnippet(chunk.getContent(), actualQuery, entityTerms, 500));
         }
         return chunks;
+    }
+
+    /** 按名称关键字解析授权范围内的知识源（不写死 ID）。 */
+    public KnowledgeBase resolveAuthorizedSourceByNameHint(String nameHint, String preferredType,
+        List<Long> roleIds, boolean admin)
+    {
+        if (nameHint == null || nameHint.isBlank()) return null;
+        KnowledgeBase filter = new KnowledgeBase();
+        filter.setSourceName(nameHint.trim());
+        if (preferredType != null && !preferredType.isBlank()) filter.setSourceType(preferredType.trim());
+        List<KnowledgeBase> rows = mapper.selectAuthorizedKnowledgeBaseList(filter, roleIds, admin);
+        if (rows == null || rows.isEmpty()) return null;
+        for (KnowledgeBase row : rows)
+        {
+            if (row != null && "1".equals(row.getEnabled()) && row.getCurrentVersionId() != null)
+                return row;
+        }
+        return rows.get(0);
+    }
+
+    public KnowledgeBase getAuthorizedSource(Long sourceId, List<Long> roleIds, boolean admin)
+    {
+        if (sourceId == null) return null;
+        return mapper.selectAuthorizedKnowledgeBaseById(sourceId, roleIds, admin);
+    }
+
+    /** 为表格/章节问答补充同版本相邻切片（前后各 radius 条）。 */
+    public List<KnowledgeChunk> expandAdjacentChunks(List<KnowledgeChunk> chunks, int radius)
+    {
+        if (chunks == null || chunks.isEmpty() || radius <= 0) return chunks == null ? List.of() : chunks;
+        Map<String, KnowledgeChunk> merged = new LinkedHashMap<>();
+        for (KnowledgeChunk chunk : chunks)
+        {
+            if (chunk == null) continue;
+            String key = evidenceKey(chunk);
+            merged.putIfAbsent(key, chunk);
+            if (chunk.getVersionId() == null || chunk.getChunkNo() == null) continue;
+            List<KnowledgeChunk> siblings = mapper.selectChunksByVersionId(chunk.getVersionId());
+            if (siblings == null || siblings.isEmpty()) continue;
+            int index = -1;
+            for (int i = 0; i < siblings.size(); i++)
+            {
+                KnowledgeChunk sibling = siblings.get(i);
+                if (sibling != null && chunk.getChunkNo().equals(sibling.getChunkNo()))
+                {
+                    index = i;
+                    break;
+                }
+            }
+            if (index < 0) continue;
+            for (int offset = 1; offset <= radius; offset++)
+            {
+                if (index - offset >= 0) merged.putIfAbsent(evidenceKey(siblings.get(index - offset)), siblings.get(index - offset));
+                if (index + offset < siblings.size())
+                    merged.putIfAbsent(evidenceKey(siblings.get(index + offset)), siblings.get(index + offset));
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    /** 取同版本的指定序号切片，供补全被切在边界上的句子。 */
+    public KnowledgeChunk findChunk(Long versionId, Integer chunkNo)
+    {
+        if (versionId == null || chunkNo == null || chunkNo < 1) return null;
+        KnowledgeChunk chunk = mapper.selectChunkByVersionAndNo(versionId, chunkNo);
+        if (chunk == null || chunk.getContent() == null) return chunk;
+        String cleaned = KnowledgeTextProcessor.cleanPdfText(chunk.getContent());
+        if (!cleaned.isBlank()) chunk.setContent(cleaned);
+        return chunk;
+    }
+
+    private static String evidenceKey(KnowledgeChunk chunk)
+    {
+        if (chunk == null) return "null";
+        if (chunk.getId() != null) return "ID:" + chunk.getId();
+        return String.valueOf(chunk.getSourceId()) + ":" + chunk.getVersionId() + ":" + chunk.getChunkNo();
     }
 
     /**
@@ -838,6 +941,7 @@ public class KnowledgeIngestService
             throw new IOException("解析服务违反统一入库约束，已拒绝结果");
 
         clearGraph(version.getId());
+        mapper.deleteFactsByVersionId(version.getId());
         mapper.deleteChunksByVersionId(version.getId());
         JSONArray chunks = result.getJSONArray("semantic_chunks");
         if (chunks == null || chunks.isEmpty()) chunks = result.getJSONArray("chunk_data");
@@ -1115,6 +1219,7 @@ public class KnowledgeIngestService
         chunk.setMetricId(metricId); chunk.setEvidenceJson(evidenceJson);
         chunk.setContentSha256(storage.sha256(content)); chunk.setTokenCount(Math.max(1, content.length() / 2));
         mapper.insertChunk(chunk);
+        saveFacts(chunk);
         if (graphService != null) graphService.indexChunk(source, version, chunk);
         return number;
     }
@@ -1159,6 +1264,7 @@ public class KnowledgeIngestService
                 }
                 chunk.setContentSha256(storage.sha256(content)); chunk.setTokenCount(Math.max(1, content.length() / 2));
                 mapper.insertChunk(chunk);
+                saveFacts(chunk);
                 if (graphService != null) graphService.indexChunk(source, version, chunk);
             }
             if (end >= normalized.length()) break;
@@ -1183,6 +1289,53 @@ public class KnowledgeIngestService
     private KnowledgeIngestTask findTaskForVersion(Long versionId)
     {
         return mapper.selectIngestTaskByVersionId(versionId);
+    }
+
+    public KnowledgeIngestTask reparsePdf(Long sourceId, String username)
+    {
+        KnowledgeBase source = requireSource(sourceId, "PDF");
+        if (source.getCurrentVersionId() == null) throw new IllegalArgumentException("资料尚未入库");
+        KnowledgeVersion version = mapper.selectVersionById(source.getCurrentVersionId());
+        if (version == null || version.getStoredPath() == null || version.getStoredPath().isBlank())
+            throw new IllegalArgumentException("找不到已入库的 PDF 文件");
+        return submit(version, username, () -> processAgentDocument(source, version));
+    }
+
+    /** 用当前切片重建指标事实，不重新解析 PDF。 */
+    public int rebuildFacts(Long sourceId)
+    {
+        KnowledgeBase source = mapper.selectKnowledgeBaseById(sourceId);
+        if (source == null || source.getCurrentVersionId() == null)
+            throw new IllegalArgumentException("资料不存在或尚未入库");
+        Long versionId = source.getCurrentVersionId();
+        mapper.deleteFactsByVersionId(versionId);
+        int count = 0;
+        for (KnowledgeChunk chunk : mapper.selectChunksByVersionId(versionId))
+        {
+            for (KnowledgeFact fact : factIndexer.extract(chunk))
+            {
+                mapper.insertFact(fact);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public List<KnowledgeFact> searchFacts(List<String> hints, List<Long> sourceIds)
+    {
+        if (hints == null || hints.isEmpty() || sourceIds == null || sourceIds.isEmpty()) return List.of();
+        List<String> usable = hints.stream().filter(hint -> hint != null && hint.trim().length() >= 2).distinct().toList();
+        if (usable.isEmpty()) return List.of();
+        List<Long> ids = sourceIds.stream().filter(id -> id != null).distinct().toList();
+        if (ids.isEmpty()) return List.of();
+        List<KnowledgeFact> found = mapper.searchCurrentFacts(usable, ids);
+        return found == null ? List.of() : found;
+    }
+
+    private void saveFacts(KnowledgeChunk chunk)
+    {
+        if (chunk == null || chunk.getId() == null) return;
+        for (KnowledgeFact fact : factIndexer.extract(chunk)) mapper.insertFact(fact);
     }
 
     private KnowledgeVersion createVersion(KnowledgeBase source, String versionNo, String originalName,

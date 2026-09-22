@@ -31,12 +31,11 @@ FULL_YEAR_QUARTERS = {1, 2, 3, 4}
 
 
 def _is_full_year_2025(rows, data_through_year=None, data_through_quarter=None) -> bool:
+    """有 Omdia 截止季时以其为准；否则才看行内是否齐四季。"""
+    if data_through_year is not None and data_through_quarter is not None:
+        return (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
     qs = {int(row["quarter"]) for row in rows if int(row.get("year") or 0) == 2025}
-    if FULL_YEAR_QUARTERS <= qs:
-        return True
-    if data_through_year is None or data_through_quarter is None:
-        return False
-    return (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
+    return FULL_YEAR_QUARTERS <= qs
 
 
 def calculate_tianma_product_metrics(
@@ -64,6 +63,11 @@ def calculate_tianma_product_metrics(
     size_quarters = FULL_YEAR_QUARTERS if full_year else Q1_Q3
     maker_key = _slug(maker)
     size_distribution = _exact_size_distribution(rows, maker_key, size_quarters, full_year=full_year)
+    # 兼容旧字段名：无论是否全年口径，该键始终只含 Y25 Q1–Q3。
+    q1_q3_size_distribution = (
+        size_distribution if not full_year
+        else _exact_size_distribution(rows, maker_key, Q1_Q3, full_year=False)
+    )
 
     gaps = []
     if not baseline_records:
@@ -104,7 +108,7 @@ def calculate_tianma_product_metrics(
             for technology in TECHNOLOGIES
         },
         "size_distribution": size_distribution,
-        "y25q1_q3_size_distribution": size_distribution,
+        "y25q1_q3_size_distribution": q1_q3_size_distribution,
         "technology_size_growth": {
             technology: _technology_size_metric(rows, technology, maker_key) for technology in TECHNOLOGIES
         },

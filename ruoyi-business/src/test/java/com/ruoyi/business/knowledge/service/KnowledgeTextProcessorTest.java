@@ -32,6 +32,18 @@ class KnowledgeTextProcessorTest
     }
 
     @Test
+    void joinsPdfLineWrapInsideASentence()
+    {
+        String raw = "2022 年 9 月，奇瑞宣布启动“瑶光 2025”战略计划，确立了火星架构（车型\n"
+            + "平台+EEA架构）、鲲鹏动力（动力解决方案）、雄狮科技（汽车智能化板块）、银河生态（合作生态）四大技\n"
+            + "术基座，并宣布在未来5 年内研发投资超千亿。\n"
+            + "图 50: 奇瑞五大技术领域";
+        String joined = KnowledgeTextProcessor.joinWrappedLines(raw);
+        assertTrue(joined.contains("火星架构（车型平台+EEA架构）、鲲鹏动力（动力解决方案）、雄狮科技（汽车智能化板块）、银河生态（合作生态）四大技术基座"));
+        assertTrue(joined.contains("\n图 50: 奇瑞五大技术领域"));
+    }
+
+    @Test
     void snippetStartsNearRequestedMaker()
     {
         String text = "AUO无关说明。" + "无关内容".repeat(80)

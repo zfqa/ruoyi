@@ -71,13 +71,9 @@
         <div class="qa-chat-shell">
           <div class="qa-chat-toolbar">
             <div class="qa-chat-toolbar-left">
-              <el-select v-model="qaForm.sourceType" clearable size="mini" placeholder="全部来源" class="qa-source-select">
-                <el-option v-for="t in sourceTypes" :key="t.value" :label="t.label" :value="t.value" />
-              </el-select>
-              <el-checkbox v-model="qaForm.includeNews" :disabled="!!qaForm.sourceType" size="mini">结合新闻/政策</el-checkbox>
               <span class="qa-web-llm">
-                <el-switch v-model="qaForm.webLlm" />
-                <span>联网大模型</span>
+                <el-switch v-model="qaForm.allowWebSearch" />
+                <span>知识库＋互联网</span>
               </span>
             </div>
             <div class="qa-chat-toolbar-right">
@@ -99,6 +95,7 @@
             <div v-for="message in qaMessages" :key="message.id" :class="['qa-msg', message.role]">
               <div class="qa-msg-meta">
                 <span class="qa-msg-role">{{ message.role === 'user' ? '我' : '助手' }}</span>
+                <span v-if="message.role === 'assistant' && message.result && message.result.qaStatus" class="qa-msg-model">{{ qaStatusLabel(message.result.qaStatus) }}</span>
                 <el-tag v-if="message.role === 'assistant' && message.result" size="mini" :type="answerModeType(message.result.answerMode)">{{ answerModeText(message.result.answerMode) }}</el-tag>
                 <span v-if="message.role === 'assistant' && message.result && message.result.model" class="qa-msg-model">{{ message.result.model }}</span>
               </div>
@@ -241,7 +238,7 @@
               @keydown.native="onQaComposerKeydown"
             />
             <div class="qa-composer-actions">
-              <span class="qa-composer-hint">{{ qaForm.webLlm ? '已开启联网大模型：知识库已有结果时也会联网搜索，用来辅助分析' : '未开启联网大模型：只回答知识库里已有的资料' }}</span>
+              <span class="qa-composer-hint">{{ qaForm.allowWebSearch ? '已开启知识库＋互联网：知识库没有足够依据时才联网，并与知识库来源分开标注' : '默认只在唯一知识库中检索，不会自动联网' }}</span>
               <el-button type="primary" icon="el-icon-s-promotion" :loading="asking" :disabled="!qaForm.question.trim()" @click="doAsk">发送</el-button>
             </div>
           </div>
@@ -404,7 +401,7 @@ export default {
       editOpen: false, form: {}, rules: { sourceCode: [{ required: true, message: '资料编码不能为空', trigger: 'blur' }], sourceName: [{ required: true, message: '资料名称不能为空', trigger: 'blur' }], sourceType: [{ required: true, message: '请选择类型', trigger: 'change' }], allowedPurpose: [{ required: true, message: '请填写允许使用范围', trigger: 'blur' }] },
       ingestOpen: false, ingestSource: null, ingestForm: {}, pdfFile: null, newsJsonFile: null, submitting: false, currentTask: null, poller: null,
       versionOpen: false, versions: [], searchForm: { q: '', sourceType: '' }, searching: false, searched: false, searchResults: [],
-      qaForm: { question: '', sourceType: '', includeNews: true, webLlm: true }, asking: false, qaResult: null,
+      qaForm: { question: '', allowWebSearch: false }, asking: false, qaResult: null,
       qaTask: null, qaPoller: null, qaRunningPanels: ['running-trace'], qaTracePanels: [],
       qaHistory: [], qaHistoryLoading: false, qaHistoryDrawer: false,
       qaMessages: [], activeQaMessageId: null, qaMessageSeq: 0,
@@ -487,6 +484,15 @@ export default {
     stopPolling() { if (this.poller) clearInterval(this.poller); this.poller = null },
     showVersions(row) { listKnowledgeVersions(row.id).then(r => { this.versions = r.data || []; this.versionOpen = true }) },
     doSearch() { if (!this.searchForm.q || this.searchForm.q.trim().length < 2) return this.$modal.msgError('检索词至少2个字符'); this.searching = true; this.searched = true; searchKnowledge({ ...this.searchForm, limit: 20 }).then(r => { this.searchResults = r.data || [] }).finally(() => { this.searching = false }) },
+    qaStatusLabel(status) {
+      return ({
+        ANSWERED: '已回答',
+        PARTIALLY_ANSWERED: '部分回答',
+        NOT_FOUND_IN_KNOWLEDGE_BASE: '知识库未找到依据',
+        LLM_UNAVAILABLE: '模型暂不可用',
+        RETRIEVAL_FAILED: '检索失败'
+      })[status] || status
+    },
     doAsk() {
       if (this.asking) return
       if (!this.qaForm.question || this.qaForm.question.trim().length < 2) return this.$modal.msgError('问题至少2个字符')
@@ -500,7 +506,7 @@ export default {
       this.qaMessages.push({ id: `u-${++this.qaMessageSeq}`, role: 'user', content: question })
       this.qaForm.question = ''
       this.scrollQaChatToBottom()
-      submitKnowledgeQaTask({ ...this.qaForm, question }).then(r => {
+      submitKnowledgeQaTask({ question, allowWebSearch: !!this.qaForm.allowWebSearch }).then(r => {
         this.qaTask = r.data
         this.startQaPolling(r.data.taskId)
       }).catch(() => { this.asking = false })
@@ -880,8 +886,8 @@ export default {
       if (row.sourceType === 'NEWS' && String(row.sourceCode || '').startsWith('NEWS-ARTICLE-')) return false
       return !row.currentVersionId
     },
-    answerModeText(mode) { return ({ LLM_VERIFIED: '分析助手回答', LLM_REPAIRED: '分析助手回答', EXTRACTIVE_FALLBACK: '资料整理回答', WEB_SEARCH: '联网搜索', KB_AND_WEB: '知识库 + 联网辅助' })[mode] || mode || '未知模式' },
-    answerModeType(mode) { return mode === 'WEB_SEARCH' || mode === 'KB_AND_WEB' || mode === 'EXTRACTIVE_FALLBACK' ? 'warning' : 'success' },
+    answerModeText(mode) { return ({ LLM_VERIFIED: '分析助手回答', LLM_REPAIRED: '分析助手回答', EXTRACTIVE_FALLBACK: '资料整理回答', LLM_UNAVAILABLE_WITH_EVIDENCE: '已找到证据，模型暂不可用', PROGRAM_CALCULATED: '按原文计算', PROGRAM_PARTIAL: '部分依据', NOT_FOUND: '知识库未找到依据', RETRIEVAL_FAILED: '检索失败', WEB_SEARCH: '联网搜索', KB_AND_WEB: '知识库 + 联网辅助' })[mode] || mode || '未知模式' },
+    answerModeType(mode) { return mode === 'WEB_SEARCH' || mode === 'KB_AND_WEB' || mode === 'EXTRACTIVE_FALLBACK' || mode === 'NOT_FOUND' || mode === 'LLM_UNAVAILABLE_WITH_EVIDENCE' ? 'warning' : 'success' },
     logStatusType(status) { return ({ SUCCESS: 'success', RETRY: 'warning', FALLBACK: 'warning' })[status] || 'info' },
     prettyEvidence(value) { try { return JSON.stringify(JSON.parse(value), null, 2) } catch (e) { return value } }
   }

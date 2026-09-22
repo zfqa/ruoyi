@@ -22,13 +22,11 @@ def _is_full_year_2025(
     data_through_year: int | None = None,
     data_through_quarter: int | None = None,
 ) -> bool:
-    """四季齐全（或 data_through 已到 4Q25）时切全年口径。"""
+    """有 Omdia 截止季时以其为准；否则才看行内是否齐四季。"""
+    if data_through_year is not None and data_through_quarter is not None:
+        return (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
     qs = {int(row["quarter"]) for row in rows if int(row.get("year") or 0) == 2025}
-    if FULL_YEAR_QUARTERS <= qs:
-        return True
-    if data_through_year is None or data_through_quarter is None:
-        return False
-    return (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
+    return FULL_YEAR_QUARTERS <= qs
 
 REGION_CLIENTS = {
     "日系": {
@@ -147,18 +145,15 @@ def calculate_tianma_customer_metrics(
     summary_quarters = FULL_YEAR_QUARTERS if full_year else Q1_Q3
     primary_period = "Y25F" if full_year else "Y25Q1-Q3"
 
+    # Top6：按当前口径主期出货量降序；排除 Others / Not Defined。
     top_sums = _sum_rows(
         [row for row in rows if row["year"] == 2025 and row["quarter"] in summary_quarters],
         lambda row: (row["client"],),
     )
     top_clients = sorted(
-        (key[0] for key in top_sums if key[0] not in {"Others", "Not Defined", "GM"}),
+        (key[0] for key in top_sums if key[0] not in {"Others", "Not Defined"}),
         key=lambda client: (-top_sums[(client,)]["value"], client),
     )[:6]
-    reference_order = {
-        name: index for index, name in enumerate(REFERENCE_CLIENT_ORDER.get(maker, ()))
-    }
-    top_clients.sort(key=lambda client: (reference_order.get(client, 99), -top_sums[(client,)]["value"]))
     current_total = _selected_bucket(rows, 2025, summary_quarters)
     prior_total = _selected_bucket(rows, 2024, summary_quarters)
     current_q1_q3_total = _selected_bucket(rows, 2025, Q1_Q3)
@@ -229,7 +224,7 @@ def calculate_tianma_customer_metrics(
             "top_client_basis": (
                 "Y25 full-year Qty descending" if full_year else "Y25 Q1-Q3 Qty descending"
             ),
-            "top_client_exclusions": ["Others", "Not Defined", "GM"],
+            "top_client_exclusions": ["Others", "Not Defined"],
             "region_technology_exclusions": ["Oxide"],
             "source_row_count": len(rows),
         },
@@ -370,12 +365,29 @@ def calculate_tianma_application_metrics(
         [row for row in prior_rows if row["size"] is not None and row["technology"]],
         lambda row: (row["application"], row["size"], row["technology"]),
     )
+    # 业务标准批注：1000K 以上全部放入。
+    # 有 profile 时保留其技术拆分/展示名，并补上 profile 未列但已达 1000K 的尺寸。
     profile = REFERENCE_APPLICATION_SIZE_ROWS.get(maker)
-    selected_rows = _select_reference_application_sizes(
-        grouped_by_technology, prior_by_technology, profile
-    ) if profile else _select_threshold_application_sizes(
+    threshold_rows = _select_threshold_application_sizes(
         grouped_by_technology, prior_by_technology
     )
+    if profile:
+        selected_rows = _select_reference_application_sizes(
+            grouped_by_technology, prior_by_technology, profile
+        )
+        by_key = {(row[0], float(row[1])): row for row in selected_rows}
+        for row in threshold_rows:
+            key = (row[0], float(row[1]))
+            if key in by_key:
+                continue
+            if row[4]["value"] > Decimal("1000"):
+                by_key[key] = row
+        selected_rows = sorted(
+            by_key.values(),
+            key=lambda row: (APPLICATION_ORDER.index(row[0]), -row[4]["value"], row[1]),
+        )
+    else:
+        selected_rows = threshold_rows
     key_rows = []
     for application, size, techs, technology_label, value_bucket, prior_bucket in selected_rows:
         key_rows.append({
@@ -403,8 +415,8 @@ def calculate_tianma_application_metrics(
             "summary_quarters": [f"Q{q}" for q in sorted(summary_quarters)],
             "primary_period": primary_period,
             "key_size_threshold_kpcs": 1000,
-            "key_size_rule": "final-report-v1 field-based application/size/technology scope; values are summed from matching records and never depend on worksheet coordinates",
-            "key_size_profile": "final_report_v1" if profile else "threshold_fallback",
+            "key_size_rule": ">=1000K all sizes included; plus each application's top size; profile only supplements labels/order",
+            "key_size_profile": "threshold_plus_profile" if profile else "threshold_fallback",
             "source_row_count": len(rows),
         },
         "application_history": {

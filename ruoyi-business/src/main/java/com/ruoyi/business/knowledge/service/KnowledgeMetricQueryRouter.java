@@ -94,8 +94,7 @@ public final class KnowledgeMetricQueryRouter
         if (!isMetricQuestion(question) || candidates == null || candidates.isEmpty()) return List.of();
         String query = normalize(question);
         List<String> candidateTerms = candidateTerms(question);
-        boolean vehicleSales = namesVehicleBrand(query)
-            && (query.contains(normalize("销量")) || query.contains(normalize("销售")) || query.contains("sales"));
+        boolean vehicleSales = namesVehicleBrand(query) && isVehicleSalesVolumeQuestion(query);
         List<ScoredChunk> scored = new ArrayList<>();
         for (KnowledgeChunk chunk : candidates)
         {
@@ -196,6 +195,23 @@ public final class KnowledgeMetricQueryRouter
         for (int size = max; size > 0; size--)
             if (target.substring(target.length() - size).equals(next.substring(0, size))) { overlap = size; break; }
         target.append(next.substring(overlap));
+    }
+
+    /**
+     * 「销售人员 / 销售费用」含有「销售」，但不能当成汽车销量。
+     * 只有明确的销量词，或在排除人事财务词之后的 sales，才走车辆销量排序。
+     */
+    static boolean isVehicleSalesVolumeQuestion(String query)
+    {
+        if (query == null || query.isBlank()) return false;
+        boolean explicitVolume = containsAny(query, List.of(
+            "销量", "销售量", "销售台数", "销售数量", "多少辆", "万辆", "累计销售", "月度销售", "年度销售"));
+        boolean nonVolume = containsAny(query, List.of(
+            "销售人员", "销售员工", "销售费用", "销售收入", "销售金额",
+            "销售渠道", "销售网络", "销售部门", "销售岗位", "销售成本",
+            "在职员工", "生产人员", "员工数量"));
+        if (nonVolume && !explicitVolume) return false;
+        return explicitVolume || query.contains("sales");
     }
 
     private static boolean namesVehicleBrand(String query)

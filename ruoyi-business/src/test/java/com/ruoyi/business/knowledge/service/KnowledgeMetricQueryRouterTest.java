@@ -78,6 +78,18 @@ class KnowledgeMetricQueryRouterTest
         assertEquals(2L, result.get(0).getId());
     }
 
+    @Test
+    void salesStaffIsNotTreatedAsVehicleVolume()
+    {
+        KnowledgeChunk volume = metric(2L, "oem.byd.sales.y25", "比亚迪 2025 销量 440293");
+        assertTrue(new KnowledgeMetricQueryRouter().rank("比亚迪销售人员有多少", List.of(volume), 5).isEmpty());
+        assertTrue(KnowledgeMetricQueryRouter.isVehicleSalesVolumeQuestion("比亚迪2026年销量"));
+        org.junit.jupiter.api.Assertions.assertFalse(
+            KnowledgeMetricQueryRouter.isVehicleSalesVolumeQuestion("比亚迪销售人员有多少"));
+        org.junit.jupiter.api.Assertions.assertFalse(
+            KnowledgeMetricQueryRouter.isVehicleSalesVolumeQuestion("销售费用是多少"));
+    }
+
     private KnowledgeChunk metric(Long id, String metricId, String content)
     {
         KnowledgeChunk chunk = new KnowledgeChunk();

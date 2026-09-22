@@ -208,6 +208,13 @@ final class StructuredReportOfficeRenderer
         JSONObject scope = methodology == null ? null : methodology.getJSONObject("scope");
         if (scope != null)
         {
+            // Explicit non-full-year wins; Y26 outlook columns must not flip the Y25 horizon.
+            if (Boolean.FALSE.equals(scope.getBoolean("full_year"))
+                || Boolean.FALSE.equals(scope.getBoolean("full_year_2025")))
+            {
+                String horizon = scope.getString("report_horizon");
+                return horizon != null && horizon.toLowerCase().endsWith("_full_year");
+            }
             if (Boolean.TRUE.equals(scope.getBoolean("full_year"))
                 || Boolean.TRUE.equals(scope.getBoolean("full_year_2025")))
             {
@@ -218,25 +225,10 @@ final class StructuredReportOfficeRenderer
             {
                 return true;
             }
-            if ("y25_full_year".equalsIgnoreCase(horizon))
+            String header = scope.getString("header_period_label");
+            if (header != null && header.contains("全年"))
             {
                 return true;
-            }
-            if (Boolean.TRUE.equals(scope.getBoolean("has_y26q1")))
-            {
-                return true;
-            }
-            JSONArray focus = scope.getJSONArray("focus_periods");
-            if (focus != null)
-            {
-                for (Object item : focus)
-                {
-                    String key = String.valueOf(item);
-                    if (key.startsWith("Y26") || key.startsWith("Y27"))
-                    {
-                        return true;
-                    }
-                }
             }
         }
         String title = root.getString("title");
@@ -420,6 +412,11 @@ final class StructuredReportOfficeRenderer
     private static void wordMaker(XWPFDocument document, String maker, JSONObject detail)
     {
         wordHeading(document, maker + " 洞察", 1);
+        List<String> driverEssays = driverNarratives(detail);
+        if (!driverEssays.isEmpty())
+        {
+            wordNarratives(document, maker + " 出货数据变化背后的主要因素", driverEssays);
+        }
         JSONObject history = detail.getJSONObject("history");
         if (history != null)
         {
@@ -697,6 +694,11 @@ final class StructuredReportOfficeRenderer
 
     private static void pptMaker(XMLSlideShow show, String maker, JSONObject detail)
     {
+        List<String> driverEssays = driverNarratives(detail);
+        if (!driverEssays.isEmpty())
+        {
+            addPptNarrativeSlides(show, maker + " 出货数据变化背后的主要因素", driverEssays);
+        }
         JSONObject history = detail.getJSONObject("history");
         if (history != null)
         {
@@ -1005,11 +1007,28 @@ final class StructuredReportOfficeRenderer
         result.addAll(sections.keySet()); return new ArrayList<>(result);
     }
 
+    private static List<String> driverNarratives(JSONObject detail)
+    {
+        List<String> result = new ArrayList<>();
+        if (detail == null) return result;
+        for (String key : List.of("product", "customer", "application"))
+        {
+            JSONObject section = detail.getJSONObject(key);
+            JSONObject insights = section == null ? null : section.getJSONObject("insights");
+            JSONArray essays = insights == null ? null : insights.getJSONArray("driver_narrative");
+            if (essays != null) result.addAll(strings(essays));
+        }
+        return result;
+    }
+
     private static List<String> flattenInsights(JSONObject insights)
     {
-        List<String> result = new ArrayList<>(); if (insights == null) return result;
-        for (Object value : insights.values())
+        List<String> result = new ArrayList<>();
+        if (insights == null) return result;
+        for (String key : insights.keySet())
         {
+            if ("driver_narrative".equals(key)) continue;
+            Object value = insights.get(key);
             if (value instanceof JSONArray array) result.addAll(strings(array));
             else if (value instanceof List<?> list) for (Object item : list) if (item != null) result.add(String.valueOf(item));
             else if (value != null) result.add(String.valueOf(value));

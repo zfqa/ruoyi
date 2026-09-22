@@ -70,7 +70,9 @@ public interface KnowledgeBaseMapper
         @Param("sourceType") String sourceType, @Param("roleIds") List<Long> roleIds,
         @Param("admin") boolean admin, @Param("limit") int limit,
         @Param("entityTerms") List<String> entityTerms,
-        @Param("normalizedLiteral") String normalizedLiteral);
+        @Param("normalizedLiteral") String normalizedLiteral,
+        @Param("sourceId") Long sourceId, @Param("versionId") Long versionId,
+        @Param("requireEntityInContent") boolean requireEntityInContent);
 
     List<KnowledgeChunk> selectCurrentMetricChunks(@Param("roleIds") List<Long> roleIds,
         @Param("admin") boolean admin, @Param("metricTerms") List<String> metricTerms,
@@ -80,6 +82,8 @@ public interface KnowledgeBaseMapper
         @Param("metricId") String metricId, @Param("titlePath") String titlePath);
 
     List<KnowledgeChunk> selectChunksByVersionId(@Param("versionId") Long versionId);
+
+    KnowledgeChunk selectChunkByVersionAndNo(@Param("versionId") Long versionId, @Param("chunkNo") Integer chunkNo);
 
     KnowledgeChunk selectAuthorizedChunkById(@Param("id") Long id,
         @Param("roleIds") List<Long> roleIds, @Param("admin") boolean admin);
@@ -126,4 +130,11 @@ public interface KnowledgeBaseMapper
     int deleteQaCitationsBefore(@Param("cutoff") java.time.Instant cutoff);
     int deleteQaClaimsBefore(@Param("cutoff") java.time.Instant cutoff);
     int deleteQaSessionsBefore(@Param("cutoff") java.time.Instant cutoff);
+
+    int deleteFactsByVersionId(Long versionId);
+
+    int insertFact(com.ruoyi.business.knowledge.domain.KnowledgeFact fact);
+
+    List<com.ruoyi.business.knowledge.domain.KnowledgeFact> searchCurrentFacts(@Param("hints") List<String> hints,
+        @Param("sourceIds") List<Long> sourceIds);
 }

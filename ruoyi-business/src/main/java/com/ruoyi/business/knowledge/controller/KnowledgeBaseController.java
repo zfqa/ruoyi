@@ -147,6 +147,34 @@ public class KnowledgeBaseController extends BaseController
     }
 
     @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
+    @PostMapping("/ingest/reparse")
+    public AjaxResult reparsePdf(@RequestParam("sourceId") Long sourceId)
+    {
+        try
+        {
+            return success(knowledgeIngestService.reparsePdf(sourceId, getUsername()));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
+    @PostMapping("/ingest/rebuild-facts")
+    public AjaxResult rebuildFacts(@RequestParam("sourceId") Long sourceId)
+    {
+        try
+        {
+            return success(knowledgeIngestService.rebuildFacts(sourceId));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
     @Log(title = "新闻知识库入库", businessType = BusinessType.IMPORT)
     @PostMapping("/ingest/news")
     public AjaxResult ingestNews(@RequestBody Map<String, Object> payload)
@@ -279,9 +307,13 @@ public class KnowledgeBaseController extends BaseController
                 : getLoginUser().getUser().getRoles().stream().map(role -> role.getRoleId()).collect(Collectors.toList());
             boolean includeNews = payload.get("includeNews") == null
                 || Boolean.parseBoolean(string(payload.get("includeNews")));
-            boolean webLlm = payload.get("webLlm") != null && Boolean.parseBoolean(string(payload.get("webLlm")));
+            Long sourceId = payload.get("sourceId") == null || string(payload.get("sourceId")).isBlank()
+                ? null : Long.valueOf(string(payload.get("sourceId")));
+            Long versionId = payload.get("versionId") == null || string(payload.get("versionId")).isBlank()
+                ? null : Long.valueOf(string(payload.get("versionId")));
             return success(knowledgeQaService.ask(string(payload.get("question")), string(payload.get("sourceType")),
-                roleIds, getLoginUser().getUser().isAdmin(), includeNews, webLlm));
+                roleIds, getLoginUser().getUser().isAdmin(), includeNews, allowWebSearch(payload), sourceId, versionId,
+                (progress, stage, logs) -> { }));
         }
         catch (Exception e)
         {
@@ -297,9 +329,12 @@ public class KnowledgeBaseController extends BaseController
         {
             boolean includeNews = payload.get("includeNews") == null
                 || Boolean.parseBoolean(string(payload.get("includeNews")));
-            boolean webLlm = payload.get("webLlm") != null && Boolean.parseBoolean(string(payload.get("webLlm")));
+            Long sourceId = payload.get("sourceId") == null || string(payload.get("sourceId")).isBlank()
+                ? null : Long.valueOf(string(payload.get("sourceId")));
+            Long versionId = payload.get("versionId") == null || string(payload.get("versionId")).isBlank()
+                ? null : Long.valueOf(string(payload.get("versionId")));
             return success(knowledgeQaTaskService.submit(string(payload.get("question")),
-                string(payload.get("sourceType")), includeNews, webLlm, roleIds(),
+                string(payload.get("sourceType")), includeNews, allowWebSearch(payload), sourceId, versionId, roleIds(),
                 getLoginUser().getUser().isAdmin(), getUsername()));
         }
         catch (Exception e)
@@ -455,6 +490,16 @@ public class KnowledgeBaseController extends BaseController
     private String string(Object value)
     {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    /** 默认只查知识库。allowWebSearch 优先，兼容旧字段 webLlm。 */
+    private boolean allowWebSearch(Map<String, Object> payload)
+    {
+        if (payload.get("allowWebSearch") != null)
+            return Boolean.parseBoolean(string(payload.get("allowWebSearch")));
+        if (payload.get("webLlm") != null)
+            return Boolean.parseBoolean(string(payload.get("webLlm")));
+        return false;
     }
 
     /** 只返回溯源所需元数据，不向浏览器暴露服务器文件路径和内容哈希。 */

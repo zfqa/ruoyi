@@ -33,7 +33,7 @@ class CompetitiveInsightReportTest(unittest.TestCase):
         report = generate_competitive_insight_report(parsed, use_llm=False)
         self.assertEqual("competitive_insight_v1", report["report_type"])
         self.assertEqual(["Tianma", "AUO", "CSOT", "BOE"], [item["maker"] for item in report["makers"]])
-        self.assertEqual("current_year / previous_year - 1", report["methodology"]["formulas"]["yoy"])
+        self.assertEqual("2025 / 2024 - 1", report["methodology"]["formulas"]["yoy"])
         self.assertEqual(["<8", "[8,12)", "[12,15)", ">=15"], report["methodology"]["size_buckets"])
         self.assertGreaterEqual(len(report["methodology"]["notes"]), 8)
         self.assertIn("growth_contribution", report["methodology"]["formulas"])
@@ -157,6 +157,40 @@ class CompetitiveInsightReportTest(unittest.TestCase):
                 "auo.technology_size.ltps.gte15",
             ],
             [item["metric_ids"][0] for item in report["narrative_sources"]],
+        )
+        self.assertFalse(any(
+            "无法解析的指标引用" in item
+            for item in report["quality"]["data_gaps"]
+        ))
+
+    def test_client_metric_typo_adaayo_resolves_to_adayo(self):
+        class FakeClient:
+            available = True
+            model = "fake"
+
+            def complete_json(self, system_prompt, user_prompt, max_tokens=3000):
+                return {
+                    "executive_summary": [
+                        "BOE客户Adayo增长 [boe.client.adaayo.shipment]",
+                    ]
+                }
+
+        parsed = {
+            "workbook_id": "sha256:test",
+            "file_name": "tracker.xlsx",
+            "computed_metrics": {
+                "engine": "test",
+                "client": {
+                    "metric_id": "boe.client.adayo.shipment",
+                    "evidence": {"Y25Q1-Q3": {"sheet": "Supply Chain", "cells": ["A1"]}},
+                },
+            },
+        }
+        report = generate_competitive_insight_report(parsed, llm_client=FakeClient())
+        self.assertIn("boe.client.adayo.shipment", report["quality"]["narrative_metric_refs"])
+        self.assertEqual(
+            ["boe.client.adayo.shipment"],
+            report["narrative_sources"][0]["metric_ids"],
         )
         self.assertFalse(any(
             "无法解析的指标引用" in item

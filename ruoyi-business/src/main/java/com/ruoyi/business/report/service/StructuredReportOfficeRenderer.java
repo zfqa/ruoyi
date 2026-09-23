@@ -13,6 +13,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.ruoyi.business.report.domain.AiReport;
@@ -48,8 +50,17 @@ final class StructuredReportOfficeRenderer
     private static final List<String> BASE_PERIODS = List.of("Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3");
     private static final ThreadLocal<List<String>> ACTIVE_PERIODS = ThreadLocal.withInitial(() -> BASE_PERIODS);
     private static final ThreadLocal<Boolean> FULL_YEAR = ThreadLocal.withInitial(() -> Boolean.FALSE);
+    private static final ThreadLocal<Integer> CURRENT_YEAR = ThreadLocal.withInitial(() -> 2025);
+    private static final ThreadLocal<Integer> PRIOR_YEAR = ThreadLocal.withInitial(() -> 2024);
+    private static final ThreadLocal<String> FY_KEY = ThreadLocal.withInitial(() -> "Y25F");
+    private static final ThreadLocal<String> Q13_KEY = ThreadLocal.withInitial(() -> "Y25Q1-Q3");
+    private static final ThreadLocal<String> HEADER_LABEL = ThreadLocal.withInitial(() -> "");
+    private static final ThreadLocal<String> ANNUAL_CURRENT_KEY = ThreadLocal.withInitial(() -> "Y25");
     private static final List<String> DEFAULT_MAKERS = List.of("Tianma", "AUO", "CSOT", "BOE");
     private static final DecimalFormat NUMBER = new DecimalFormat("#,##0.##");
+    private static final String UNRESOLVED_METRIC_GAP_PREFIX = "分析文案包含无法解析的指标引用：";
+    private static final Pattern CLIENT_METRIC_PATTERN = Pattern.compile(
+        "^(?:maker\\.)?([a-z0-9_]+)\\.client\\.([a-z0-9_]+)(?:\\.shipment)?$", Pattern.CASE_INSENSITIVE);
 
     private StructuredReportOfficeRenderer() {}
 
@@ -63,10 +74,90 @@ final class StructuredReportOfficeRenderer
         return Boolean.TRUE.equals(FULL_YEAR.get());
     }
 
+    private static int currentYear()
+    {
+        return CURRENT_YEAR.get();
+    }
+
+    private static int priorYear()
+    {
+        return PRIOR_YEAR.get();
+    }
+
+    private static String fyKey()
+    {
+        return FY_KEY.get();
+    }
+
+    private static String q13Key()
+    {
+        return Q13_KEY.get();
+    }
+
+    private static String annualCurrentKey()
+    {
+        return ANNUAL_CURRENT_KEY.get();
+    }
+
+    private static String headerLabel()
+    {
+        return HEADER_LABEL.get();
+    }
+
+    private static String yy(int year)
+    {
+        return "Y" + String.valueOf(year).substring(Math.max(0, String.valueOf(year).length() - 2));
+    }
+
+    private static String priorYearLabel()
+    {
+        return yy(priorYear());
+    }
+
+    private static String currentYearLabel()
+    {
+        return yy(currentYear());
+    }
+
+    private static String priorYearMetricKey()
+    {
+        return String.valueOf(priorYear());
+    }
+
+    private static String currentYearMetricKey()
+    {
+        return String.valueOf(currentYear());
+    }
+
+    private static String scopePeriodLabel()
+    {
+        String label = headerLabel();
+        if (label != null && !label.isBlank())
+        {
+            return label;
+        }
+        return fullYear() ? currentYearLabel() + "全年" : currentYearLabel() + "前三季度";
+    }
+
     private static void bindPeriods(JSONObject root)
     {
-        boolean fy = detectFullYear(root);
-        FULL_YEAR.set(fy);
+        JSONObject methodology = root == null ? null : root.getJSONObject("methodology");
+        JSONObject scope = methodology == null ? null : methodology.getJSONObject("scope");
+        int current = scope != null && scope.getInteger("current_year") != null ? scope.getInteger("current_year") : 2025;
+        int prior = scope != null && scope.getInteger("prior_year") != null ? scope.getInteger("prior_year") : current - 1;
+        String fy = scope != null && scope.getString("full_year_period") != null && !scope.getString("full_year_period").isBlank()
+            ? scope.getString("full_year_period") : yy(current) + "F";
+        String q13 = scope != null && scope.getString("q1_q3_period") != null && !scope.getString("q1_q3_period").isBlank()
+            ? scope.getString("q1_q3_period") : yy(current) + "Q1-Q3";
+        CURRENT_YEAR.set(current);
+        PRIOR_YEAR.set(prior);
+        FY_KEY.set(fy);
+        Q13_KEY.set(q13);
+        HEADER_LABEL.set(scope == null || scope.getString("header_period_label") == null
+            ? "" : scope.getString("header_period_label"));
+        ANNUAL_CURRENT_KEY.set(yy(current));
+        boolean fyReport = detectFullYear(root);
+        FULL_YEAR.set(fyReport);
         ACTIVE_PERIODS.set(resolvePeriods(root));
     }
 
@@ -74,11 +165,17 @@ final class StructuredReportOfficeRenderer
     {
         ACTIVE_PERIODS.remove();
         FULL_YEAR.remove();
+        CURRENT_YEAR.remove();
+        PRIOR_YEAR.remove();
+        FY_KEY.remove();
+        Q13_KEY.remove();
+        HEADER_LABEL.remove();
+        ANNUAL_CURRENT_KEY.remove();
     }
 
     private static List<String> resolvePeriods(JSONObject root)
     {
-        LinkedHashSet<String> ordered = new LinkedHashSet<>(BASE_PERIODS);
+        LinkedHashSet<String> ordered = new LinkedHashSet<>();
         JSONObject methodology = root == null ? null : root.getJSONObject("methodology");
         JSONObject scope = methodology == null ? null : methodology.getJSONObject("scope");
         JSONArray focus = scope == null ? null : scope.getJSONArray("focus_periods");
@@ -91,6 +188,15 @@ final class StructuredReportOfficeRenderer
                     ordered.add(String.valueOf(item));
                 }
             }
+        }
+        if (scope != null)
+        {
+            addPeriodKey(ordered, scope.getString("full_year_period"));
+            addPeriodKey(ordered, scope.getString("q1_q3_period"));
+        }
+        if (ordered.isEmpty())
+        {
+            ordered.addAll(BASE_PERIODS);
         }
         JSONObject sections = makerSections(root);
         for (String maker : sections.keySet())
@@ -110,6 +216,19 @@ final class StructuredReportOfficeRenderer
                 }
             }
         }
+        // summary_years (e.g. 2024/2025 → Y24/Y25) must not enter history axes; keep Y22–Yn from focus/period_order only.
+        if (scope != null)
+        {
+            String bareCurrent = yy(CURRENT_YEAR.get() == null ? 2025 : CURRENT_YEAR.get());
+            if (ordered.contains(FY_KEY.get()) || ordered.contains(Q13_KEY.get()))
+            {
+                ordered.remove(bareCurrent);
+            }
+        }
+        if (ordered.isEmpty())
+        {
+            ordered.addAll(BASE_PERIODS);
+        }
         Integer throughYear = scope == null ? null : scope.getInteger("data_through_year");
         Integer throughQuarter = scope == null ? null : scope.getInteger("data_through_quarter");
         if (throughYear == null || throughQuarter == null)
@@ -125,6 +244,14 @@ final class StructuredReportOfficeRenderer
             }
         }
         return clipped.isEmpty() ? new ArrayList<>(ordered) : clipped;
+    }
+
+    private static void addPeriodKey(Set<String> ordered, String key)
+    {
+        if (key != null && !key.isBlank())
+        {
+            ordered.add(key);
+        }
     }
 
     private static boolean withinDataThrough(String key, int throughYear, int throughQuarter)
@@ -220,6 +347,11 @@ final class StructuredReportOfficeRenderer
             {
                 return true;
             }
+            String primaryPeriod = scope.getString("primary_period");
+            if (primaryPeriod != null && primaryPeriod.endsWith("F"))
+            {
+                return true;
+            }
             String horizon = scope.getString("report_horizon");
             if (horizon != null && horizon.toLowerCase().endsWith("_full_year"))
             {
@@ -247,9 +379,7 @@ final class StructuredReportOfficeRenderer
         try (XWPFDocument document = new XWPFDocument())
         {
             wordTitle(document, reportTitle(report, root));
-            wordSubtitle(document, fullYear()
-                ? "车载显示市场结构化分析报告（Y25全年）"
-                : "车载显示市场结构化分析报告（Y25前三季度）");
+            wordSubtitle(document, "车载显示市场结构化分析报告（" + scopePeriodLabel() + "）");
             wordMetadata(document, report, root);
             wordNarratives(document, "管理层摘要", root.getJSONArray("executive_summary"));
             wordMarketSummary(document, root);
@@ -318,7 +448,7 @@ final class StructuredReportOfficeRenderer
 
     private static void wordMarketSummary(XWPFDocument document, JSONObject root)
     {
-        wordHeading(document, fullYear() ? "Y25全年总览" : "Y25前三季度总览", 1);
+        wordHeading(document, fullYear() ? currentYearLabel() + "全年总览" : currentYearLabel() + "前三季度总览", 1);
         JSONObject summary = root.getJSONObject("market_summary");
         JSONArray marketRows = summary == null ? null : summary.getJSONArray("rows");
         List<String[]> totalRows = new ArrayList<>();
@@ -327,14 +457,14 @@ final class StructuredReportOfficeRenderer
             for (Object item : marketRows)
             {
                 JSONObject metric = object(item);
-                totalRows.add(new String[] {"市场合计", metricValue(metric, "2024"), metricValue(metric, "2025"), pct(metric.get("yoy_2025_vs_2024"), 1)});
+                totalRows.add(new String[] {"市场合计", metricValue(metric, priorYearMetricKey()), metricValue(metric, currentYearMetricKey()), pct(metric.get("yoy_2025_vs_2024"), 1)});
             }
         }
         if (!totalRows.isEmpty())
         {
             wordTable(document, fullYear()
-                ? new String[] {"范围", "Y24全年（千片）", "Y25全年（千片）", "同比"}
-                : new String[] {"范围", "Y24 Q1-Q3（千片）", "Y25 Q1-Q3（千片）", "同比"}, totalRows, 9);
+                ? new String[] {"范围", priorYearLabel() + "全年（千片）", currentYearLabel() + "全年（千片）", "同比"}
+                : new String[] {"范围", priorYearLabel() + " Q1-Q3（千片）", currentYearLabel() + " Q1-Q3（千片）", "同比"}, totalRows, 9);
         }
         JSONObject matrix = summary == null ? null : summary.getJSONObject("summary_matrix");
         JSONArray rows = matrix == null ? null : matrix.getJSONArray("rows");
@@ -361,14 +491,14 @@ final class StructuredReportOfficeRenderer
             List<String> cells = new ArrayList<>();
             cells.add(safe(row.getString("label")));
             cells.add(pct(market == null ? null : market.get("yoy_2025_vs_2024"), 0));
-            cells.add(pct(valueAt(market, "total_market_share", "2025"), 0));
+            cells.add(pct(valueAt(market, "total_market_share", currentYearMetricKey()), 0));
             JSONObject makerValues = row.getJSONObject("makers");
             for (String maker : makers)
             {
                 JSONObject metric = makerValues == null ? null : makerValues.getJSONObject(maker);
                 cells.add(pct(metric == null ? null : metric.get("yoy_2025_vs_2024"), 0));
-                cells.add(pct(valueAt(metric, "internal_share", "2025"), 0));
-                cells.add(pct(valueAt(metric, "same_size_market_share", "2025"), 1));
+                cells.add(pct(valueAt(metric, "internal_share", currentYearMetricKey()), 0));
+                cells.add(pct(valueAt(metric, "same_size_market_share", currentYearMetricKey()), 1));
             }
             result.add(cells.toArray(String[]::new));
         }
@@ -385,7 +515,7 @@ final class StructuredReportOfficeRenderer
             result.add(new String[] {
                 safe(row.getString("label")),
                 pct(market == null ? null : market.get("yoy_2025_vs_2024"), 0),
-                pct(valueAt(market, "total_market_share", "2025"), 0)
+                pct(valueAt(market, "total_market_share", currentYearMetricKey()), 0)
             });
         }
         return result;
@@ -402,8 +532,8 @@ final class StructuredReportOfficeRenderer
             result.add(new String[] {
                 safe(row.getString("label")),
                 pct(metric == null ? null : metric.get("yoy_2025_vs_2024"), 0),
-                pct(valueAt(metric, "internal_share", "2025"), 0),
-                pct(valueAt(metric, "same_size_market_share", "2025"), 1)
+                pct(valueAt(metric, "internal_share", currentYearMetricKey()), 0),
+                pct(valueAt(metric, "same_size_market_share", currentYearMetricKey()), 1)
             });
         }
         return result;
@@ -594,7 +724,7 @@ final class StructuredReportOfficeRenderer
     {
         JSONObject quality = root.getJSONObject("quality");
         if (quality == null) return;
-        wordNarratives(document, "数据缺口", quality.getJSONArray("data_gaps"));
+        wordNarratives(document, "数据缺口", displayDataGaps(root));
         wordNarratives(document, "生成提示", quality.getJSONArray("warnings"));
     }
 
@@ -692,7 +822,7 @@ final class StructuredReportOfficeRenderer
         }
     }
 
-    private static void pptMaker(XMLSlideShow show, String maker, JSONObject detail)
+    private static void pptMaker(XMLSlideShow show, String maker, JSONObject detail) throws IOException
     {
         List<String> driverEssays = driverNarratives(detail);
         if (!driverEssays.isEmpty())
@@ -708,24 +838,48 @@ final class StructuredReportOfficeRenderer
             addHistoryRow(rows, "Shipment share", history.getJSONObject("shipment_share"), true);
             addHistoryRow(rows, "Display area share", history.getJSONObject("display_area_share"), true);
             addPptTableSlides(show, maker + "前装出货 面积及市占率", historyHeaders(), rows, flattenInsights(history.getJSONObject("insights")), 9);
+            XSLFSlide volumeSlide = show.createSlide();
+            pptText(volumeSlide, maker + "前装出货与面积", 44, 16, 872, 32, 18, true, NAVY, TextAlign.LEFT);
+            StructuredReportPptCharts.addHistoryVolumeCharts(show, volumeSlide, maker, history, periods(), periodDisplayLabels());
+            pptFooter(volumeSlide);
+            XSLFSlide shareSlide = show.createSlide();
+            pptText(shareSlide, maker + "前装市占率情况", 44, 16, 872, 32, 18, true, NAVY, TextAlign.LEFT);
+            StructuredReportPptCharts.addHistoryShareChart(show, shareSlide, maker, history, periods(), periodDisplayLabels());
+            pptFooter(shareSlide);
         }
         JSONObject product = detail.getJSONObject("product"); if (product != null) pptProduct(show, maker, product);
         JSONObject customer = detail.getJSONObject("customer"); if (customer != null) pptCustomer(show, maker, customer);
         JSONObject application = detail.getJSONObject("application"); if (application != null) pptApplication(show, maker, application);
     }
 
-    private static void pptProduct(XMLSlideShow show, String maker, JSONObject product)
+    private static void pptProduct(XMLSlideShow show, String maker, JSONObject product) throws IOException
     {
         JSONObject technology = product.getJSONObject("technology_history"); List<String[]> rows = new ArrayList<>();
         for (String name : List.of("LTPS", "a-Si")) { JSONObject metric = technology == null ? null : technology.getJSONObject(name); if (metric != null) rows.add(periodRow(name, metric, false)); }
         addPptTableSlides(show, maker + "增长点分析一 产品线", periodHeaders("技术"), rows, flattenInsights(product.getJSONObject("insights")), 9);
+        boolean hasTech = technology != null && (technology.getJSONObject("LTPS") != null || technology.getJSONObject("a-Si") != null);
+        JSONObject distributionPreview = product.getJSONObject("size_distribution");
+        if (distributionPreview == null) distributionPreview = product.getJSONObject("y25q1_q3_size_distribution");
+        boolean hasSize = distributionPreview != null && distributionPreview.getJSONArray("points") != null
+            && !distributionPreview.getJSONArray("points").isEmpty();
+        boolean hasGrowth = product.getJSONObject("technology_size_growth") != null;
+        if (hasTech || hasSize || hasGrowth)
+        {
+            XSLFSlide productCharts = show.createSlide();
+            pptText(productCharts, maker + "增长点分析一：产品线", 44, 18, 872, 36, 20, true, NAVY, TextAlign.LEFT);
+            StructuredReportPptCharts.addTechnologyChart(show, productCharts, maker, product, periods(), periodDisplayLabels(), 28, 56, 300, 250);
+            StructuredReportPptCharts.addSizeDistributionChart(show, productCharts, maker, product, 340, 56, 360, 250);
+            StructuredReportPptCharts.addTechnologySizeChart(show, productCharts, maker, product, "LTPS", periods(), periodDisplayLabels(), 710, 56, 230, 120);
+            StructuredReportPptCharts.addTechnologySizeChart(show, productCharts, maker, product, "a-Si", periods(), periodDisplayLabels(), 710, 186, 230, 120);
+            pptFooter(productCharts);
+        }
         JSONObject distribution = product.getJSONObject("size_distribution");
         if (distribution == null) distribution = product.getJSONObject("y25q1_q3_size_distribution");
         JSONArray points = distribution == null ? null : distribution.getJSONArray("points");
         if (points != null && !points.isEmpty())
         {
             String[] headers = new String[] {"Size", "Shipment", "Size", "Shipment", "Size", "Shipment", "Size", "Shipment"};
-            addPptTableSlides(show, maker + (fullYear() ? " Y25全年尺寸别分布" : " Y25 Q1-Q3尺寸别分布"), headers, sizeGridRows(points, 4), List.of(), 9);
+            addPptTableSlides(show, maker + (fullYear() ? " " + currentYearLabel() + "全年尺寸别分布" : " " + currentYearLabel() + " Q1-Q3尺寸别分布"), headers, sizeGridRows(points, 4), List.of(), 9);
         }
         JSONObject growth = product.getJSONObject("technology_size_growth");
         if (growth != null)
@@ -757,7 +911,7 @@ final class StructuredReportOfficeRenderer
         return result;
     }
 
-    private static void pptCustomer(XMLSlideShow show, String maker, JSONObject customer)
+    private static void pptCustomer(XMLSlideShow show, String maker, JSONObject customer) throws IOException
     {
         JSONObject top = customer.getJSONObject("top_clients"); JSONArray clients = top == null ? null : top.getJSONArray("clients"); List<String[]> clientRows = new ArrayList<>();
         if (clients != null) for (Object item : clients)
@@ -766,21 +920,29 @@ final class StructuredReportOfficeRenderer
             if (fullYear())
             {
                 clientRows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"),
-                    value(periods, "Y25F"), value(periods, "Y25Q1-Q3"),
+                    value(periods, fyKey()), value(periods, q13Key()),
                     pct(primaryNumber(client, "yoy_primary", "yoy_2025_full_vs_2024_full", "yoy_2025_q1_q3_vs_2024_q1_q3"), 0),
                     pct(primaryNumber(client, "share_primary", "share_y25_full", "share_y25_q1_q3"), 0),
                     pct(primaryNumber(client, "growth_contribution_primary", "growth_contribution_y25_full", "growth_contribution_y25_q1_q3"), 0)});
             }
             else
             {
-                clientRows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"), value(periods, "Y25Q1-Q3"),
+                clientRows.add(new String[] {safe(client.getString("client")), value(periods, "Y22"), value(periods, "Y23"), value(periods, "Y24"), value(periods, q13Key()),
                     pct(client.get("yoy_2025_q1_q3_vs_2024_q1_q3"), 0), pct(client.get("share_y25_q1_q3"), 0), pct(client.get("growth_contribution_y25_q1_q3"), 0)});
             }
         }
+        if (clients != null && !clients.isEmpty())
+        {
+            XSLFSlide customerChart = show.createSlide();
+            pptText(customerChart, maker + "增长点分析二：客户/区域", 44, 18, 872, 36, 20, true, NAVY, TextAlign.LEFT);
+            StructuredReportPptCharts.addCustomerChart(show, customerChart, maker, customer, periods(), periodDisplayLabels(),
+                fullYear(), currentYearLabel(), 40, 58, 880, 420);
+            pptFooter(customerChart);
+        }
         addPptTableSlides(show, maker + "增长点分析二 客户",
             fullYear()
-                ? new String[] {"客户", "Y22", "Y23", "Y24", "Y25F", "Y25 Q1-Q3", "同比", "内部占比", "增长贡献"}
-                : new String[] {"客户", "Y22", "Y23", "Y24", "Y25 Q1-Q3", "同比", "内部占比", "增长贡献"},
+                ? new String[] {"客户", "Y22", "Y23", "Y24", fyKey(), periodLabel(q13Key()), "同比", "内部占比", "增长贡献"}
+                : new String[] {"客户", "Y22", "Y23", "Y24", periodLabel(q13Key()), "同比", "内部占比", "增长贡献"},
             clientRows, flattenInsights(customer.getJSONObject("insights")), 8);
         JSONObject regions = customer.getJSONObject("regions"); JSONArray regionRows = regions == null ? null : regions.getJSONArray("rows"); List<String[]> values = new ArrayList<>();
         if (regionRows != null) for (Object item : regionRows)
@@ -804,7 +966,7 @@ final class StructuredReportOfficeRenderer
             values, List.of(), 9);
     }
 
-    private static void pptApplication(XMLSlideShow show, String maker, JSONObject application)
+    private static void pptApplication(XMLSlideShow show, String maker, JSONObject application) throws IOException
     {
         JSONObject history = application.getJSONObject("application_history"); JSONArray series = history == null ? null : history.getJSONArray("series"); List<String[]> rows = new ArrayList<>();
         if (series != null) for (Object item : series)
@@ -815,8 +977,16 @@ final class StructuredReportOfficeRenderer
             row[base.length + 1] = pct(primaryNumber(metric, "growth_contribution_primary", "growth_contribution_y25_full", "growth_contribution_y25_q1_q3"), 0);
             rows.add(row);
         }
+        if (series != null && !series.isEmpty())
+        {
+            XSLFSlide applicationChart = show.createSlide();
+            pptText(applicationChart, maker + "增长点分析三：应用", 44, 18, 872, 36, 20, true, NAVY, TextAlign.LEFT);
+            StructuredReportPptCharts.addApplicationChart(show, applicationChart, maker, application, periods(), periodDisplayLabels(),
+                fullYear(), currentYearLabel(), 40, 58, 880, 420);
+            pptFooter(applicationChart);
+        }
         List<String> headers = new ArrayList<>(List.of(periodHeaders("应用")));
-        headers.add(fullYear() ? "Y25全年占比" : "Y25占比");
+        headers.add(fullYear() ? currentYearLabel() + "全年占比" : currentYearLabel() + "占比");
         headers.add("增长贡献");
         addPptTableSlides(show, maker + "增长点分析三 应用", headers.toArray(String[]::new), rows, flattenInsights(application.getJSONObject("insights")), 8);
         JSONObject sizes = application.getJSONObject("key_sizes"); JSONArray sizeRows = sizes == null ? null : sizes.getJSONArray("rows"); List<String[]> values = new ArrayList<>();
@@ -825,7 +995,7 @@ final class StructuredReportOfficeRenderer
             JSONObject row = object(item); values.add(new String[] {safe(row.getString("application")), number(row.get("size")), safe(row.getString("technology")),
                 number(row.get("shipment")), pct(row.get("share"), 0), pct(primaryNumber(row, "yoy_primary", "yoy_2025_q1_q3_vs_2024_q1_q3"), 0)});
         }
-        addPptTableSlides(show, maker + "应用别重点尺寸" + (fullYear() ? "（Y25全年）" : "（Y25 Q1-Q3）"),
+        addPptTableSlides(show, maker + "应用别重点尺寸" + (fullYear() ? "（" + currentYearLabel() + "全年）" : "（" + currentYearLabel() + " Q1-Q3）"),
             new String[] {"应用", "尺寸", "技术", "出货量", "占比", "同比"}, values, List.of(), 9);
     }
 
@@ -843,7 +1013,7 @@ final class StructuredReportOfficeRenderer
     {
         JSONObject quality = root.getJSONObject("quality"); if (quality == null) return;
         List<String> lines = new ArrayList<>();
-        for (String gap : strings(quality.getJSONArray("data_gaps"))) lines.add("数据缺口：" + gap);
+        for (String gap : displayDataGaps(root)) lines.add("数据缺口：" + gap);
         for (String warning : strings(quality.getJSONArray("warnings"))) lines.add("生成提示：" + warning);
         addPptNarrativeSlides(show, "报告质量说明", lines);
     }
@@ -851,12 +1021,50 @@ final class StructuredReportOfficeRenderer
     private static void addPptNarrativeSlides(XMLSlideShow show, String title, List<String> lines)
     {
         if (lines == null || lines.isEmpty()) return;
-        for (int from = 0, page = 1; from < lines.size(); from += 8, page++)
+        final double top = 78;
+        final double bottom = 505;
+        final double boxWidth = 870;
+        final double fontSize = 14;
+        final int charsPerLine = 42;
+        List<String> essays = new ArrayList<>();
+        for (String raw : lines)
         {
-            int to = Math.min(from + 8, lines.size()); XSLFSlide slide = show.createSlide();
-            pptText(slide, title + (lines.size() > 8 ? "（" + page + "）" : ""), 48, 26, 864, 48, 24, true, NAVY, TextAlign.LEFT);
-            double y = 98;
-            for (String line : lines.subList(from, to)) { pptText(slide, "• " + line, 70, y, 820, 44, 15, false, Color.DARK_GRAY, TextAlign.LEFT); y += 50; }
+            if (raw != null && !raw.isBlank()) essays.add(raw.trim());
+        }
+        if (essays.isEmpty()) return;
+
+        boolean longForm = essays.stream().anyMatch(s -> s.length() > 90);
+        if (longForm)
+        {
+            // Driver essays: one per slide, wrapped, no overlap.
+            for (int i = 0; i < essays.size(); i++)
+            {
+                String text = "• " + essays.get(i);
+                int estimatedLines = Math.max(1, (int) Math.ceil(text.length() / (double) charsPerLine));
+                double boxHeight = Math.min(bottom - top, Math.max(48, estimatedLines * (fontSize + 6) + 16));
+                XSLFSlide slide = show.createSlide();
+                String pageTitle = essays.size() > 1 ? title + "（" + (i + 1) + "/" + essays.size() + "）" : title;
+                pptText(slide, pageTitle, 40, 18, 880, 42, 20, true, NAVY, TextAlign.LEFT);
+                pptText(slide, text, 44, top, boxWidth, boxHeight, fontSize, false, Color.DARK_GRAY, TextAlign.LEFT);
+                pptFooter(slide);
+            }
+            return;
+        }
+
+        // Short bullets: pack several per slide with fixed spacing.
+        int perPage = 7;
+        for (int from = 0, page = 1; from < essays.size(); from += perPage, page++)
+        {
+            int to = Math.min(from + perPage, essays.size());
+            XSLFSlide slide = show.createSlide();
+            String pageTitle = essays.size() > perPage ? title + "（" + page + "）" : title;
+            pptText(slide, pageTitle, 40, 18, 880, 42, 20, true, NAVY, TextAlign.LEFT);
+            double y = top;
+            for (String essay : essays.subList(from, to))
+            {
+                pptText(slide, "• " + essay, 48, y, boxWidth, 48, 14, false, Color.DARK_GRAY, TextAlign.LEFT);
+                y += 54;
+            }
             pptFooter(slide);
         }
     }
@@ -864,18 +1072,43 @@ final class StructuredReportOfficeRenderer
     private static void addPptTableSlides(XMLSlideShow show, String title, String[] headers, List<String[]> rows, List<String> insights, int fontSize)
     {
         if ((rows == null || rows.isEmpty()) && (insights == null || insights.isEmpty())) return;
-        List<String[]> safeRows = rows == null ? List.of() : rows; int chunkSize = headers.length >= 8 ? 13 : 9;
-        if (safeRows.isEmpty()) { addPptNarrativeSlides(show, title, insights); return; }
+        List<String[]> safeRows = rows == null ? List.of() : rows;
+        List<String> safeInsights = insights == null ? List.of() : insights.stream().filter(s -> s != null && !s.isBlank()).toList();
+        // Long insight essays go to their own slides so they never cover the table.
+        List<String> longInsights = new ArrayList<>();
+        List<String> shortInsights = new ArrayList<>();
+        for (String insight : safeInsights)
+        {
+            if (insight.length() > 70) longInsights.add(insight);
+            else shortInsights.add(insight);
+        }
+        if (!longInsights.isEmpty())
+        {
+            addPptNarrativeSlides(show, title + " · 要点", longInsights);
+        }
+        if (safeRows.isEmpty())
+        {
+            if (!shortInsights.isEmpty()) addPptNarrativeSlides(show, title, shortInsights);
+            return;
+        }
+        int chunkSize = headers.length >= 8 ? 13 : 9;
         for (int from = 0, page = 1; from < safeRows.size(); from += chunkSize, page++)
         {
-            int to = Math.min(from + chunkSize, safeRows.size()); XSLFSlide slide = show.createSlide();
-            pptText(slide, title + (safeRows.size() > chunkSize ? "（" + page + "）" : ""), 44, 22, 872, 46, 23, true, NAVY, TextAlign.LEFT);
-            double tableY = 88;
-            if (from == 0 && insights != null && !insights.isEmpty())
+            int to = Math.min(from + chunkSize, safeRows.size());
+            XSLFSlide slide = show.createSlide();
+            pptText(slide, title + (safeRows.size() > chunkSize ? "（" + page + "）" : ""), 44, 18, 872, 40, 20, true, NAVY, TextAlign.LEFT);
+            double tableY = 70;
+            if (from == 0 && !shortInsights.isEmpty())
             {
-                List<String> visible = insights.subList(0, Math.min(3, insights.size())); double y = 70;
-                for (String insight : visible) { pptText(slide, "• " + insight, 55, y, 850, 27, 10.5, false, Color.DARK_GRAY, TextAlign.LEFT); y += 29; }
-                tableY = y + 8;
+                List<String> visible = shortInsights.subList(0, Math.min(3, shortInsights.size()));
+                double y = 62;
+                for (String insight : visible)
+                {
+                    String clipped = insight.length() > 68 ? insight.substring(0, 66) + "…" : insight;
+                    pptText(slide, "• " + clipped, 48, y, 860, 22, 11, false, Color.DARK_GRAY, TextAlign.LEFT);
+                    y += 24;
+                }
+                tableY = y + 6;
             }
             pptTable(slide, headers, safeRows.subList(from, to), tableY, fontSize);
             pptFooter(slide);
@@ -884,7 +1117,7 @@ final class StructuredReportOfficeRenderer
 
     private static void pptTable(XSLFSlide slide, String[] headers, List<String[]> rows, double y, int fontSize)
     {
-        double x = 42, width = 876, rowHeight = Math.min(34, Math.max(24, (485 - y) / (rows.size() + 1)));
+        double x = 42, width = 876, rowHeight = Math.min(34, Math.max(22, (500 - y) / (rows.size() + 1.0)));
         XSLFTable table = slide.createTable(); table.setAnchor(new Rectangle2D.Double(x, y, width, rowHeight * (rows.size() + 1)));
         XSLFTableRow header = table.addRow(); header.setHeight(rowHeight);
         for (String value : headers) pptCell(header.addCell(), value, fontSize, true, NAVY, Color.WHITE);
@@ -911,9 +1144,20 @@ final class StructuredReportOfficeRenderer
 
     private static void pptText(XSLFSlide slide, String value, double x, double y, double w, double h, double fontSize, boolean bold, Color color, TextAlign align)
     {
-        XSLFTextBox box = slide.createTextBox(); box.setAnchor(new Rectangle2D.Double(x, y, w, h)); box.clearText();
-        XSLFTextParagraph paragraph = box.addNewTextParagraph(); paragraph.setTextAlign(align);
-        XSLFTextRun run = paragraph.addNewTextRun(); run.setText(safe(value)); run.setFontFamily(FONT); run.setFontSize(fontSize); run.setBold(bold); run.setFontColor(color);
+        XSLFTextBox box = slide.createTextBox();
+        box.setAnchor(new Rectangle2D.Double(x, y, w, h));
+        box.setWordWrap(true);
+        box.clearText();
+        XSLFTextParagraph paragraph = box.addNewTextParagraph();
+        paragraph.setTextAlign(align);
+        paragraph.setLeftMargin(0d);
+        paragraph.setIndent(0d);
+        XSLFTextRun run = paragraph.addNewTextRun();
+        run.setText(safe(value));
+        run.setFontFamily(FONT);
+        run.setFontSize(fontSize);
+        run.setBold(bold);
+        run.setFontColor(color);
     }
 
     private static void pptFooter(XSLFSlide slide)
@@ -947,7 +1191,7 @@ final class StructuredReportOfficeRenderer
         {
             headers.add(periodLabel(key));
         }
-        headers.add("Y25F YoY");
+        headers.add(fyKey() + " YoY");
         return headers.toArray(String[]::new);
     }
 
@@ -962,15 +1206,25 @@ final class StructuredReportOfficeRenderer
         return headers.toArray(String[]::new);
     }
 
+    private static List<String> periodDisplayLabels()
+    {
+        List<String> labels = new ArrayList<>();
+        for (String key : periods()) labels.add(periodLabel(key));
+        return labels;
+    }
+
     private static String periodLabel(String key)
     {
-        if ("Y25Q1-Q3".equals(key))
+        if (key == null) return "--";
+        if (key.equals(q13Key()) || key.matches("^Y\\d{2}Q1-Q3$"))
         {
-            return "Y25 Q1-Q3";
+            String yy = key.substring(1, 3);
+            return fullYear() ? ("Y" + yy + "前三季度（过程）") : ("Y" + yy + "前三季度");
         }
-        if ("Y25F".equals(key))
+        if (key.equals(fyKey()) || key.matches("^Y\\d{2}F$"))
         {
-            return "Y25F(全年)";
+            String yy = key.substring(1, 3);
+            return fullYear() ? ("Y" + yy + "全年") : key;
         }
         return key;
     }
@@ -1081,6 +1335,126 @@ final class StructuredReportOfficeRenderer
     private static List<String> strings(JSONArray values)
     {
         List<String> result = new ArrayList<>(); if (values != null) for (Object value : values) if (value != null && !String.valueOf(value).isBlank()) result.add(String.valueOf(value)); return result;
+    }
+
+    /** Hide LLM client-slug typos (e.g. adaayo→adayo) already present in evidence. */
+    private static List<String> displayDataGaps(JSONObject root)
+    {
+        JSONObject quality = root == null ? null : root.getJSONObject("quality");
+        if (quality == null) return List.of();
+        Set<String> known = evidenceMetricIds(root);
+        List<String> result = new ArrayList<>();
+        for (String gap : strings(quality.getJSONArray("data_gaps")))
+        {
+            String repaired = repairUnresolvableMetricGap(gap, known);
+            if (repaired != null && !repaired.isBlank()) result.add(repaired);
+        }
+        return result;
+    }
+
+    private static Set<String> evidenceMetricIds(JSONObject root)
+    {
+        Set<String> ids = new LinkedHashSet<>();
+        if (root == null) return ids;
+        JSONArray evidence = root.getJSONArray("evidence");
+        if (evidence != null)
+        {
+            for (Object item : evidence)
+            {
+                JSONObject row = object(item);
+                String metricId = row.getString("metric_id");
+                if (metricId != null && !metricId.isBlank()) ids.add(metricId);
+            }
+        }
+        JSONArray sources = root.getJSONArray("narrative_sources");
+        if (sources != null)
+        {
+            for (Object item : sources)
+            {
+                JSONObject source = object(item);
+                for (String metricId : strings(source.getJSONArray("metric_ids"))) ids.add(metricId);
+            }
+        }
+        return ids;
+    }
+
+    private static String repairUnresolvableMetricGap(String gap, Set<String> known)
+    {
+        String text = gap == null ? "" : gap;
+        if (!text.startsWith(UNRESOLVED_METRIC_GAP_PREFIX)) return text;
+        String[] refs = text.substring(UNRESOLVED_METRIC_GAP_PREFIX.length()).split("[、,，]");
+        List<String> unresolved = new ArrayList<>();
+        for (String raw : refs)
+        {
+            String ref = raw == null ? "" : raw.trim();
+            if (ref.isEmpty()) continue;
+            if (known.contains(ref)) continue;
+            if (ref.startsWith("maker.") && known.contains(ref.substring("maker.".length()))) continue;
+            if (!ref.startsWith("maker.") && known.contains("maker." + ref)) continue;
+            if (resolveClientMetricTypo(ref, known) != null) continue;
+            unresolved.add(ref);
+        }
+        if (unresolved.isEmpty()) return "";
+        return UNRESOLVED_METRIC_GAP_PREFIX + String.join("、", unresolved);
+    }
+
+    private static String resolveClientMetricTypo(String metricId, Set<String> knownIds)
+    {
+        Matcher match = CLIENT_METRIC_PATTERN.matcher(metricId == null ? "" : metricId);
+        if (!match.matches()) return null;
+        String maker = match.group(1).toLowerCase();
+        String slug = match.group(2).toLowerCase();
+        String collapsed = collapseRepeatedChars(slug);
+        List<String> hits = new ArrayList<>();
+        for (String id : knownIds)
+        {
+            Matcher canonical = CLIENT_METRIC_PATTERN.matcher(id);
+            if (!canonical.matches() || !canonical.group(1).equalsIgnoreCase(maker)) continue;
+            if (!id.toLowerCase().endsWith(".shipment")) continue;
+            String canonicalSlug = canonical.group(2).toLowerCase();
+            if (canonicalSlug.equals(slug)
+                || canonicalSlug.equals(collapsed)
+                || collapseRepeatedChars(canonicalSlug).equals(collapsed)
+                || editDistance(slug, canonicalSlug) <= 2)
+            {
+                hits.add(id);
+            }
+        }
+        return hits.size() == 1 ? hits.get(0) : null;
+    }
+
+    private static String collapseRepeatedChars(String text)
+    {
+        if (text == null || text.isEmpty()) return text;
+        StringBuilder out = new StringBuilder();
+        out.append(text.charAt(0));
+        for (int i = 1; i < text.length(); i++)
+        {
+            char ch = text.charAt(i);
+            if (ch != out.charAt(out.length() - 1)) out.append(ch);
+        }
+        return out.toString();
+    }
+
+    private static int editDistance(String left, String right)
+    {
+        String a = left == null ? "" : left;
+        String b = right == null ? "" : right;
+        if (a.equals(b)) return 0;
+        int[] prev = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) prev[j] = j;
+        for (int i = 0; i < a.length(); i++)
+        {
+            int[] curr = new int[b.length() + 1];
+            curr[0] = i + 1;
+            for (int j = 0; j < b.length(); j++)
+            {
+                int cost = a.charAt(i) == b.charAt(j) ? 0 : 1;
+                curr[j + 1] = Math.min(Math.min(curr[j] + 1, prev[j + 1] + 1), prev[j] + cost);
+            }
+            prev = curr;
+        }
+        return prev[b.length()];
     }
 
     private static List<JSONObject> objects(JSONArray values)

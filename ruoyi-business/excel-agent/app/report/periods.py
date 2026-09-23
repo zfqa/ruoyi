@@ -5,10 +5,9 @@ import re
 from typing import Any, Iterable
 
 
-# Accept a wide year window; periods beyond the Y25 template are discovered from data.
+# Accept a wide year window; periods beyond the active template are discovered from data.
 MIN_YEAR = 2022
 MAX_YEAR = 2035
-BASE_PERIODS = ("Y22", "Y23", "Y24", "Y25F", "Y25Q1-Q3")
 # Kept for callers that still import SUPPORTED_YEARS.
 SUPPORTED_YEARS = tuple(range(MIN_YEAR, MAX_YEAR + 1))
 
@@ -25,6 +24,27 @@ _OMDIA_WITH_RESULTS = re.compile(
 def year_label(year: int) -> str:
     return f"Y{str(int(year))[-2:]}"
 
+
+def full_year_period(year: int) -> str:
+    return f"{year_label(year)}F"
+
+
+def q1_q3_period(year: int) -> str:
+    return f"{year_label(year)}Q1-Q3"
+
+
+def base_periods_for(current_year: int, history_start: int = MIN_YEAR) -> tuple[str, ...]:
+    """Annual history through prior year, then YnF + YnQ1-Q3 for the active report year."""
+    current = int(current_year)
+    start = int(history_start)
+    periods = [year_label(year) for year in range(start, current)]
+    periods.append(full_year_period(current))
+    periods.append(q1_q3_period(current))
+    return tuple(periods)
+
+
+# Default template kept for backward-compatible imports (Y25 report cycle).
+BASE_PERIODS = base_periods_for(2025)
 
 def quarter_period(year: int, quarter: int) -> str:
     return f"{year_label(year)}Q{int(quarter)}"
@@ -183,6 +203,61 @@ def report_horizon_from_data_through(year: int, quarter: int) -> dict[str, Any]:
     }
 
 
+def summary_pair_from_data_through(
+    year: int | None,
+    quarter: int | None,
+    *,
+    default_year: int = 2025,
+    default_quarter: int = 3,
+) -> dict[str, Any]:
+    """Derive current/prior years and primary period keys from Omdia data-through."""
+    year_i = int(year) if year is not None else int(default_year)
+    quarter_i = int(quarter) if quarter is not None else int(default_quarter)
+    if quarter_i not in {1, 2, 3, 4}:
+        quarter_i = int(default_quarter)
+    current_year = year_i
+    prior_year = current_year - 1
+    framing = report_horizon_from_data_through(current_year, quarter_i)
+    if quarter_i == 4:
+        primary_period = full_year_period(current_year)
+    elif quarter_i >= 3:
+        primary_period = q1_q3_period(current_year)
+    else:
+        primary_period = f"{year_label(current_year)}Q1-Q{quarter_i}"
+    return {
+        "current_year": current_year,
+        "prior_year": prior_year,
+        "summary_years": (prior_year, current_year),
+        "primary_period": primary_period,
+        "full_year_period": full_year_period(current_year),
+        "q1_q3_period": q1_q3_period(current_year),
+        "base_periods": base_periods_for(current_year),
+        "yy": current_year % 100,
+        "prior_yy": prior_year % 100,
+        **framing,
+    }
+
+
+def is_full_year_through(
+    data_through_year: int | None = None,
+    data_through_quarter: int | None = None,
+    rows: Iterable[dict[str, Any]] | None = None,
+    current_year: int | None = None,
+) -> bool:
+    """True when data-through is Q4, else fall back to whether current year has all four quarters."""
+    if data_through_year is not None and data_through_quarter is not None:
+        return int(data_through_quarter) >= 4
+    target = int(current_year or data_through_year or 2025)
+    if rows is None:
+        return False
+    qs = {
+        int(row["quarter"])
+        for row in rows
+        if int(row.get("year") or 0) == target and row.get("quarter") is not None
+    }
+    return {1, 2, 3, 4} <= qs
+
+
 def period_sort_key(period: str) -> tuple[int, int, int]:
     """Sort key: annual/F/Q1-Q3 before later explicit quarters of same year."""
     parsed = parse_period_key(period)
@@ -274,17 +349,21 @@ def prior_year_quarter_period(period: str) -> str | None:
     return quarter_period(year - 1, quarter)
 
 
-def periods_for_years(years: Iterable[int]) -> tuple[str, ...]:
-    """Backward-compatible helper: years only (no quarters) → base + Q1 for years>=2026."""
+def periods_for_years(years: Iterable[int], current_year: int | None = None) -> tuple[str, ...]:
+    """Years only → base template for current_year + outlook Q1 for later years."""
     present = sorted({int(year) for year in years if year is not None})
-    periods = list(BASE_PERIODS)
+    active = int(current_year) if current_year is not None else (max(present) if present else 2025)
+    periods = list(base_periods_for(active))
     for year in present:
-        if year >= 2026:
+        if year > active:
             periods.append(quarter_period(year, 1))
     return tuple(dict.fromkeys(periods))
 
 
-def periods_for_year_quarters(pairs: Iterable[tuple[int, int]]) -> tuple[str, ...]:
+def periods_for_year_quarters(
+    pairs: Iterable[tuple[int, int]],
+    current_year: int | None = None,
+) -> tuple[str, ...]:
     """Build report period order from observed (year, quarter) pairs."""
     pairs_set = {
         (int(year), int(quarter))
@@ -292,22 +371,24 @@ def periods_for_year_quarters(pairs: Iterable[tuple[int, int]]) -> tuple[str, ..
         if year is not None and quarter in {1, 2, 3, 4} and MIN_YEAR <= int(year) <= MAX_YEAR
     }
     years = {year for year, _ in pairs_set}
-    periods = list(BASE_PERIODS)
-    for year in sorted(y for y in years if y < 2025):
+    if current_year is not None:
+        active = int(current_year)
+    elif years:
+        active = max(years)
+    else:
+        active = 2025
+    periods = list(base_periods_for(active))
+    for year in sorted(y for y in years if y < active):
         label = year_label(year)
         if label not in periods:
-            periods.insert(
-                max(
-                    0,
-                    len([p for p in periods if p.startswith("Y") and "Q" not in p and not p.endswith("F")]),
-                ),
-                label,
-            )
-    for year, quarter in sorted((y, q) for y, q in pairs_set if y >= 2026):
+            # Insert annual labels before the active YnF / YnQ1-Q3 pair.
+            insert_at = max(0, len(periods) - 2)
+            periods.insert(insert_at, label)
+    for year, quarter in sorted((y, q) for y, q in pairs_set if y > active):
         key = quarter_period(year, quarter)
         if key not in periods:
             periods.append(key)
-    return tuple(periods)
+    return tuple(dict.fromkeys(periods))
 
 
 def year_quarters_from_rows(rows: Iterable[dict[str, Any]]) -> list[tuple[int, int]]:

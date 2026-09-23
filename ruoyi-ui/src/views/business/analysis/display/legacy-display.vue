@@ -372,14 +372,21 @@ export default {
       const name = String(fileName || '').toLowerCase()
       const withResults = name.match(/with\s+([1-4])\s*q\s*([0-9]{2})\s+results/)
       if (withResults) {
-        return Number(withResults[2]) * 10 + Number(withResults[1])
+        return Number(withResults[2]) * 100 + Number(withResults[1])
       }
-      if (/1q26|q126/.test(name)) return 254 // publish 1Q26 → through 4Q25
-      if (/4q25/.test(name)) return 253 // publish 4Q25 → through 3Q25
-      if (/3q25/.test(name)) return 252
-      if (/2q25/.test(name)) return 251
-      if (/1q25/.test(name)) return 244 // publish 1Q25 → through 4Q24
-      if (/4q24/.test(name)) return 243
+      const pub = name.match(/(?:^|[^0-9])([1-4])\s*q\s*([0-9]{2})(?!\s*results)/)
+        || name.match(/q\s*([1-4])\s*([0-9]{2})/)
+      if (pub) {
+        let q = Number(pub[1])
+        let yy = Number(pub[2])
+        // publication quarter → data-through = previous quarter
+        q -= 1
+        if (q <= 0) {
+          q = 4
+          yy -= 1
+        }
+        return yy * 100 + q
+      }
       return 0
     },
     assignRoles(files) {
@@ -630,7 +637,18 @@ export default {
               return;
             }
             this.pollTimer = setTimeout(poll, 1000);
-          }).catch(reject);
+          }).catch(error => {
+            // Transient network/timeout while backend writes large result_json —
+            // keep polling until the hard deadline instead of failing the job.
+            const msg = String((error && error.message) || error || '');
+            const transient = /timeout|Network Error|ECONNRESET|ECONNABORTED/i.test(msg);
+            if (!transient || Date.now() >= deadline) {
+              reject(error instanceof Error ? error : new Error(msg || '状态查询失败'));
+              return;
+            }
+            this.taskRemark = '状态查询短暂异常，继续等待解析…';
+            this.pollTimer = setTimeout(poll, 2000);
+          });
         };
         poll();
       });

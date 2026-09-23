@@ -6,12 +6,18 @@ from typing import Any
 
 from app.report.periods import (
     BASE_PERIODS,
+    MIN_YEAR,
     SUPPORTED_YEARS,
     clip_periods_to_data_through,
+    full_year_period,
+    is_full_year_through,
     parse_period_key,
     periods_for_year_quarters,
     prior_year_quarter_period,
+    q1_q3_period,
     quarter_period,
+    summary_pair_from_data_through,
+    year_label,
     year_quarters_from_rows,
 )
 
@@ -34,20 +40,25 @@ def calculate_tianma_history_metrics(
     rows = [row for row in current if row is not None and row["year"] in set(YEARS) - {2022}]
     rows.extend(row for row in baseline if row is not None and row["year"] == 2022)
     maker_measure_rows = [row for row in rows if not row["excluded_from_maker_metrics"]]
-    active_periods = clip_periods_to_data_through(
-        periods_for_year_quarters(year_quarters_from_rows(rows)),
-        data_through_year,
-        data_through_quarter,
-    )
+    pair = summary_pair_from_data_through(data_through_year, data_through_quarter)
+    current_year = int(pair["current_year"])
+    prior_year = int(pair["prior_year"])
+    fy_key = pair["full_year_period"]
+    q13_key = pair["q1_q3_period"]
     if full_year is None:
-        qs = {int(row["quarter"]) for row in rows if int(row.get("year") or 0) == 2025}
-        full_year = {1, 2, 3, 4} <= qs or (
-            data_through_year is not None
-            and data_through_quarter is not None
-            and (int(data_through_year), int(data_through_quarter)) >= (2025, 4)
+        full_year = is_full_year_through(
+            data_through_year, data_through_quarter, rows=rows, current_year=current_year,
         )
     else:
         full_year = bool(full_year)
+    primary_period = fy_key if full_year else q13_key
+    through_year = data_through_year if data_through_year is not None else current_year
+    through_quarter = data_through_quarter if data_through_quarter is not None else (4 if full_year else 3)
+    active_periods = clip_periods_to_data_through(
+        periods_for_year_quarters(year_quarters_from_rows(rows), current_year=current_year),
+        through_year,
+        through_quarter,
+    )
 
     gaps = []
     if not baseline_records:
@@ -59,18 +70,22 @@ def calculate_tianma_history_metrics(
     shipment = _measure_metric(
         maker_measure_rows, maker, "shipment", "thousand_units",
         f"{maker_key}.front_install.shipment", active_periods,
+        current_year=current_year, prior_year=prior_year, fy_key=fy_key, q13_key=q13_key,
     )
     display_area = _measure_metric(
         maker_measure_rows, maker, "display_area", "square_meters",
         f"{maker_key}.front_install.display_area", active_periods,
+        current_year=current_year, prior_year=prior_year, fy_key=fy_key, q13_key=q13_key,
     )
     shipment_share = _share_metric(
         maker_measure_rows, rows, maker, "shipment",
         f"{maker_key}.front_install.shipment_share", active_periods,
+        current_year=current_year,
     )
     display_area_share = _share_metric(
         maker_measure_rows, rows, maker, "display_area",
         f"{maker_key}.front_install.display_area_share", active_periods,
+        current_year=current_year,
     )
     return {
         "engine": "python_deterministic_v1",
@@ -82,7 +97,11 @@ def calculate_tianma_history_metrics(
             "years": sorted({row["year"] for row in rows}),
             "period_order": list(active_periods),
             "full_year": full_year,
-            "primary_period": "Y25F" if full_year else "Y25Q1-Q3",
+            "current_year": current_year,
+            "prior_year": prior_year,
+            "primary_period": primary_period,
+            "full_year_period": fy_key,
+            "q1_q3_period": q13_key,
             "source_row_count": len(rows),
             "y22_source": "baseline_workbook",
             "y23_plus_source": "merged_current_workbooks",
@@ -91,8 +110,8 @@ def calculate_tianma_history_metrics(
         },
         "formulas": {
             "yoy": "current comparable period / previous comparable period - 1",
-            "y25f_yoy": "Y25F / Y24 - 1",
-            "y25q1_q3_yoy": "Y25 Q1-Q3 / Y24 Q1-Q3 - 1",
+            "y25f_yoy": f"{fy_key} / {year_label(prior_year)} - 1",
+            "y25q1_q3_yoy": f"{q13_key} / prior-year Q1-Q3 - 1",
             "quarter_yoy": "YxxQn / prior-year same quarter - 1",
             "shipment_share": f"{maker} shipment / market shipment",
             "display_area_share": f"{maker} display area / market display area",
@@ -136,20 +155,26 @@ def _normalize(record, source_role):
     }
 
 
-def _measure_metric(rows, maker, measure, unit, metric_id, periods):
+def _measure_metric(
+    rows, maker, measure, unit, metric_id, periods,
+    current_year=2025, prior_year=2024, fy_key="Y25F", q13_key="Y25Q1-Q3",
+):
     maker_rows = [row for row in rows if _maker_matches(row["maker"], maker)]
-    buckets = _period_buckets(maker_rows, measure, periods)
-    prior_q1_q3 = _selected_bucket(maker_rows, measure, 2024, {1, 2, 3})
+    buckets = _period_buckets(maker_rows, measure, periods, current_year=current_year, fy_key=fy_key, q13_key=q13_key)
+    prior_q1_q3 = _selected_bucket(maker_rows, measure, prior_year, {1, 2, 3})
+    prior_annual = year_label(prior_year)
     yoy_periods = {
-        "Y22": None,
-        "Y23": _standard_yoy(buckets.get("Y23"), buckets.get("Y22")),
-        "Y24": _standard_yoy(buckets.get("Y24"), buckets.get("Y23")),
-        "Y25F": _standard_yoy(buckets.get("Y25F"), buckets.get("Y24")),
-        "Y25Q1-Q3": _standard_yoy(buckets.get("Y25Q1-Q3"), prior_q1_q3),
+        year_label(year): (
+            None if year <= MIN_YEAR
+            else _standard_yoy(buckets.get(year_label(year)), buckets.get(year_label(year - 1)))
+        )
+        for year in range(MIN_YEAR, current_year)
     }
+    yoy_periods[fy_key] = _standard_yoy(buckets.get(fy_key), buckets.get(prior_annual))
+    yoy_periods[q13_key] = _standard_yoy(buckets.get(q13_key), prior_q1_q3)
     comparison = {
-        "Y24Q1-Q3": _bucket_value(prior_q1_q3),
-        "Y25Q1-Q3": _bucket_value(buckets.get("Y25Q1-Q3")),
+        f"Y{str(prior_year)[-2:]}Q1-Q3": _bucket_value(prior_q1_q3),
+        q13_key: _bucket_value(buckets.get(q13_key)),
     }
     for period in periods:
         if period in yoy_periods:
@@ -157,7 +182,6 @@ def _measure_metric(rows, maker, measure, unit, metric_id, periods):
         peer = prior_year_quarter_period(period)
         if peer is None:
             continue
-        # Prefer explicit selected bucket for prior year/quarter when peer is not in period list.
         prior_bucket = buckets.get(peer)
         if prior_bucket is None or not prior_bucket["count"]:
             parsed = parse_period_key(peer)
@@ -167,32 +191,37 @@ def _measure_metric(rows, maker, measure, unit, metric_id, periods):
         comparison[period] = _bucket_value(buckets.get(period))
         if peer:
             comparison[peer] = _bucket_value(prior_bucket)
+    fy_yoy = _standard_yoy(buckets.get(fy_key), buckets.get(prior_annual))
+    q13_yoy = _standard_yoy(buckets.get(q13_key), prior_q1_q3)
     return {
         "metric_id": metric_id,
         "unit": unit,
         "periods": {period: _bucket_value(buckets.get(period)) for period in periods},
         "comparison_periods": comparison,
-        "standard_y25f_yoy": _standard_yoy(buckets.get("Y25F"), buckets.get("Y24")),
-        "yoy_2025_q1_q3_vs_2024_q1_q3": _standard_yoy(
-            buckets.get("Y25Q1-Q3"), prior_q1_q3
-        ),
-        "forecast_completion_y25_q1_q3": _completion(
-            buckets.get("Y25Q1-Q3"), buckets.get("Y25F")
-        ),
+        "standard_y25f_yoy": fy_yoy,
+        "yoy_primary": fy_yoy if fy_key in (periods or []) else q13_yoy,
+        "yoy_2025_q1_q3_vs_2024_q1_q3": q13_yoy,
+        "forecast_completion_y25_q1_q3": _completion(buckets.get(q13_key), buckets.get(fy_key)),
+        "forecast_completion_primary": _completion(buckets.get(q13_key), buckets.get(fy_key)),
         "yoy_periods": yoy_periods,
         "evidence": {period: _bucket_evidence(buckets.get(period)) for period in periods},
         "comparison_evidence": {
-            "Y24Q1-Q3": _bucket_evidence(prior_q1_q3),
-            "Y25Q1-Q3": _bucket_evidence(buckets.get("Y25Q1-Q3")),
+            f"Y{str(prior_year)[-2:]}Q1-Q3": _bucket_evidence(prior_q1_q3),
+            q13_key: _bucket_evidence(buckets.get(q13_key)),
         },
     }
 
 
-def _share_metric(maker_measure_rows, market_rows, maker, measure, metric_id, periods):
+def _share_metric(maker_measure_rows, market_rows, maker, measure, metric_id, periods, current_year=2025):
+    fy_key = full_year_period(current_year)
+    q13_key = q1_q3_period(current_year)
     maker_buckets = _period_buckets(
-        [row for row in maker_measure_rows if _maker_matches(row["maker"], maker)], measure, periods
+        [row for row in maker_measure_rows if _maker_matches(row["maker"], maker)],
+        measure, periods, current_year=current_year, fy_key=fy_key, q13_key=q13_key,
     )
-    market_buckets = _period_buckets(market_rows, measure, periods)
+    market_buckets = _period_buckets(
+        market_rows, measure, periods, current_year=current_year, fy_key=fy_key, q13_key=q13_key,
+    )
     return {
         "metric_id": metric_id,
         "unit": "ratio",
@@ -208,21 +237,21 @@ def _share_metric(maker_measure_rows, market_rows, maker, measure, metric_id, pe
     }
 
 
-def _period_buckets(rows, measure, periods):
+def _period_buckets(rows, measure, periods, current_year=2025, fy_key="Y25F", q13_key="Y25Q1-Q3"):
     buckets = {period: _empty_bucket() for period in periods}
     for row in rows:
         value = row.get(measure)
         if value is None:
             continue
-        if row["year"] < 2025:
-            period = f"Y{str(row['year'])[-2:]}"
+        if row["year"] < current_year:
+            period = year_label(row["year"])
             if period in buckets:
                 _add(buckets[period], value, row.get(f"{measure}_ref"), row["source_role"])
-        elif row["year"] == 2025:
-            if "Y25F" in buckets:
-                _add(buckets["Y25F"], value, row.get(f"{measure}_ref"), row["source_role"])
-            if row["quarter"] in {1, 2, 3} and "Y25Q1-Q3" in buckets:
-                _add(buckets["Y25Q1-Q3"], value, row.get(f"{measure}_ref"), row["source_role"])
+        elif row["year"] == current_year:
+            if fy_key in buckets:
+                _add(buckets[fy_key], value, row.get(f"{measure}_ref"), row["source_role"])
+            if row["quarter"] in {1, 2, 3} and q13_key in buckets:
+                _add(buckets[q13_key], value, row.get(f"{measure}_ref"), row["source_role"])
         else:
             period = quarter_period(row["year"], row["quarter"])
             if period in buckets:

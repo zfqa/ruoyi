@@ -262,7 +262,11 @@ public class KnowledgeQaService
         result.put("sourceBreakdown", sourceBreakdown(chunks));
         result.put("retrievalLogs", logs);
         result.put("analysisTrace", List.of());
-        result.put("graph", emptyGraph());
+        List<KnowledgeChunk> openedChunks = chunks;
+        List<KnowledgeChunk> citedChunks = new ArrayList<>();
+        for (Integer index : validation.getCitedIndexes())
+            citedChunks.add(openedChunks.get(index - 1));
+        result.put("graph", buildQaGraph(question, citedChunks, openedChunks, roleIds, admin));
         result.put("qaStatus", qaStatusFor("LLM_VERIFIED"));
         notifyProgress(listener, 100, "已根据模型打开的原文完成回答", logs);
         return result;
@@ -456,7 +460,19 @@ public class KnowledgeQaService
             subQuestions.size() + " 个子问题")));
         result.put("retrievalLogs", logs);
         result.put("analysisTrace", List.of());
-        result.put("graph", emptyGraph());
+        List<KnowledgeChunk> graphChunks = new ArrayList<>();
+        Set<Long> seenChunkIds = new LinkedHashSet<>();
+        for (Map<String, Object> citation : allCitations)
+        {
+            Object id = citation.get("id");
+            if (!(id instanceof Number number)) continue;
+            long chunkId = number.longValue();
+            if (!seenChunkIds.add(chunkId)) continue;
+            KnowledgeChunk stub = new KnowledgeChunk();
+            stub.setId(chunkId);
+            graphChunks.add(stub);
+        }
+        result.put("graph", buildQaGraph(parentQuestion, graphChunks, null, roleIds, admin));
         result.put("subQuestionCount", subQuestions.size());
         result.put("qaStatus", qaStatusFor(answerMode));
         notifyProgress(listener, 100, "多问题回答完成", logs);
@@ -636,9 +652,7 @@ public class KnowledgeQaService
             Math.max(validation.getClaims().size(), validation.getCitedIndexes().size()), includeNews, sourceBreakdown));
         result.put("retrievalLogs", logs);
         result.put("analysisTrace", analysisTrace(actualQuestion, evidenceChunks, validation, answerMode));
-        result.put("graph", graphService == null ? emptyGraph()
-            : graphService.graphForChunks(citedChunks, roleIds, admin,
-                KnowledgeTextProcessor.detectEntityTerms(actualQuestion)));
+        result.put("graph", buildQaGraph(actualQuestion, citedChunks, evidenceChunks, roleIds, admin));
         result.put("qaStatus", qaStatusFor(answerMode));
         if (webLlm && !"LLM_UNAVAILABLE_WITH_EVIDENCE".equals(answerMode))
             appendWebSearchSupplement(actualQuestion, result, logs, progressListener);
@@ -1159,6 +1173,30 @@ public class KnowledgeQaService
     private Map<String, Object> emptyGraph()
     {
         Map<String, Object> graph = new LinkedHashMap<>(); graph.put("nodes", List.of()); graph.put("links", List.of()); graph.put("categories", List.of()); return graph;
+    }
+
+    /** 优先用引用切片构图；若为空再退回全部已打开切片，避免 LLM_DISPATCH 路径图谱空白。 */
+    private Map<String, Object> buildQaGraph(String question, List<KnowledgeChunk> primary,
+        List<KnowledgeChunk> fallback, List<Long> roleIds, boolean admin)
+    {
+        if (graphService == null) return emptyGraph();
+        List<String> focusTerms = KnowledgeTextProcessor.detectEntityTerms(question);
+        Map<String, Object> graph = graphService.graphForChunks(primary, roleIds, admin, focusTerms);
+        if (graphHasNodes(graph)) return graph;
+        if (fallback != null && fallback != primary && !fallback.isEmpty())
+        {
+            Map<String, Object> widened = graphService.graphForChunks(fallback, roleIds, admin, focusTerms);
+            if (graphHasNodes(widened)) return widened;
+        }
+        return graph == null ? emptyGraph() : graph;
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean graphHasNodes(Map<String, Object> graph)
+    {
+        if (graph == null) return false;
+        Object nodes = graph.get("nodes");
+        return nodes instanceof List<?> list && !list.isEmpty();
     }
 
     private Map<String, Object> answerFromWebSearch(String question, List<Map<String, Object>> logs,

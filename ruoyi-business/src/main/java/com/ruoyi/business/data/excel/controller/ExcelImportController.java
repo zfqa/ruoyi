@@ -336,6 +336,9 @@ public class ExcelImportController extends BaseController
             task.setStatus("1");
             task.setRemark("解析完成，正在生成第一份竞争社洞察报告");
             excelImportService.updateExcelImport(task);
+            // Avoid rewriting multi-MB result_json on later status updates — that
+            // row-locks status polling and trips the frontend 10s axios timeout.
+            task.setResultJson(null);
             AiReport report = generateFirstReport(task, output, options);
             task.setStatus("2");
             task.setRemark("2".equals(report.getStatus())

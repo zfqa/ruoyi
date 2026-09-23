@@ -15,19 +15,29 @@ def build_driver_narratives(
     boe_customer: dict[str, Any] | None = None,
     boe_application: dict[str, Any] | None = None,
     boe_product: dict[str, Any] | None = None,
+    current_year: int = 2025,
+    fy_key: str | None = None,
+    q13_key: str | None = None,
 ) -> dict[str, str]:
     """Return product/customer/application essays keyed like the delivered deck."""
+    yy = current_year % 100
     period = "全年" if full_year else "前三季度"
-    year_label = "25年全年" if full_year else "25年前三季度"
+    year_label_text = f"{yy}年全年" if full_year else f"{yy}年前三季度"
+    fy = fy_key or f"Y{yy}F"
+    q13 = q13_key or f"Y{yy}Q1-Q3"
+    annual_key = f"Y{yy}"
     return {
         "product": _product_essay(
-            maker, year_label, period, full_year, size_rows, product, boe_product,
+            maker, year_label_text, period, full_year, size_rows, product, boe_product,
+            fy_key=fy, q13_key=q13,
         ),
         "customer": _customer_essay(
-            maker, year_label, period, full_year, customer, boe_customer,
+            maker, year_label_text, period, full_year, customer, boe_customer,
+            fy_key=fy, q13_key=q13, annual_key=annual_key, current_year=current_year,
         ),
         "application": _application_essay(
-            maker, year_label, period, full_year, application, boe_application,
+            maker, year_label_text, period, full_year, application, boe_application,
+            fy_key=fy, q13_key=q13,
         ),
     }
 
@@ -40,6 +50,8 @@ def _product_essay(
     size_rows: list[dict[str, Any]],
     product: dict[str, Any],
     boe_product: dict[str, Any] | None = None,
+    fy_key: str = "Y25F",
+    q13_key: str = "Y25Q1-Q3",
 ) -> str:
     segments = _maker_segments(maker, size_rows)
     if not segments:
@@ -85,7 +97,7 @@ def _product_essay(
             f"{_seg_label(engine)}发力作为核心引擎提拉增长。"
         )
 
-    boe_bits = _product_vs_boe(maker, size_rows, product, boe_product)
+    boe_bits = _product_vs_boe(maker, size_rows, product, boe_product, fy_key=fy_key, q13_key=q13_key)
     if boe_bits:
         parts.append(boe_bits)
     return "".join(parts)
@@ -98,6 +110,10 @@ def _customer_essay(
     full_year: bool,
     customer: dict[str, Any],
     boe_customer: dict[str, Any] | None,
+    fy_key: str = "Y25F",
+    q13_key: str = "Y25Q1-Q3",
+    annual_key: str = "Y25",
+    current_year: int = 2025,
 ) -> str:
     clients = ((customer.get("top_clients") or {}).get("clients") or [])
     if not clients:
@@ -123,8 +139,12 @@ def _customer_essay(
 
     def qty(item: dict[str, Any]) -> float:
         periods = item.get("periods") or {}
+        if full_year and periods.get(fy_key) is not None:
+            return float(periods[fy_key])
         if full_year and periods.get("Y25F") is not None:
             return float(periods["Y25F"])
+        if periods.get(q13_key) is not None:
+            return float(periods[q13_key])
         return float(periods.get("Y25Q1-Q3") or 0)
 
     scored = [item for item in clients if contribution(item) is not None]
@@ -165,11 +185,11 @@ def _customer_essay(
     parts.append("；")
 
     regions = ((customer.get("regions") or {}).get("rows") or [])
-    region_line = _region_structure_line(maker, period, regions, full_year)
+    region_line = _region_structure_line(maker, period, regions, full_year, fy_key=fy_key, q13_key=q13_key, annual_key=annual_key, current_year=current_year)
     if region_line:
         parts.append(region_line)
 
-    boe_line = _customer_vs_boe(maker, regions, boe_customer, full_year)
+    boe_line = _customer_vs_boe(maker, regions, boe_customer, full_year, fy_key=fy_key, q13_key=q13_key, annual_key=annual_key, current_year=current_year)
     if boe_line:
         parts.append(boe_line)
     return "".join(parts)
@@ -182,18 +202,24 @@ def _application_essay(
     full_year: bool,
     application: dict[str, Any],
     boe_application: dict[str, Any] | None,
+    fy_key: str = "Y25F",
+    q13_key: str = "Y25Q1-Q3",
 ) -> str:
     series = ((application.get("application_history") or {}).get("series") or [])
     if not series:
         return ""
 
-    period_key = "Y25F" if full_year else "Y25Q1-Q3"
+    period_key = fy_key if full_year else q13_key
     yoy_key = period_key
 
     def app_qty(item: dict[str, Any]) -> float:
         periods = item.get("periods") or {}
+        if full_year and periods.get(fy_key) is not None:
+            return float(periods[fy_key])
         if full_year and periods.get("Y25F") is not None:
             return float(periods["Y25F"])
+        if periods.get(q13_key) is not None:
+            return float(periods[q13_key])
         return float(periods.get("Y25Q1-Q3") or 0)
 
     def app_share(item: dict[str, Any]) -> float | None:
@@ -237,7 +263,7 @@ def _application_essay(
             )
     parts.append("。")
 
-    boe_line = _application_vs_boe(maker, series, boe_application, full_year)
+    boe_line = _application_vs_boe(maker, series, boe_application, full_year, fy_key=fy_key, q13_key=q13_key)
     if boe_line:
         parts.append(boe_line)
     return "".join(parts)
@@ -273,6 +299,8 @@ def _product_vs_boe(
     size_rows: list[dict[str, Any]],
     product: dict[str, Any],
     boe_product: dict[str, Any] | None = None,
+    fy_key: str = "Y25F",
+    q13_key: str = "Y25Q1-Q3",
 ) -> str:
     if maker == "BOE":
         return _boe_product_self(size_rows, product)
@@ -315,7 +343,7 @@ def _product_vs_boe(
 
     tech = product.get("technology_history") or {}
     boe_tech = ((boe_product or {}).get("technology_history") or {})
-    yoy_key = "Y25Q1-Q3"
+    yoy_key = q13_key
     maker_asi_yoy = ((tech.get("a-Si") or {}).get("yoy_periods") or {}).get(yoy_key)
     maker_ltps_yoy = ((tech.get("LTPS") or {}).get("yoy_periods") or {}).get(yoy_key)
     boe_asi_yoy = ((boe_tech.get("a-Si") or {}).get("yoy_periods") or {}).get(yoy_key)
@@ -350,12 +378,35 @@ def _boe_product_self(size_rows: list[dict[str, Any]], product: dict[str, Any]) 
     return f"从产品结构看，BOE {labels}为核心增长引擎，累计贡献{_pct(share, digits=0)}。"
 
 
-def _region_primary(item: dict[str, Any], full_year: bool) -> tuple[float | None, float | None]:
-    if full_year and (item.get("full_year") or {}).get("Y25") is not None:
+def _region_primary(
+    item: dict[str, Any],
+    full_year: bool,
+    *,
+    fy_key: str = "Y25F",
+    q13_key: str = "Y25Q1-Q3",
+    annual_key: str = "Y25",
+    current_year: int = 2025,
+) -> tuple[float | None, float | None]:
+    prior_year = current_year - 1
+    yoy_alias = f"yoy_{current_year}_vs_{prior_year}"
+    if full_year:
         fy = item.get("full_year") or {}
-        return fy.get("Y25"), fy.get("yoy_2025_vs_2024")
+        qty = fy.get(annual_key)
+        if qty is None:
+            qty = fy.get("Y25")
+        if qty is not None:
+            yoy = fy.get(yoy_alias)
+            if yoy is None:
+                yoy = fy.get("yoy_2025_vs_2024")
+            return qty, yoy
     q = item.get("q1_q3") or {}
-    return q.get("Y25Q1-Q3"), q.get("yoy_2025_vs_2024")
+    qty = q.get(q13_key)
+    if qty is None:
+        qty = q.get("Y25Q1-Q3")
+    yoy = q.get(yoy_alias)
+    if yoy is None:
+        yoy = q.get("yoy_2025_vs_2024")
+    return qty, yoy
 
 
 def _region_structure_line(
@@ -363,12 +414,19 @@ def _region_structure_line(
     period: str,
     regions: list[dict[str, Any]],
     full_year: bool,
+    fy_key: str = "Y25F",
+    q13_key: str = "Y25Q1-Q3",
+    annual_key: str = "Y25",
+    current_year: int = 2025,
 ) -> str:
     usable = []
     for item in regions:
         if item.get("region") in {None, "其他"}:
             continue
-        qty, yoy = _region_primary(item, full_year)
+        qty, yoy = _region_primary(
+            item, full_year, fy_key=fy_key, q13_key=q13_key,
+            annual_key=annual_key, current_year=current_year,
+        )
         if qty is None:
             continue
         usable.append({
@@ -398,6 +456,10 @@ def _customer_vs_boe(
     regions: list[dict[str, Any]],
     boe_customer: dict[str, Any] | None,
     full_year: bool,
+    fy_key: str = "Y25F",
+    q13_key: str = "Y25Q1-Q3",
+    annual_key: str = "Y25",
+    current_year: int = 2025,
 ) -> str:
     if maker == "BOE" or not boe_customer:
         return ""
@@ -408,7 +470,7 @@ def _customer_vs_boe(
         region = item.get("region")
         if region in {None, "其他"} or region not in boe_by_name:
             continue
-        qty, _ = _region_primary(item, full_year)
+        qty, _ = _region_primary(item, full_year, fy_key=fy_key, q13_key=q13_key, annual_key=annual_key, current_year=current_year)
         boe_qty, _ = _region_primary(boe_by_name[region], full_year)
         if qty is None or boe_qty in {None, 0}:
             continue
@@ -440,6 +502,8 @@ def _application_vs_boe(
     series: list[dict[str, Any]],
     boe_application: dict[str, Any] | None,
     full_year: bool,
+    fy_key: str = "Y25F",
+    q13_key: str = "Y25Q1-Q3",
 ) -> str:
     if maker == "BOE" or not boe_application:
         return ""
@@ -448,8 +512,12 @@ def _application_vs_boe(
 
     def qty(item: dict[str, Any]) -> float:
         periods = item.get("periods") or {}
+        if full_year and periods.get(fy_key) is not None:
+            return float(periods[fy_key])
         if full_year and periods.get("Y25F") is not None:
             return float(periods["Y25F"])
+        if periods.get(q13_key) is not None:
+            return float(periods[q13_key])
         return float(periods.get("Y25Q1-Q3") or 0)
 
     comparisons = []

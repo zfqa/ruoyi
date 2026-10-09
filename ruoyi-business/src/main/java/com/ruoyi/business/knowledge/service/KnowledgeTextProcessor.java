@@ -24,14 +24,20 @@ public final class KnowledgeTextProcessor
         addEntity(value, terms, new String[] {"csot", "china star", "华星"}, "CSOT", "China Star", "华星");
         addEntity(value, terms, new String[] {"xpeng", "小鹏"}, "XPeng", "小鹏");
         addEntity(value, terms, new String[] {"byd", "比亚迪"}, "BYD", "比亚迪");
+        addEntity(value, terms, new String[] {"chery", "奇瑞", "奇瑞汽车"}, "Chery", "奇瑞");
         addEntity(value, terms, new String[] {"nio", "蔚来"}, "NIO", "蔚来");
-        addEntity(value, terms, new String[] {"li auto", "理想汽车", "理想"}, "Li Auto", "理想汽车", "理想");
+        addEntity(value, terms, new String[] {"li auto", "liauto", "理想汽车", "理想"}, "Li Auto", "理想汽车", "理想");
         addEntity(value, terms, new String[] {"tesla", "特斯拉"}, "Tesla", "特斯拉");
-        addEntity(value, terms, new String[] {"geely", "吉利"}, "Geely", "吉利");
+        addEntity(value, terms, new String[] {"geely", "吉利", "吉利汽车"}, "Geely", "吉利");
         addEntity(value, terms, new String[] {"saic", "上汽"}, "SAIC", "上汽");
         addEntity(value, terms, new String[] {"gac", "广汽"}, "GAC", "广汽");
         addEntity(value, terms, new String[] {"changan", "长安汽车", "长安"}, "Changan", "长安汽车", "长安");
-        addEntity(value, terms, new String[] {"great wall", "长城汽车", "长城"}, "Great Wall", "长城汽车", "长城");
+        addEntity(value, terms, new String[] {"great wall", "gwm", "长城汽车", "长城"}, "Great Wall", "长城汽车", "长城");
+        addEntity(value, terms, new String[] {"bmw", "宝马"}, "BMW", "宝马");
+        addEntity(value, terms, new String[] {"mercedes-benz", "mercedes", "奔驰"}, "Mercedes-Benz", "奔驰");
+        addEntity(value, terms, new String[] {"volkswagen", "大众"}, "Volkswagen", "大众");
+        addEntity(value, terms, new String[] {"faurecia", "佛吉亚"}, "Faurecia", "佛吉亚");
+        addEntity(value, terms, new String[] {"continental", "大陆集团", "大陆"}, "Continental", "大陆集团", "大陆");
         return terms;
     }
 

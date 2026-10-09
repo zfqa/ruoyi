@@ -25,8 +25,8 @@ function normalizeText(value) {
 }
 
 function findHighlightRanges(items, query) {
-  const needle = normalizeText(query)
-  if (!needle || !items || !items.length) return []
+  const needleFull = normalizeText(query)
+  if (!needleFull || !items || !items.length) return []
 
   const parts = []
   let joined = ''
@@ -39,13 +39,28 @@ function findHighlightRanges(items, query) {
     parts.push({ index, start, end: joined.length, item })
   })
 
-  let hit = joined.indexOf(needle)
-  if (hit < 0 && needle.length > 24) {
-    hit = joined.indexOf(needle.slice(0, 24))
+  const candidates = [needleFull]
+  if (needleFull.length > 40) candidates.push(needleFull.slice(0, 40))
+  if (needleFull.length > 24) candidates.push(needleFull.slice(0, 24))
+  if (needleFull.length > 16) candidates.push(needleFull.slice(0, 16))
+  // Prefer contiguous digit-heavy spans (amounts / years)
+  const digitSpan = needleFull.match(/\d[\d.,%]{3,}/)
+  if (digitSpan) candidates.push(digitSpan[0])
+
+  let hit = -1
+  let hitLen = 0
+  for (const needle of candidates) {
+    if (!needle || needle.length < 4) continue
+    const at = joined.indexOf(needle)
+    if (at >= 0) {
+      hit = at
+      hitLen = needle.length
+      break
+    }
   }
   if (hit < 0) return []
 
-  const hitEnd = hit + Math.min(needle.length, Math.max(8, Math.floor(needle.length * 0.6)))
+  const hitEnd = hit + Math.min(hitLen, Math.max(8, Math.floor(hitLen * 0.7)))
   return parts.filter(part => part.start < hitEnd && part.end > hit)
 }
 
@@ -64,8 +79,33 @@ export async function renderPdfPageWithHighlight({
   const loadingTask = pdfjsLib.getDocument({ data })
   const pdf = await loadingTask.promise
   const pageCount = pdf.numPages
-  const page = await pdf.getPage(Math.min(Math.max(pageNumber || 1, 1), pageCount))
-  const viewport = page.getViewport({ scale: 1.35 })
+  const preferred = Math.min(Math.max(pageNumber || 1, 1), pageCount)
+  const candidates = [preferred]
+  if (preferred > 1) candidates.push(preferred - 1)
+  if (preferred < pageCount) candidates.push(preferred + 1)
+  if (preferred > 2) candidates.push(preferred - 2)
+  if (preferred + 1 < pageCount) candidates.push(preferred + 2)
+
+  let matchedPage = preferred
+  let matchedRanges = []
+  let matchedViewport = null
+  let matchedPageObj = null
+  for (const pageNo of candidates) {
+    const page = await pdf.getPage(pageNo)
+    const viewport = page.getViewport({ scale: 1.35 })
+    const textContent = await page.getTextContent()
+    const ranges = findHighlightRanges(textContent.items, highlightText)
+    if (ranges.length || pageNo === preferred) {
+      matchedPage = pageNo
+      matchedRanges = ranges
+      matchedViewport = viewport
+      matchedPageObj = page
+      if (ranges.length) break
+    }
+  }
+
+  const viewport = matchedViewport || (await pdf.getPage(preferred)).getViewport({ scale: 1.35 })
+  const page = matchedPageObj || await pdf.getPage(preferred)
 
   canvas.width = viewport.width
   canvas.height = viewport.height
@@ -82,8 +122,7 @@ export async function renderPdfPageWithHighlight({
   const overlayCtx = overlay.getContext('2d')
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
 
-  const textContent = await page.getTextContent()
-  const ranges = findHighlightRanges(textContent.items, highlightText)
+  const ranges = matchedRanges
   overlayCtx.fillStyle = 'rgba(255, 214, 0, 0.45)'
   ranges.forEach(({ item }) => {
     const tx = pdfjsLib.Util.transform(viewport.transform, item.transform)
@@ -96,5 +135,5 @@ export async function renderPdfPageWithHighlight({
     overlayCtx.fillRect(x, y, Math.max(width, 8), Math.max(height, 10))
   })
 
-  return { pageCount, matched: ranges.length > 0 }
+  return { pageCount, matched: ranges.length > 0, pageNumber: matchedPage }
 }

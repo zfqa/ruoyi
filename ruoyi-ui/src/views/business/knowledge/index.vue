@@ -122,11 +122,14 @@
                 <div class="qa-msg-answer">
                   <template v-for="segment in answerSegments(message.result)">
                     <span v-if="!segment.citation" :key="segment.key">{{ segment.text }}</span>
-                    <el-popover v-else :key="segment.key" placement="top-start" width="430" trigger="hover">
+                    <el-popover v-else :key="segment.key" placement="top-start" width="460" trigger="hover">
                       <div class="inline-source-title"><i :class="sourceIcon(segment.citation.sourceType)" /> {{ segment.citation.sourceName }} · {{ segment.citation.versionNo }}</div>
                       <div class="citation-snippet">{{ citationPreview(segment.citation) }}</div>
-                      <a v-if="segment.citation.sourceUrl" :href="segment.citation.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源原文</a>
-                      <sup slot="reference" class="inline-citation" @click.stop="openCitation(segment.citation)">[{{ segment.citation.citationLabel }}]</sup>
+                      <div class="inline-source-actions">
+                        <el-button type="primary" size="mini" icon="el-icon-aim" :loading="locateLoading" @click="openCitation(segment.citation, true)">定位原文段落</el-button>
+                        <a v-if="segment.citation.sourceUrl" :href="segment.citation.sourceUrl" target="_blank" rel="noopener noreferrer">打开来源链接</a>
+                      </div>
+                      <sup slot="reference" class="inline-citation" title="点击定位原文段落" @click.stop="openCitation(segment.citation, true)">[{{ segment.citation.citationLabel }}]</sup>
                     </el-popover>
                   </template>
                 </div>
@@ -163,7 +166,7 @@
                         {{ evidence.sourceName }}<span v-if="evidence.originalName"> · {{ evidence.originalName }}</span><span v-if="evidence.pageStart"> · PDF 第 {{ evidence.pageStart }} 页</span>
                         · 匹配度 {{ Math.round(evidence.matchScore * 100) }}%
                         <div class="citation-snippet">原文：{{ evidence.evidenceSnippet }}</div>
-                        <el-button type="text" size="mini" @click="openEvidence(evidence)">精确定位原文</el-button>
+                        <el-button type="primary" plain size="mini" icon="el-icon-aim" :loading="locateLoading" @click="openEvidence(evidence, true)">定位原文段落</el-button>
                       </div>
                     </div>
                   </el-collapse-item>
@@ -175,8 +178,8 @@
                       <span v-if="item.pageStart"> · PDF 第 {{ item.pageStart }} 页</span>
                       <span v-if="item.metricId"> · 指标 {{ item.metricId }}</span>
                       <a v-if="item.sourceUrl" :href="item.sourceUrl" target="_blank" rel="noopener noreferrer"> · 原文链接</a>
-                      <div class="citation-snippet">{{ item.sourceSnippet }}</div>
-                      <el-button v-if="item.sourceType !== 'WEB'" type="text" size="mini" @click="openCitation(item)">点击定位引用段落</el-button>
+                      <div class="citation-snippet">{{ citationPreview(item) }}</div>
+                      <el-button v-if="item.sourceType !== 'WEB'" type="primary" plain size="mini" icon="el-icon-aim" :loading="locateLoading" @click="openCitation(item, true)">定位原文段落</el-button>
                     </div>
                   </el-collapse-item>
 
@@ -202,7 +205,7 @@
                       <el-card v-if="selectedQaRelation" shadow="never" class="relation-card">
                         <b>{{ selectedQaRelation.name }}</b> · {{ selectedQaRelation.sourceName }} · {{ selectedQaRelation.versionNo }}
                         <div class="citation-snippet">{{ selectedQaRelation.evidenceSnippet }}</div>
-                        <el-button type="text" @click="openEvidence(selectedQaRelation)">定位源文档段落</el-button>
+                        <el-button type="primary" plain size="mini" icon="el-icon-aim" :loading="locateLoading" @click="openEvidence(selectedQaRelation, true)">定位原文段落</el-button>
                       </el-card>
                     </div>
                     <div v-else class="qa-graph-hint">展开本条图谱后可交互查看</div>
@@ -408,6 +411,7 @@ export default {
       qaSuggestions: ['byd 2023 2024 销量', '比亚迪2026年销量', 'Tianma 2025年前三季度 LTPS 出货'],
       qaGraphFilter: { period: '', dataType: '' }, qaGraphData: { nodes: [], links: [], categories: [] },
       qaGraphCenterId: null, selectedQaRelation: null, qaGraphInstance: null,
+      locateLoading: false,
       evidenceOpen: false, evidenceDetail: null,
       pdfPreviewOpen: false, pdfPreviewLoading: false, pdfPreviewUrl: '', pdfPreviewObjectUrl: '',
       pdfPreviewPage: 1, pdfPreviewName: '', pdfPreviewKind: 'pdf', pdfPreviewBlob: null,
@@ -688,8 +692,99 @@ export default {
         if (params.dataType === 'edge') this.selectedQaRelation = params.data
       })
     },
-    openEvidence(item) { const chunkId = item.chunkId || item.id; if (!chunkId) return this.$modal.msgError('该来源缺少切片定位信息'); getKnowledgeEvidence(chunkId, { startOffset: item.startOffset, endOffset: item.endOffset }).then(r => { this.evidenceDetail = r.data; this.evidenceOpen = true }) },
-    openCitation(item) { const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : item; this.openEvidence({ id: item.id, chunkId: evidence.chunkId || item.chunkId || item.id, startOffset: evidence.startOffset, endOffset: evidence.endOffset }) },
+    openEvidence(item, openOriginalFile = false) {
+      const chunkId = item.chunkId || item.id
+      if (!chunkId) return this.$modal.msgError('该来源缺少切片定位信息')
+      const startOffset = item.startOffset
+      const endOffset = item.endOffset
+      this.locateLoading = true
+      getKnowledgeEvidence(chunkId, {
+        startOffset: startOffset == null || startOffset < 0 ? undefined : startOffset,
+        endOffset: endOffset == null || endOffset < 0 ? undefined : endOffset
+      }).then(r => {
+        const detail = r.data || {}
+        // 无精确偏移时，用摘要/高亮文本在切片内再定位一次，避免整页假“精确”
+        if ((detail.startOffset == null || detail.startOffset === 0)
+          && (detail.endOffset == null || detail.endOffset === (detail.content || '').length)
+          && (item.evidenceSnippet || item.sourceSnippet || item.highlightedText)) {
+          const needle = String(item.evidenceSnippet || item.highlightedText || item.sourceSnippet || '').trim()
+          const content = String(detail.content || '')
+          const hit = this.findSnippetOffsets(content, needle)
+          if (hit) {
+            detail.startOffset = hit.start
+            detail.endOffset = hit.end
+            detail.highlightedText = content.slice(hit.start, hit.end)
+          }
+        }
+        this.evidenceDetail = detail
+        const kind = detail.fileKind || this.detectFileKind(detail.originalName)
+        const canOpenFile = !!detail.fileAvailable && (kind === 'pdf' || kind === 'pptx')
+        if (openOriginalFile && canOpenFile) {
+          // 直接打开原件并高亮定位段落（loading 由 openSourceFile 收尾）
+          this.evidenceOpen = false
+          return this.openSourceFile()
+        }
+        // 无 PDF/PPTX 原件时，至少展示切片内高亮段落
+        this.evidenceOpen = true
+        if (openOriginalFile && detail.sourceUrl) {
+          window.open(detail.sourceUrl, '_blank', 'noopener,noreferrer')
+        } else if (openOriginalFile && !canOpenFile) {
+          this.$modal.msgWarning('当前来源没有可在线打开的 PDF/PPTX 原件，已展示切片内对应段落')
+        }
+        this.locateLoading = false
+      }).catch(error => {
+        this.locateLoading = false
+        this.$modal.msgError((error && (error.msg || error.message)) || '定位原文失败')
+      })
+    },
+    openCitation(item, openOriginalFile = true) {
+      const evidence = item.evidenceLocations && item.evidenceLocations.length ? item.evidenceLocations[0] : null
+      if (!evidence) {
+        this.$modal.msgWarning('该引用暂无段落坐标，将尽量按摘要定位原文')
+      }
+      this.openEvidence({
+        id: item.id,
+        chunkId: (evidence && (evidence.chunkId || evidence.id)) || item.chunkId || item.id,
+        startOffset: evidence ? evidence.startOffset : item.startOffset,
+        endOffset: evidence ? evidence.endOffset : item.endOffset,
+        evidenceSnippet: (evidence && evidence.evidenceSnippet) || item.sourceSnippet,
+        sourceSnippet: item.sourceSnippet,
+        highlightedText: evidence && evidence.evidenceSnippet,
+        sourceType: item.sourceType,
+        sourceUrl: item.sourceUrl
+      }, openOriginalFile)
+    },
+    findSnippetOffsets(content, needle) {
+      if (!content || !needle) return null
+      const raw = needle.replace(/\s+/g, '')
+      const compactContent = content.replace(/\s+/g, '')
+      if (!raw) return null
+      const candidates = [needle]
+      if (needle.length > 40) candidates.push(needle.slice(0, 40))
+      if (needle.length > 24) candidates.push(needle.slice(0, 24))
+      for (const part of candidates) {
+        let idx = content.indexOf(part)
+        if (idx >= 0) return { start: idx, end: idx + part.length }
+      }
+      // whitespace-insensitive fallback → map back approximately
+      let compactHit = compactContent.indexOf(raw.slice(0, Math.min(raw.length, 32)))
+      if (compactHit < 0) return null
+      let ci = 0
+      let start = 0
+      for (; start < content.length; start++) {
+        if (/\s/.test(content[start])) continue
+        if (ci === compactHit) break
+        ci++
+      }
+      let need = Math.min(raw.length, 80)
+      let end = start
+      let counted = 0
+      while (end < content.length && counted < need) {
+        if (!/\s/.test(content[end])) counted++
+        end++
+      }
+      return { start, end }
+    },
     pageLabel(item) {
       if (!item || !item.pageStart) return ''
       return (item.fileKind === 'pptx' ? '幻灯片第 ' : '第 ') + item.pageStart + ' 页'
@@ -698,12 +793,17 @@ export default {
       return ({ pdf: 'PDF', pptx: 'PPTX', docx: 'DOCX', xlsx: 'XLSX' })[kind] || (kind || '').toUpperCase()
     },
     openSourceFile() {
-      if (!this.evidenceDetail || !this.evidenceDetail.chunkId) return
+      if (!this.evidenceDetail || !this.evidenceDetail.chunkId) {
+        this.locateLoading = false
+        return
+      }
       if (!this.evidenceDetail.fileAvailable) {
+        this.locateLoading = false
         this.$modal.msgError('当前知识源没有可打开的 PDF/PPTX 原件（文件缺失或上传目录已变更）')
         return
       }
       const kind = this.evidenceDetail.fileKind || this.detectFileKind(this.evidenceDetail.originalName)
+      this.locateLoading = true
       this.pdfPreviewLoading = true
       this.highlightMatched = null
       getKnowledgeLocatePreview(this.evidenceDetail.chunkId, {
@@ -731,7 +831,12 @@ export default {
         this.$modal.msgError('暂不支持该原件格式的在线定位预览')
       }).catch(error => {
         this.$modal.msgError((error && (error.msg || error.message)) || '原件定位打开失败')
-      }).finally(() => { this.pdfPreviewLoading = false })
+        // 原件打开失败时回退到切片文本定位
+        this.evidenceOpen = true
+      }).finally(() => {
+        this.pdfPreviewLoading = false
+        this.locateLoading = false
+      })
     },
     applyPptxLocate(locate) {
       this.pptxSlideCount = Number(locate.slideCount || 0)
@@ -772,6 +877,7 @@ export default {
         overlay
       })
       this.highlightMatched = !!result.matched
+      if (result.pageNumber) this.pdfPreviewPage = result.pageNumber
       if (result.pageCount) this.pptxSlideCount = result.pageCount
     },
     shiftPptxSlide(delta) {
@@ -980,6 +1086,8 @@ export default {
 .qa-progress-head { display:flex; justify-content:space-between; margin-bottom:10px; color:#606266; }
 .mb16 { margin-bottom: 16px; }.danger { color:#f56c6c; }.is-disabled { opacity: 0.45; cursor: not-allowed; }.form-tip { margin-top: 6px; color: #909399; font-size: 12px; line-height: 1.4; }.ingest-success { color:#67c23a; margin-right: 8px; font-size: 12px; }.ingest-running { color:#e6a23c; margin-right: 8px; font-size: 12px; }.knowledge-category-filter { display:flex; align-items:center; gap:14px; padding:14px 16px; margin-bottom:16px; background:#f7f9fc; border:1px solid #ebeef5; border-radius:6px; }.category-title { color:#303133; font-weight:600; }.source-breakdown { display:flex; align-items:center; gap:8px; margin-bottom:14px; color:#606266; }.result-card { margin-bottom:14px; }.result-head { display:flex; justify-content:space-between; align-items:center; }.snippet { line-height:1.75; white-space:pre-wrap; }.source-meta { display:flex; flex-wrap:wrap; gap:18px; color:#8492a6; font-size:13px; }.task-card { margin-top:16px; line-height:2; } pre { white-space:pre-wrap; max-height:260px; overflow:auto; }.answer-card { margin-top:18px; }.answer-header { display:flex; justify-content:space-between; align-items:center; }.answer-mode { margin-left:10px; }.answer-text { line-height:1.9; white-space:pre-wrap; margin-top:16px; }.model-name { color:#909399; font-size:12px; }.claim-row { padding:10px 0; border-bottom:1px dashed #dcdfe6; line-height:1.8; }.claim-evidence { margin:6px 0 0 26px; padding:8px 10px; background:#f7f9fc; border-left:3px solid #67c23a; }.citation-row { padding:10px 0; border-bottom:1px solid #ebeef5; line-height:1.7; }.citation-snippet { color:#606266; font-size:13px; white-space:pre-wrap; }.qa-graph { height:420px; background:#f8fafc; border:1px solid #ebeef5; border-radius:8px; }.qa-graph-filter { margin-bottom:4px; }.qa-graph-status { margin:0 0 12px; color:#409eff; font-weight:600; }.relation-card { margin-top:14px; }.relation-card a { margin-left:18px; }.log-table { margin-top:12px; }.evidence-content { margin-top:16px; max-height:480px; padding:16px; background:#f7f9fc; line-height:1.8; }.evidence-content mark { background:#ffe58f; color:#303133; }.qa-progress-card { margin:14px 0; }.trace-collapse { margin:12px 0 16px; }.trace-title-icon { margin-right:8px; color:#409eff; }.inline-citation { color:#409eff; cursor:pointer; font-weight:600; margin:0 2px; }.inline-citation:hover { color:#66b1ff; text-decoration:underline; }.inline-source-title { font-weight:600; margin-bottom:8px; }.inline-source-title i,.citation-row>i { margin-right:6px; color:#409eff; }
 .source-meta { align-items:center; }.source-link-button { padding:0; }.external-source-link { margin-left:16px; }
+.inline-source-actions { display:flex; align-items:center; gap:12px; margin-top:10px; }
+.citation-row .el-button { margin-top:6px; }
 .pdf-preview-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:14px; margin-bottom:10px; color:#606266; font-size:13px; }
 .pdf-locate-stage { display:flex; gap:16px; align-items:flex-start; min-height:70vh; }
 .pdf-locate-scroll { flex:1; min-width:0; overflow:auto; max-height:78vh; background:#525659; border:1px solid #ebeef5; text-align:center; padding:12px; }

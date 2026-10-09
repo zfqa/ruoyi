@@ -7,6 +7,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -45,6 +47,7 @@ public class KnowledgeQaService
     private final QuestionIntentAnalyzer intentAnalyzer = new QuestionIntentAnalyzer();
     private final KnowledgeProgramAnswerService programAnswerService = new KnowledgeProgramAnswerService();
     private KnowledgeGraphService graphService;
+    private KnowledgeGraphProposeService graphProposeService;
 
     @Value("${business.knowledge.llm.timeout-seconds:300}")
     private int requestTimeoutSeconds = 300;
@@ -89,6 +92,12 @@ public class KnowledgeQaService
     public void setGraphService(KnowledgeGraphService graphService)
     {
         this.graphService = graphService;
+    }
+
+    @Autowired(required = false)
+    public void setGraphProposeService(KnowledgeGraphProposeService graphProposeService)
+    {
+        this.graphProposeService = graphProposeService;
     }
 
     public Map<String, Object> llmConfiguration()
@@ -230,7 +239,8 @@ public class KnowledgeQaService
         notifyProgress(listener, 55, "正在根据已打开的原文生成回答", logs);
         String answer = callLlm(question, chunks,
             "只根据已经打开的原文回答。每个数字都必须能在原文中逐字找到。"
-                + "原文没有的项目直接说明没有，不要改用其他公司或文档里的同名指标，也不要心算一个原文里不存在的数。");
+                + "原文没有的项目直接说明没有，不要改用其他公司或文档里的同名指标，也不要心算一个原文里不存在的数。"
+                + "每个事实句或含数字的句子末尾必须标注 [S编号]，与可用资料序号对应。");
         List<String> missingNumbers = ungroundedNumbers(answer, chunks);
         List<String> warnings = new ArrayList<>();
         if (!missingNumbers.isEmpty())
@@ -244,7 +254,11 @@ public class KnowledgeQaService
         {
             logs.add(log("VERIFY", "数字核对", question, "回答中的数字能在原文中找到", 0, "SUCCESS"));
         }
-        KnowledgeCitationValidator.ValidationResult validation = softValidateOrAttach(answer, chunks);
+        GroundedCitation grounded = enforceGroundedCitations(answer, chunks);
+        answer = grounded.answer();
+        KnowledgeCitationValidator.ValidationResult validation = grounded.validation();
+        if (grounded.repaired())
+            warnings.add("已自动补全或对齐来源标注，确保有据结论可追溯");
         List<Map<String, Object>> citations = new ArrayList<>();
         for (Integer index : validation.getCitedIndexes())
             citations.add(toCitation("S" + index, chunks.get(index - 1), validation.getEvidenceForSource(index)));
@@ -254,7 +268,7 @@ public class KnowledgeQaService
         result.put("citations", citations);
         result.put("model", llmConfiguration.getModel());
         result.put("answerMode", "LLM_DISPATCH");
-        result.put("citationCoveragePercent", validation.getClaims().isEmpty() ? 0 : 100);
+        result.put("citationCoveragePercent", citationCoveragePercent(answer, validation));
         result.put("citationPolicy", "AGENT_GROUNDED");
         result.put("warnings", warnings);
         result.put("newsExplanationEnabled", includeNews);
@@ -266,6 +280,8 @@ public class KnowledgeQaService
         List<KnowledgeChunk> citedChunks = new ArrayList<>();
         for (Integer index : validation.getCitedIndexes())
             citedChunks.add(openedChunks.get(index - 1));
+        int proposed = proposeGraphRelations(question, answer, citations, citedChunks, warnings, logs);
+        if (proposed > 0) result.put("graphProposedCount", proposed);
         result.put("graph", buildQaGraph(question, citedChunks, openedChunks, roleIds, admin));
         result.put("qaStatus", qaStatusFor("LLM_VERIFIED"));
         notifyProgress(listener, 100, "已根据模型打开的原文完成回答", logs);
@@ -356,10 +372,10 @@ public class KnowledgeQaService
     {
         if (chunks == null || chunks.isEmpty()) return "（没有打开到原文）";
         StringBuilder text = new StringBuilder();
-        int limit = Math.min(6, chunks.size());
-        for (int i = 0; i < limit; i++)
+        // 多源时按 sourceId 轮询取样，避免 sufficiency 只看到第一家文档
+        List<KnowledgeChunk> preview = diversifyBySource(chunks, Math.min(6, chunks.size()));
+        for (KnowledgeChunk chunk : preview)
         {
-            KnowledgeChunk chunk = chunks.get(i);
             String body = KnowledgeTextProcessor.joinWrappedLines(safe(chunk.getContent()));
             if (body.length() > 180) body = body.substring(0, 180);
             text.append("[sourceId=").append(chunk.getSourceId()).append("] ")
@@ -571,10 +587,12 @@ public class KnowledgeQaService
         DeterministicAnswer deterministic = buildDeterministicAnswer(actualQuestion, evidenceChunks);
         if (deterministic != null)
         {
-            answer = deterministic.text();
-            validation = softValidateOrAttach(answer, evidenceChunks);
+            GroundedCitation grounded = enforceGroundedCitations(deterministic.text(), evidenceChunks);
+            answer = grounded.answer();
+            validation = grounded.validation();
             answerMode = deterministic.partial() ? "PROGRAM_PARTIAL" : "PROGRAM_CALCULATED";
             warnings.addAll(deterministic.warnings());
+            if (grounded.repaired()) warnings.add("已自动补全来源标注，确保有据结论可追溯");
             logs.add(log("GENERATE", deterministic.partial() ? "证据不完整" : "程序计算或抽取", "知识库原文",
                 deterministic.partial() ? "只返回已确认的部分，不声称完整" : "数值由程序计算，不交给模型心算",
                 0, "SUCCESS"));
@@ -582,10 +600,13 @@ public class KnowledgeQaService
         }
         else if (llmConfiguration.getApiKey().isBlank())
         {
-            answer = buildEvidenceFallback(actualQuestion, evidenceChunks, false);
-            validation = softValidateOrAttach(answer, evidenceChunks);
+            GroundedCitation grounded = enforceGroundedCitations(
+                buildEvidenceFallback(actualQuestion, evidenceChunks, false), evidenceChunks);
+            answer = grounded.answer();
+            validation = grounded.validation();
             answerMode = "EXTRACTIVE_FALLBACK";
             warnings.add("未配置大模型 API Key，已根据检索资料整理回答（含原文页码）");
+            if (grounded.repaired()) warnings.add("已自动补全来源标注，确保有据结论可追溯");
             logs.add(log("GENERATE", "LLM生成", llmConfiguration.getModel(), "未配置密钥，使用资料整理回答", 0, "FALLBACK"));
             notifyProgress(progressListener, 80, "已生成资料整理回答", logs);
         }
@@ -600,7 +621,10 @@ public class KnowledgeQaService
                 logs.add(log("GENERATE", "LLM生成", llmConfiguration.getModel(), "回答生成完成",
                     elapsedMillis(llmStarted), "SUCCESS"));
                 notifyProgress(progressListener, 80, "回答已生成，正在整理参考来源", logs);
-                validation = softValidateOrAttach(answer, evidenceChunks);
+                GroundedCitation grounded = enforceGroundedCitations(answer, evidenceChunks);
+                answer = grounded.answer();
+                validation = grounded.validation();
+                if (grounded.repaired()) warnings.add("已自动补全或对齐来源标注，确保有据结论可追溯");
                 if (validation.getClaims().isEmpty())
                     logs.add(log("VERIFY", "参考来源整理", "检索资料挂载",
                         validation.getCitedIndexes().size() + " 条资料可供查阅", 0, "SUCCESS"));
@@ -612,12 +636,16 @@ public class KnowledgeQaService
             catch (Exception llmError)
             {
                 boolean balanceIssue = isLlmBalanceOrAuthIssue(llmError);
-                answer = buildEvidenceFallback(actualQuestion, evidenceChunks, balanceIssue || !llmResponded);
-                validation = softValidateOrAttach(answer, evidenceChunks);
+                GroundedCitation grounded = enforceGroundedCitations(
+                    buildEvidenceFallback(actualQuestion, evidenceChunks, balanceIssue || !llmResponded),
+                    evidenceChunks);
+                answer = grounded.answer();
+                validation = grounded.validation();
                 answerMode = balanceIssue ? "LLM_UNAVAILABLE_WITH_EVIDENCE" : "EXTRACTIVE_FALLBACK";
                 String reason = balanceIssue ? "大模型余额不足或服务不可用(402/401)"
                     : (llmResponded ? "LLM返回异常" : "LLM请求失败");
                 warnings.add(reason + "。已展示知识库原文证据，未改走联网搜索：" + abbreviate(llmError.getMessage(), 180));
+                if (grounded.repaired()) warnings.add("已自动补全来源标注，确保有据结论可追溯");
                 logs.add(log("GENERATE", "安全降级", llmConfiguration.getModel(), reason + "；保留已检索证据",
                     elapsedMillis(llmStarted), "FALLBACK"));
                 notifyProgress(progressListener, 85, "LLM不可用，已展示知识库原文", logs);
@@ -634,7 +662,7 @@ public class KnowledgeQaService
         result.put("citations", citations);
         result.put("model", llmConfiguration.getModel());
         result.put("answerMode", answerMode);
-        result.put("citationCoveragePercent", validation.getClaims().isEmpty() ? 0 : 100);
+        result.put("citationCoveragePercent", citationCoveragePercent(answer, validation));
         result.put("citationPolicy", "AGENT_GROUNDED");
         result.put("warnings", warnings);
         if (includeNews && sourceBreakdown.get("NEWS") == 0 && sourceBreakdown.get("POLICY") == 0)
@@ -652,6 +680,8 @@ public class KnowledgeQaService
             Math.max(validation.getClaims().size(), validation.getCitedIndexes().size()), includeNews, sourceBreakdown));
         result.put("retrievalLogs", logs);
         result.put("analysisTrace", analysisTrace(actualQuestion, evidenceChunks, validation, answerMode));
+        int proposed = proposeGraphRelations(actualQuestion, answer, citations, citedChunks, warnings, logs);
+        if (proposed > 0) result.put("graphProposedCount", proposed);
         result.put("graph", buildQaGraph(actualQuestion, citedChunks, evidenceChunks, roleIds, admin));
         result.put("qaStatus", qaStatusFor(answerMode));
         if (webLlm && !"LLM_UNAVAILABLE_WITH_EVIDENCE".equals(answerMode))
@@ -1175,6 +1205,39 @@ public class KnowledgeQaService
         Map<String, Object> graph = new LinkedHashMap<>(); graph.put("nodes", List.of()); graph.put("links", List.of()); graph.put("categories", List.of()); return graph;
     }
 
+    /**
+     * 问答收尾：跨源引用时由模型提议关系，硬校验通过后自动写入，再构图。
+     * 纯联网/无 KB 引用不触发。
+     */
+    private int proposeGraphRelations(String question, String answer, List<Map<String, Object>> citations,
+        List<KnowledgeChunk> citedChunks, List<String> warnings, List<Map<String, Object>> logs)
+    {
+        if (graphProposeService == null) return 0;
+        if (citations == null || citations.isEmpty() || citedChunks == null || citedChunks.isEmpty()) return 0;
+        try
+        {
+            KnowledgeGraphProposeService.ProposeResult result = graphProposeService.proposeAndCommit(
+                question, answer, citations, citedChunks, warnings, logs);
+            return result == null ? 0 : result.committed();
+        }
+        catch (Exception ex)
+        {
+            String msg = "GRAPH_PROPOSE error: " + abbreviate(ex.getMessage(), 160);
+            if (warnings != null) warnings.add(msg);
+            if (logs != null)
+            {
+                Map<String, Object> log = new LinkedHashMap<>();
+                log.put("stage", "GRAPH_PROPOSE");
+                log.put("title", "图谱提议");
+                log.put("detail", msg);
+                log.put("status", "FAILED");
+                log.put("durationMs", 0);
+                logs.add(log);
+            }
+            return 0;
+        }
+    }
+
     /** 优先用引用切片构图；若为空再退回全部已打开切片，避免 LLM_DISPATCH 路径图谱空白。 */
     private Map<String, Object> buildQaGraph(String question, List<KnowledgeChunk> primary,
         List<KnowledgeChunk> fallback, List<Long> roleIds, boolean admin)
@@ -1614,7 +1677,8 @@ public class KnowledgeQaService
             + "回答时说明结果是根据引用资料计算的；若计算所需的关键数字确实不在资料中，再说明缺什么，不要编造。"
             + "车载显示面板出货指标的thousand_units必须表述为“千片”或“Kpcs”，禁止写成“千台”。"
             + "新闻和政策只能作为可能背景，表述为“可能有关”，不要写成确定因果。"
-            + "资料不足时直接说明缺什么，不要编造。可选用 [S1] 标注关键数字来源，但不是必须。"
+            + "资料不足时直接说明缺什么，不要编造。"
+            + "每个包含数字、结论或事实判断的句子末尾必须标注来源，格式为 [S1]、[S2]；禁止省略引用编号。"
             + "不要使用Markdown表格。"));
         String userPrompt = "问题：" + question + "\n\n可用资料：\n" + context;
         if (repairInstruction != null && !repairInstruction.isBlank())
@@ -1627,15 +1691,47 @@ public class KnowledgeQaService
 
     private KnowledgeCitationValidator.ValidationResult softValidateOrAttach(String answer, List<KnowledgeChunk> chunks)
     {
+        return enforceGroundedCitations(answer, chunks).validation();
+    }
+
+    /** 强制有据结论带来源：先硬校验 → 自动补 [Sn] 再校验 → 仍失败则挂载带定位窗口的引用。 */
+    private GroundedCitation enforceGroundedCitations(String answer, List<KnowledgeChunk> chunks)
+    {
+        String working = answer == null ? "" : answer;
         try
         {
-            return citationValidator.validate(answer, chunks);
+            return new GroundedCitation(working, citationValidator.validate(working, chunks), false);
         }
         catch (Exception ignored)
         {
-            return KnowledgeCitationValidator.ValidationResult.attachRetrieved(chunks);
+            String annotated = citationValidator.ensureInlineCitations(working, chunks);
+            try
+            {
+                return new GroundedCitation(annotated, citationValidator.validate(annotated, chunks), true);
+            }
+            catch (Exception ignoredAgain)
+            {
+                return new GroundedCitation(annotated,
+                    citationValidator.attachRetrievedWithLocations(chunks, annotated), true);
+            }
         }
     }
+
+    private int citationCoveragePercent(String answer, KnowledgeCitationValidator.ValidationResult validation)
+    {
+        int factual = citationValidator.countFactualUnits(answer);
+        if (factual <= 0)
+            return validation.getCitedIndexes() == null || validation.getCitedIndexes().isEmpty() ? 0 : 100;
+        int verified = validation.getClaims() == null ? 0 : validation.getClaims().size();
+        if (verified <= 0 && validation.getCitedIndexes() != null && !validation.getCitedIndexes().isEmpty())
+        {
+            // 已挂载引用但句级 claims 未建成时，按“有引用资料”给部分覆盖，避免虚标 100
+            return Math.min(90, Math.max(40, validation.getCitedIndexes().size() * 10));
+        }
+        return Math.min(100, (verified * 100) / factual);
+    }
+
+    private record GroundedCitation(String answer, KnowledgeCitationValidator.ValidationResult validation, boolean repaired) {}
 
     private String sendLlmRequest(JSONObject payload) throws Exception
     {
@@ -2956,9 +3052,17 @@ public class KnowledgeQaService
     private List<KnowledgeChunk> rankForDispatch(String question, List<KnowledgeChunk> chunks)
     {
         if (chunks == null || chunks.size() <= 1) return chunks == null ? List.of() : chunks;
-        List<String> terms = QuestionEvidenceSelector.contentTerms(question).stream()
-            .filter(term -> term != null && term.length() >= 4)
-            .toList();
+        LinkedHashSet<String> termSet = new LinkedHashSet<>();
+        for (String term : QuestionEvidenceSelector.contentTerms(question))
+            if (term != null && term.length() >= 4) termSet.add(term);
+        // 短品牌（奇瑞/蔚来等）也必须计分，否则多实体对比时会被长窗口词淹没
+        for (String term : KnowledgeTextProcessor.detectEntityTerms(question))
+            if (term != null && !term.isBlank()) termSet.add(term.trim());
+        String q = question == null ? "" : question;
+        if (q.contains("销量") || q.contains("出海") || q.contains("出口") || q.contains("海外"))
+            for (String topic : List.of("销量", "出口", "海外", "出海", "万辆", "批发", "零售"))
+                termSet.add(topic);
+        List<String> terms = new ArrayList<>(termSet);
         if (terms.isEmpty()) return chunks;
         List<KnowledgeChunk> ranked = new ArrayList<>(chunks);
         ranked.sort((left, right) -> Integer.compare(dispatchOverlap(right, terms), dispatchOverlap(left, terms)));
@@ -2971,16 +3075,57 @@ public class KnowledgeQaService
         String text = chunk.getContent().replaceAll("\\s+", "");
         int score = 0;
         for (String term : terms)
-            if (text.contains(term)) score += term.length();
+            if (text.contains(term)) score += Math.max(2, term.length());
         return score;
     }
 
+    /**
+     * 模型上下文截断：多来源时先按 sourceId 保底名额，再按已排序相关度补满。
+     * 避免对比题里单一长文档占满 top-k，把另一家已打开资料挤掉。
+     */
     private List<KnowledgeChunk> selectForModelContext(List<KnowledgeChunk> chunks)
     {
         if (chunks == null || chunks.isEmpty()) return List.of();
         int limit = Math.max(1, modelContextLimit);
-        if (chunks.size() <= limit) return chunks;
-        return chunks.subList(0, limit);
+        if (chunks.size() <= limit) return new ArrayList<>(chunks);
+        return diversifyBySource(chunks, limit);
+    }
+
+    /** 输入假定已按相关度排好；多源时每源至少 1 席（预算允许时每源最多 2 席），再全局补齐。 */
+    private List<KnowledgeChunk> diversifyBySource(List<KnowledgeChunk> chunks, int limit)
+    {
+        if (chunks == null || chunks.isEmpty() || limit <= 0) return List.of();
+        if (chunks.size() <= limit) return new ArrayList<>(chunks);
+
+        LinkedHashMap<Long, List<KnowledgeChunk>> bySource = new LinkedHashMap<>();
+        for (KnowledgeChunk chunk : chunks)
+        {
+            Long sourceId = chunk.getSourceId() == null ? Long.valueOf(-1L) : chunk.getSourceId();
+            bySource.computeIfAbsent(sourceId, key -> new ArrayList<>()).add(chunk);
+        }
+        if (bySource.size() <= 1) return new ArrayList<>(chunks.subList(0, limit));
+
+        int perSource = Math.max(1, Math.min(2, limit / bySource.size()));
+        Set<KnowledgeChunk> picked = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<KnowledgeChunk> selected = new ArrayList<>(limit);
+        for (List<KnowledgeChunk> group : bySource.values())
+        {
+            int taken = 0;
+            for (KnowledgeChunk chunk : group)
+            {
+                if (selected.size() >= limit || taken >= perSource) break;
+                selected.add(chunk);
+                picked.add(chunk);
+                taken++;
+            }
+            if (selected.size() >= limit) return selected;
+        }
+        for (KnowledgeChunk chunk : chunks)
+        {
+            if (selected.size() >= limit) break;
+            if (picked.add(chunk)) selected.add(chunk);
+        }
+        return selected;
     }
 
     private boolean isLlmBalanceOrAuthIssue(Throwable error)

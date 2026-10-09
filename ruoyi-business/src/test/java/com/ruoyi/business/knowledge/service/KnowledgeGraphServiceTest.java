@@ -162,12 +162,91 @@ class KnowledgeGraphServiceTest
         Files.deleteIfExists(profile);
     }
 
+    @Test
+    void blocksFormulaJsonKeyAsModelAndLinksCoOccurringMakers()
+    {
+        KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
+        AtomicLong ids = new AtomicLong(1);
+        List<KnowledgeGraphNode> nodes = new ArrayList<>();
+        List<KnowledgeGraphRelation> relations = new ArrayList<>();
+        doAnswer(invocation -> {
+            KnowledgeGraphNode node = invocation.getArgument(0);
+            node.setId(ids.getAndIncrement());
+            nodes.add(node);
+            return 1;
+        }).when(mapper).upsertGraphNode(any(KnowledgeGraphNode.class));
+        doAnswer(invocation -> {
+            relations.add(invocation.getArgument(0));
+            return 1;
+        }).when(mapper).insertGraphRelation(any(KnowledgeGraphRelation.class));
+
+        KnowledgeBase source = new KnowledgeBase();
+        source.setId(143L);
+        source.setSourceName("竞争社洞察");
+        source.setSourceType("REPORT");
+        KnowledgeVersion version = new KnowledgeVersion();
+        version.setId(99L);
+        version.setOriginalName("竞争社洞察.xlsx");
+        KnowledgeChunk chunk = new KnowledgeChunk();
+        chunk.setId(18064L);
+        chunk.setContent("{\"makers\":{\"Tianma\":{\"values\":{\"2024\":1}},\"BOE\":{\"values\":{\"2024\":2}},"
+            + "\"CSOT\":{\"formula\":\"x\"},\"AUO\":{\"formula\":\"y\"}}}");
+
+        new KnowledgeGraphService(mapper).indexChunk(source, version, chunk);
+
+        assertTrue(nodes.stream().noneMatch(n -> "MODEL".equals(n.getEntityType())
+            && "formula".equalsIgnoreCase(n.getEntityName())));
+        Set<String> companies = nodes.stream()
+            .filter(n -> "COMPANY".equals(n.getEntityType()))
+            .map(KnowledgeGraphNode::getEntityName)
+            .collect(Collectors.toSet());
+        assertTrue(companies.containsAll(Set.of("Tianma", "BOE", "CSOT", "AUO")));
+        assertTrue(relations.stream().anyMatch(r -> "关联企业".equals(r.getRelationType())));
+        assertTrue(relations.size() >= 3);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void graphForChunksFallsBackToEntityNamesWhenCitationChunksHaveNoEdges()
+    {
+        KnowledgeBaseMapper mapper = mock(KnowledgeBaseMapper.class);
+        when(mapper.selectGraphRelationsByChunkIds(anyList(), anyList(), anyBoolean(), anyInt()))
+            .thenReturn(List.of());
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("relationId", 1L);
+        row.put("relationType", "关联企业");
+        row.put("sourceId", 143L);
+        row.put("fromId", 10L);
+        row.put("fromName", "Tianma");
+        row.put("fromType", "COMPANY");
+        row.put("toId", 11L);
+        row.put("toName", "BOE");
+        row.put("toType", "COMPANY");
+        row.put("chunkId", 999L);
+        row.put("sourceName", "竞争社洞察");
+        row.put("evidenceSnippet", "Tianma vs BOE");
+        when(mapper.selectGraphRelationsByEntityNames(anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
+            .thenReturn(List.of(row));
+
+        KnowledgeChunk cited = new KnowledgeChunk();
+        cited.setId(1L);
+        cited.setSourceId(143L);
+        cited.setContent("makers Tianma BOE");
+
+        Map<String, Object> graph = new KnowledgeGraphService(mapper)
+            .graphForChunks(List.of(cited), List.of(), true, List.of("Tianma", "BOE"));
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) graph.get("nodes");
+        List<Map<String, Object>> links = (List<Map<String, Object>>) graph.get("links");
+        assertEquals(2, nodes.size());
+        assertEquals(1, links.size());
+    }
+
     private Map<String, Object> relationRow(Long relationId, Long toId, String type,
         Long sourceId, Long chunkId, String sourceName)
     {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("relationId", relationId); row.put("relationType", type); row.put("sourceId", sourceId);
-        row.put("fromId", 1L); row.put("fromName", "源文�?); row.put("fromType", "REPORT");
+        row.put("fromId", 1L); row.put("fromName", "源文档"); row.put("fromType", "REPORT");
         row.put("toId", toId); row.put("toName", "Tianma"); row.put("toType", "COMPANY");
         row.put("chunkId", chunkId); row.put("sourceName", sourceName); row.put("evidenceSnippet", "Tianma");
         return row;

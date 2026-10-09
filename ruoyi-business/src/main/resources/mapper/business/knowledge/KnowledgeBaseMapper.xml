@@ -295,6 +295,24 @@
         order by r.id desc limit #{limit}
     </select>
 
+    <select id="selectGraphRelationsByEntityNames" resultType="java.util.LinkedHashMap">
+        <include refid="graphRelationColumns"/>
+        where s.current_version_id=r.version_id
+        and r.source_id in
+        <foreach collection="sourceIds" item="sourceId" open="(" separator="," close=")">#{sourceId}</foreach>
+        and (
+          f.entity_name in
+          <foreach collection="entityNames" item="name" open="(" separator="," close=")">#{name}</foreach>
+          or t.entity_name in
+          <foreach collection="entityNames" item="name" open="(" separator="," close=")">#{name}</foreach>
+        )
+        <if test="!admin">
+          and (s.allowed_role_ids is null or s.allowed_role_ids=''
+          <foreach collection="roleIds" item="roleId">or find_in_set(#{roleId},s.allowed_role_ids)&gt;0</foreach>)
+        </if>
+        order by r.id desc limit #{limit}
+    </select>
+
     <select id="selectCurrentChunks" resultMap="ChunkResult">
         select c.*,s.source_name,s.source_type,v.version_no,v.original_name
         from business_kb_chunk c

@@ -80,8 +80,23 @@ public class KnowledgeBaseController extends BaseController
         util.exportExcel(response, list, "固定文件知识库及来源展示数据");
     }
 
+    /**
+     * 知识图谱总览。必须声明在 /{id} 之前，且 /{id} 仅匹配数字，
+     * 避免 "graph" 被当成资料主键导致 500/空图。
+     */
     @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
-    @GetMapping(value = "/{id}")
+    @GetMapping("/graph")
+    public AjaxResult graph(@RequestParam(value = "period", required = false) String period,
+        @RequestParam(value = "dataType", required = false) String dataType,
+        @RequestParam(value = "centerId", required = false) Long centerId,
+        @RequestParam(value = "limit", defaultValue = "100") int limit)
+    {
+        return success(knowledgeGraphService.graph(period, dataType, centerId, roleIds(),
+            getLoginUser().getUser().isAdmin(), limit));
+    }
+
+    @PreAuthorize("@ss.hasPermi('business:knowledge:query')")
+    @GetMapping("/{id:\\d+}")
     public AjaxResult getInfo(@PathVariable("id") Long id)
     {
         KnowledgeBase source = knowledgeBaseService.selectAuthorizedKnowledgeBaseById(id, roleIds(),
@@ -167,6 +182,22 @@ public class KnowledgeBaseController extends BaseController
         try
         {
             return success(knowledgeIngestService.rebuildFacts(sourceId));
+        }
+        catch (Exception e)
+        {
+            return AjaxResult.error(e.getMessage());
+        }
+    }
+
+    /** 按当前有效切片全量重建知识图谱实体与关系（清空各版本旧边后重抽）。 */
+    @PreAuthorize("@ss.hasPermi('business:knowledge:add')")
+    @Log(title = "知识图谱重建", businessType = BusinessType.UPDATE)
+    @PostMapping("/graph/rebuild")
+    public AjaxResult rebuildGraph()
+    {
+        try
+        {
+            return success(knowledgeGraphService.rebuildCurrentGraph());
         }
         catch (Exception e)
         {

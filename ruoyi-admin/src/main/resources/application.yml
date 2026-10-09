@@ -162,15 +162,15 @@ business:
     schema-auto-init: true
   document:
     private-root: ${BUSINESS_DOCUMENT_PRIVATE_ROOT:D:/ruoyi/business-document-private}
-  news:
-    # POC直接使用RuoYi原有MySQL数据源，启动时幂等补齐新闻采集扩展表
-    schema-auto-init: true
-    llm:
-    # 用于加密持久化前端保存的API Key；生产环境请通过LLM_CONFIG_SECRET设置独立且稳定的随机密钥
+  # 统一 LLM 配置（KnowledgeQa / TextStruct / AI配置页 均绑定 business.llm.*）
+  llm:
     persistence-secret: ${LLM_CONFIG_SECRET:${token.secret}}
     api-url: ${LLM_API_URL:${ARK_API_URL:https://api.deepseek.com/v1/chat/completions}}
     model: ${LLM_MODEL:${ARK_MODEL:deepseek-chat}}
     api-key: ${LLM_API_KEY:${ARK_API_KEY:}}
+  news:
+    # POC直接使用RuoYi原有MySQL数据源，启动时幂等补齐新闻采集扩展表
+    schema-auto-init: true
   text:
     llm:
       # 推理型模型可能超过90秒，文本抽取独立设置较长超时

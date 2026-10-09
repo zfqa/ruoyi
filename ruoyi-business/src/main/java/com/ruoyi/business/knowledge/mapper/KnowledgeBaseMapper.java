@@ -103,6 +103,11 @@ public interface KnowledgeBaseMapper
         @Param("roleIds") List<Long> roleIds, @Param("admin") boolean admin,
         @Param("limit") int limit);
 
+    /** 问答图谱回退：按实体名 + 资料 sourceId 拉边（citation 切片无边时用）。 */
+    List<Map<String, Object>> selectGraphRelationsByEntityNames(@Param("entityNames") List<String> entityNames,
+        @Param("sourceIds") List<Long> sourceIds, @Param("roleIds") List<Long> roleIds,
+        @Param("admin") boolean admin, @Param("limit") int limit);
+
     List<KnowledgeChunk> selectCurrentChunks(@Param("limit") int limit);
 
     int insertQaSession(@Param("taskId") String taskId, @Param("owner") String owner,

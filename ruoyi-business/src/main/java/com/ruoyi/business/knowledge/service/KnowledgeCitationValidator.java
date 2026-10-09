@@ -90,6 +90,127 @@ public class KnowledgeCitationValidator
         return new ValidationResult(new ArrayList<>(usedIndexes), claims, evidenceBySource);
     }
 
+    /**
+     * 为未标注的事实句自动补挂最佳匹配 [Sn]，便于达到“有据结论必须带来源”。
+     * 不改写已有标注；找不到匹配切片时保持原句。
+     */
+    public String ensureInlineCitations(String answer, List<KnowledgeChunk> chunks)
+    {
+        if (answer == null || answer.isBlank() || chunks == null || chunks.isEmpty()) return answer;
+        String result = answer;
+        for (String unit : splitClaimUnits(answer))
+        {
+            String claimText = CITATION_PATTERN.matcher(unit).replaceAll("").trim();
+            if (!isFactualClaim(claimText) || !citationIndexes(unit).isEmpty()) continue;
+            int best = bestSourceIndex(claimText, chunks);
+            if (best < 1) continue;
+            String tagged = claimText.endsWith("。") || claimText.endsWith("！") || claimText.endsWith("？")
+                || claimText.endsWith(";") || claimText.endsWith("；")
+                ? claimText.substring(0, claimText.length() - 1) + " [S" + best + "]" + claimText.substring(claimText.length() - 1)
+                : claimText + " [S" + best + "]";
+            // 只替换尚未带引用的该事实句首次出现
+            int idx = result.indexOf(unit);
+            if (idx < 0) idx = result.indexOf(claimText);
+            if (idx < 0) continue;
+            String current = result.substring(idx, Math.min(result.length(), idx + unit.length() + 8));
+            if (CITATION_PATTERN.matcher(current).find()) continue;
+            result = result.substring(0, idx) + tagged + result.substring(idx + (result.startsWith(unit, idx) ? unit.length() : claimText.length()));
+        }
+        return result;
+    }
+
+    /** soft 回退时也尽量为每条引用填上可点击定位的原文窗口。 */
+    public ValidationResult attachRetrievedWithLocations(List<KnowledgeChunk> chunks, String answerHint)
+    {
+        List<Integer> indexes = new ArrayList<>();
+        List<Map<String, Object>> claims = new ArrayList<>();
+        Map<Integer, List<Map<String, Object>>> evidenceBySource = new LinkedHashMap<>();
+        if (chunks == null || chunks.isEmpty())
+            return new ValidationResult(indexes, claims, evidenceBySource);
+        String hint = answerHint == null ? "" : answerHint;
+        for (int i = 0; i < chunks.size(); i++)
+        {
+            int index = i + 1;
+            KnowledgeChunk chunk = chunks.get(i);
+            indexes.add(index);
+            LocatedEvidence located = locateSupportingEvidence(hint.isBlank() ? safe(chunk.getSourceSnippet()) : hint, chunk);
+            EvidenceLocation location = located.location;
+            if (!location.supported)
+                location = fallbackWindow(located.chunk != null ? located.chunk : chunk);
+            Map<String, Object> evidence = new LinkedHashMap<>();
+            String label = "S" + index;
+            KnowledgeChunk evidenceChunk = located.chunk != null ? located.chunk : chunk;
+            evidence.put("citationLabel", label);
+            evidence.put("chunkId", evidenceChunk.getId());
+            evidence.put("sourceName", firstNonBlank(evidenceChunk.getSourceName(), chunk.getSourceName()));
+            evidence.put("originalName", firstNonBlank(evidenceChunk.getOriginalName(), chunk.getOriginalName()));
+            evidence.put("versionNo", firstNonBlank(evidenceChunk.getVersionNo(), chunk.getVersionNo()));
+            evidence.put("pageStart", evidenceChunk.getPageStart());
+            evidence.put("pageEnd", evidenceChunk.getPageEnd());
+            evidence.put("evidenceSnippet", location.snippet);
+            evidence.put("startOffset", location.startOffset);
+            evidence.put("endOffset", location.endOffset);
+            evidence.put("matchScore", location.score);
+            evidence.put("matchedTerms", location.matchedTerms);
+            evidenceBySource.computeIfAbsent(index, ignored -> new ArrayList<>()).add(evidence);
+        }
+        return new ValidationResult(indexes, claims, evidenceBySource);
+    }
+
+    public int countFactualUnits(String answer)
+    {
+        if (answer == null || answer.isBlank()) return 0;
+        int count = 0;
+        for (String unit : splitClaimUnits(answer))
+        {
+            String claimText = CITATION_PATTERN.matcher(unit).replaceAll("").trim();
+            if (isFactualClaim(claimText)) count++;
+        }
+        return count;
+    }
+
+    private int bestSourceIndex(String claimText, List<KnowledgeChunk> chunks)
+    {
+        int bestIndex = -1;
+        double bestScore = -1;
+        for (int i = 0; i < chunks.size(); i++)
+        {
+            LocatedEvidence located = locateSupportingEvidence(claimText, chunks.get(i));
+            if (!located.location.supported) continue;
+            if (located.location.score > bestScore)
+            {
+                bestScore = located.location.score;
+                bestIndex = i + 1;
+            }
+        }
+        if (bestIndex > 0) return bestIndex;
+        // 退化：选含数字/关键词最多的切片
+        Set<String> terms = semanticTerms(claimText);
+        for (int i = 0; i < chunks.size(); i++)
+        {
+            String content = normalize(chunks.get(i).getContent());
+            long hits = terms.stream().filter(content::contains).count();
+            if (hits > bestScore)
+            {
+                bestScore = hits;
+                bestIndex = i + 1;
+            }
+        }
+        return bestIndex;
+    }
+
+    private EvidenceLocation fallbackWindow(KnowledgeChunk chunk)
+    {
+        String content = chunk == null || chunk.getContent() == null ? "" : chunk.getContent();
+        if (content.isBlank()) return EvidenceLocation.unsupported();
+        int end = Math.min(content.length(), 220);
+        while (end < content.length() && end < 360 && content.charAt(end) != '。' && content.charAt(end) != '\n')
+            end++;
+        if (end < content.length()) end++;
+        String snippet = content.substring(0, end).trim();
+        return new EvidenceLocation(true, snippet, 0, end, 0.05, List.of());
+    }
+
     private LocatedEvidence locateSupportingEvidence(String claim, KnowledgeChunk aggregate)
     {
         List<KnowledgeChunk> fragments = aggregate.getSourceFragments();
